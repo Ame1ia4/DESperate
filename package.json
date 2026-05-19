@@ -1,0 +1,20 @@
+{
+  "name": "des-perate",
+  "version": "1.0.0",
+  "description": "packages for epic des-perate app",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "git config --local core.hooksPath .githooks",
+    "safe-install": "npm ci --ignore-scripts && npm run setup"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ame1ia4/DESperate.git"
+  },
+  "author": "yasmin",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Ame1ia4/DESperate/issues"
+  },
+  "homepage": "https://github.com/Ame1ia4/DESperate#readme"
+}
