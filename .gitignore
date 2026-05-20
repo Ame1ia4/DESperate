@@ -1,0 +1,62 @@
+# ── Environment & secrets ─────────────────────────────────────────
+.env
+.env.local
+.env.production
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── Node.js ───────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── C++ / CMake ───────────────────────────────────────────────────
+build/
+qt_build/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# ── Qt ────────────────────────────────────────────────────────────
+*.pro.user
+*.qmlc
+*.jsc
+
+# ── Blockchain / Hardhat ──────────────────────────────────────────
+blockchain/node_modules/
+blockchain/artifacts/
+blockchain/cache/
+blockchain/.env
+
+# ── Database ──────────────────────────────────────────────────────
+*.sql.bak
+*.dump
+
+# ── OS files ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs ──────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Test coverage ─────────────────────────────────────────────────
+coverage/
+.nyc_output/

@@ -1,0 +1,21 @@
+#!/bin/sh
+
+# Block .env files being committed
+if git diff --cached --name-only | grep -q "^\.env$"; then
+  echo "ERROR: .env file staged for commit"
+  exit 1
+fi
+
+# Block private keys
+if git diff --cached -U0 | grep -q "BEGIN.*PRIVATE KEY"; then
+  echo "ERROR: possible private key in staged changes"
+  exit 1
+fi
+
+# npm audit if server files changed
+if git diff --cached --name-only | grep -q "^server/"; then
+  echo "Running npm audit..."
+  cd server && npm audit --audit-level=high
+fi
+
+echo "Pre-commit checks passed"

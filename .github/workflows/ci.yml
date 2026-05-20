@@ -1,0 +1,218 @@
+name: EPIC CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+# ── Feature flags — set to true when that part of the project is ready ──
+env:
+  HAS_SERVER:     true
+  HAS_DATABASE:   false
+  HAS_CPP:        false
+  HAS_QT:         false
+  HAS_BLOCKCHAIN: false
+
+jobs:
+
+  # ── 1. Node.js server ──────────────────────────────────────────────
+  server:
+    name: Node.js server
+    if: env.HAS_SERVER == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: epic
+          POSTGRES_PASSWORD: epic_test
+          POSTGRES_DB: epic_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies (no install scripts)
+        working-directory: server
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild packages that legitimately need scripts
+        working-directory: server
+        run: npm rebuild --if-present
+
+      - name: Check .env not committed
+        run: test ! -f server/.env && test ! -f .env
+
+      - name: Check for hardcoded secrets
+        run: |
+          grep -rn --include="*.js" --include="*.ts" \
+            -E "(private_key|password|secret|api_key)\s*=\s*['\"][^'\"]{8,}" \
+            server/ && echo "HARDCODED SECRET FOUND" && exit 1 || echo "OK"
+
+      - name: Security audit
+        working-directory: server
+        run: npm audit --audit-level=high
+
+      - name: Run tests (with database)
+        if: env.HAS_DATABASE == 'true'
+        working-directory: server
+        env:
+          DATABASE_URL: postgresql://epic:epic_test@localhost:5432/epic_test
+          NODE_ENV: test
+        run: npm test --if-present
+
+      - name: Run tests (no database yet)
+        if: env.HAS_DATABASE == 'false'
+        working-directory: server
+        env:
+          NODE_ENV: test
+        run: npm test --if-present
+
+      - name: Lint
+        working-directory: server
+        run: npm run lint --if-present
+
+
+  # ── 2. C++ client (CMake) ──────────────────────────────────────────
+  cpp:
+    name: C++ client
+    if: env.HAS_CPP == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential \
+            libssl-dev libsodium-dev \
+            valgrind
+
+      - name: Configure (CMake)
+        run: cmake -B build -S cpp_client -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Memory check (Valgrind)
+        run: |
+          valgrind --leak-check=full --error-exitcode=1 \
+            ./build/epic_client --test 2>&1 | tail -20
+
+
+  # ── 3. Qt/QML desktop client ───────────────────────────────────────
+  qt_client:
+    name: Qt/QML client
+    if: env.HAS_QT == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: 6.6.0
+          modules: qtquick qtquickcontrols2
+
+      - name: Configure (CMake)
+        run: cmake -B qt_build -S qt_client -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build qt_build --parallel
+
+
+  # ── 4. Solidity smart contract ─────────────────────────────────────
+  blockchain:
+    name: Solidity contracts
+    if: env.HAS_BLOCKCHAIN == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Hardhat (no install scripts)
+        working-directory: blockchain
+        run: npm ci --ignore-scripts
+
+      - name: Compile contracts
+        working-directory: blockchain
+        run: npx hardhat compile
+
+      - name: Run contract tests
+        working-directory: blockchain
+        run: npx hardhat test --if-present
+
+      - name: Check contract address not hardcoded
+        run: |
+          grep -rn --include="*.js" --include="*.ts" --include="*.sol" \
+            -E "0x[0-9a-fA-F]{40}" \
+            blockchain/contracts/ && echo "HARDCODED ADDRESS IN CONTRACTS" && exit 1 || echo "OK"
+
+
+  # ── 5. Security checks (always runs) ──────────────────────────────
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check no .env files committed
+        run: |
+          find . -name ".env" -not -path "./.git/*" \
+            && echo ".ENV FILE FOUND IN REPO" && exit 1 || echo "No .env files found"
+
+      - name: Check no private keys committed
+        run: |
+          grep -rn --include="*.js" --include="*.ts" --include="*.cpp" \
+            --include="*.h" --include="*.py" \
+            -E "BEGIN (RSA|EC|OPENSSH) PRIVATE KEY" \
+            . && echo "PRIVATE KEY IN REPO" && exit 1 || echo "No private keys found"
+
+      - name: Check no hardcoded IVs or nonces
+        if: env.HAS_CPP == 'true'
+        run: |
+          grep -rn --include="*.cpp" --include="*.h" \
+            -E "iv\s*=\s*\{|nonce\s*=\s*\{|char iv\[" \
+            cpp_client/ && echo "POSSIBLE HARDCODED IV" && exit 1 || echo "OK"
+
+
+  # ── 6. Deploy (only on main, only when all enabled jobs pass) ──────
+  deploy:
+    name: Deploy to server
+    runs-on: ubuntu-latest
+    needs: [server, security]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /path/to/your/project
+            git pull origin main
+            npm ci --ignore-scripts --prefix server
+            pm2 restart epic-server || pm2 start server/index.js --name epic-server
