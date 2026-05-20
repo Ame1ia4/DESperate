@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: ${{ env.HAS_DATABASE == 'true' && 'postgres:16' || '' }}
+        image: postgres:16
         env:
           POSTGRES_USER: epic
           POSTGRES_PASSWORD: epic_test
