@@ -181,8 +181,8 @@ jobs:
 
       - name: Check no .env files committed
         run: |
-          find . -name ".env" -not -path "./.git/*" \
-            && echo ".ENV FILE FOUND IN REPO" && exit 1 || echo "No .env files found"
+          find . -name ".env" -not -path "./.git/*" -not -name "*.example" | tee /tmp/env_found | \
+          ([ -s /tmp/env_found ] && echo "ERROR: .env file(s) found in repo:" && cat /tmp/env_found && exit 1 || echo "No .env files found")
 
       - name: Check no private keys committed
         run: |
