@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Block .env files being committed
-if git diff --cached --name-only | grep -q "^\.env$"; then
+if git diff --cached --name-only | grep -qE "(^|/)\.env$|(^|/)\.env\.(?!example)"; then
   echo "ERROR: .env file staged for commit"
   exit 1
 fi
