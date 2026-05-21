@@ -4,8 +4,7 @@
   "description": "packages for epic des-perate app",
   "main": "index.js",
   "scripts": {
-    "postinstall": "git config --local core.hooksPath .githooks",
-    "safe-install": "npm ci --ignore-scripts && npm run setup"
+    "postinstall": "git config --local core.hooksPath .githooks"
   },
   "repository": {
     "type": "git",
