@@ -6,20 +6,21 @@ on:
   pull_request:
     branches: [main]
 
-# ── Feature flags — set to true when that part of the project is ready ──
-env:
-  HAS_SERVER:     true
-  HAS_DATABASE:   false
-  HAS_CPP:        false
-  HAS_QT:         false
-  HAS_BLOCKCHAIN: false
+# ── Feature flags ────────────────────────────────────────────────────
+# Set these in: Settings → Secrets and variables → Actions → Variables
+#
+#   HAS_SERVER     = true / false
+#   HAS_DATABASE   = true / false
+#   HAS_CPP        = true / false
+#   HAS_QT         = true / false
+#   HAS_BLOCKCHAIN = true / false
 
 jobs:
 
   # ── 1. Node.js server ──────────────────────────────────────────────
   server:
     name: Node.js server
-    if: env.HAS_SERVER == 'true'
+    if: vars.HAS_SERVER == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -68,7 +69,7 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Run tests (with database)
-        if: env.HAS_DATABASE == 'true'
+        if: vars.HAS_DATABASE == 'true'
         working-directory: server
         env:
           DATABASE_URL: postgresql://epic:epic_test@localhost:5432/epic_test
@@ -76,7 +77,7 @@ jobs:
         run: npm test --if-present
 
       - name: Run tests (no database yet)
-        if: env.HAS_DATABASE == 'false'
+        if: vars.HAS_DATABASE != 'true'
         working-directory: server
         env:
           NODE_ENV: test
@@ -90,7 +91,7 @@ jobs:
   # ── 2. C++ client (CMake) ──────────────────────────────────────────
   cpp:
     name: C++ client
-    if: env.HAS_CPP == 'true'
+    if: vars.HAS_CPP == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +122,7 @@ jobs:
   # ── 3. Qt/QML desktop client ───────────────────────────────────────
   qt_client:
     name: Qt/QML client
-    if: env.HAS_QT == 'true'
+    if: vars.HAS_QT == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -142,7 +143,7 @@ jobs:
   # ── 4. Solidity smart contract ─────────────────────────────────────
   blockchain:
     name: Solidity contracts
-    if: env.HAS_BLOCKCHAIN == 'true'
+    if: vars.HAS_BLOCKCHAIN == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -191,7 +192,7 @@ jobs:
             . && echo "PRIVATE KEY IN REPO" && exit 1 || echo "No private keys found"
 
       - name: Check no hardcoded IVs or nonces
-        if: env.HAS_CPP == 'true'
+        if: vars.HAS_CPP == 'true'
         run: |
           grep -rn --include="*.cpp" --include="*.h" \
             -E "iv\s*=\s*\{|nonce\s*=\s*\{|char iv\[" \
