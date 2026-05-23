@@ -6,10 +6,10 @@ An E2E messagin platform
 After cloning the repo, run:
 
 ```bash
-npm run safe-install
+npm run setup
 ```
 
-This installs dependencies safely (no install scripts) and sets up git hooks automatically.
+This ensures everyone is using the same githooks folder rather than the local git/hooks.
 
 ---
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Block .env files being committed
-if git diff --cached --name-only | grep -q "^\.env$"; then
+if git diff --cached --name-only | grep -qE "(^|/)\.env$|(^|/)\.env\.(?!example)"; then
   echo "ERROR: .env file staged for commit"
   exit 1
 fi
@@ -10,6 +10,23 @@ fi
 if git diff --cached -U0 | grep -q "BEGIN.*PRIVATE KEY"; then
   echo "ERROR: possible private key in staged changes"
   exit 1
+fi
+
+# Warn if package.json changed but package-lock.json didn't (prevent just running npm install instead of safe-install)
+if git diff --cached --name-only | grep -q "package\.json"; then
+  if ! git diff --cached --name-only | grep -q "package-lock\.json"; then
+    echo ""
+    echo "ERROR: package.json changed without updating package-lock.json"
+    echo "This usually means you ran 'npm install' directly."
+    echo ""
+    echo "To fix:"
+    echo "  1. Undo the lockfile:  git checkout package-lock.json"
+    echo "  2. Remove node_modules: rm -rf node_modules"
+    echo "  3. Reinstall safely:   npm run safe-install"
+    echo ""
+    echo "If you're unsure whether you ran it, check: git diff package-lock.json"
+    exit 1
+  fi
 fi
 
 # npm audit if server files changed
