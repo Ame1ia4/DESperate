@@ -4,7 +4,7 @@
   "description": "packages for epic des-perate app",
   "main": "index.js",
   "scripts": {
-    "postinstall": "git config --local core.hooksPath .githooks"
+    "setup": "git config --local core.hooksPath .githooks"
   },
   "repository": {
     "type": "git",
