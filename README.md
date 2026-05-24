@@ -15,7 +15,7 @@ This ensures everyone is using the same githooks folder rather than the local gi
 
 ## Git Hooks
 
-Hooks live in `.githooks/` and are set up automatically by `safe-install`.
+Hooks live in `.githooks/`.
 
 | Hook | When | What it does |
 |---|---|---|
@@ -31,7 +31,7 @@ cp .env.example .env
 
 Required variables:
 ```
-DATABASE_URL=postgresql://user:password@localhost:5432/epic
+DATABASE_URL=postgresql://user:password@localhost:...
 BLOCKCHAIN_PRIVATE_KEY=0x...
 NODE_ENV=development
 ```
