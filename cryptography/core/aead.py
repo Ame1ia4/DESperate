@@ -1,7 +1,7 @@
 """
 core/aead.py
 
-ChaCha20-Poly1305 AEAD (RFC 8439) with MLS-spec reuse guard.
+ChaCha20-Poly1305 AEAD (RFC 8439).
 
 Two encryption layers are provided:
 
@@ -17,19 +17,22 @@ Two encryption layers are provided:
     and persisted atomically before every encryption.
 
 Nonce construction for message encryption:
-  1. Base nonce derived via HKDF(key, message_index) — implicit domain
-     separation across chains since every message key is unique.
-  2. 4-byte random reuse_guard XORed into nonce[0:4] per MLS §9.3.
+  Base nonce derived via HKDF(key=message_key, salt=message_index) — nonce
+  uniqueness is guaranteed by the Double Ratchet key schedule, which produces
+  a unique message key per message. The reuse guard (MLS §9.3) is omitted
+  because ratchet state is persisted atomically before any message key is
+  used — crash recovery cannot re-derive a previously used key. This matches
+  Signal's own implementation.
 
 Nonce construction for header encryption:
-  1. Nonce comes directly from HeaderCounter.next_nonce() — a uint64
-     counter encoded as 12 bytes, strictly monotonically increasing.
-  2. No reuse_guard needed: the counter is statefully persisted and never
-     repeats within a session. Cross-session uniqueness is provided by
-     independent header keys, not the counter value.
+  Nonce comes directly from HeaderCounter.next_nonce() — a uint64 counter
+  encoded as 12 bytes, strictly monotonically increasing, persisted atomically
+  before every use. No reuse guard needed: atomic persistence provides the
+  same guarantee directly. Cross-session uniqueness is provided by independent
+  header keys derived per session, not by the counter value alone.
 
-Wire format — message:  reuse_guard(4) || nonce(12) || ciphertext || tag(16)
-Wire format — header:   nonce(12)      || ciphertext || tag(16)
+Wire format — message:  nonce(12) || ciphertext || tag(16)
+Wire format — header:   nonce(12) || ciphertext || tag(16)
 
 References:
   RFC 8439 (ChaCha20-Poly1305): https://www.rfc-editor.org/rfc/rfc8439
@@ -39,7 +42,6 @@ References:
 
 from __future__ import annotations
 
-import os
 import struct
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -54,84 +56,66 @@ from cryptography.exceptions import InvalidTag
 # Matches Signal Double Ratchet spec §2.6 recommendation.
 # Prevents unbounded memory growth under a DoS scenario where an attacker
 # sends many ratchet-advancing messages without valid ciphertexts.
-MAX_SKIP: int = 1000
+MAX_SKIP: int = 1_000
 
-# Wire format offsets
-_REUSE_GUARD_LEN = 4
-_NONCE_LEN       = 12
-_TAG_LEN         = 16
-_HEADER_LEN      = _REUSE_GUARD_LEN + _NONCE_LEN  # 16 bytes before ciphertext
+_KEY_LEN  = 32   # ChaCha20-Poly1305 key length (bytes)
+_NONCE_LEN = 12   # ChaCha20-Poly1305 nonce length (bytes)
+_TAG_LEN   = 16   # Poly1305 authentication tag length (bytes)
+
+# Minimum valid ciphertext length: nonce + tag (empty plaintext)
+_MIN_CT_LEN = _NONCE_LEN + _TAG_LEN
 
 
 # ── Internal nonce derivation ────────────────────────────────────────────────
 
-def _derive_base_nonce(message_key: bytes, message_index: int) -> bytes:
+def _derive_nonce(message_key: bytes, message_index: int) -> bytes:
     """
-    Derive a 12-byte base nonce from the message key and message index.
+    Derive a 12-byte nonce from the message key and message index.
 
     Because the Double Ratchet key schedule guarantees each message_key
     is unique per (chain_step, message_index), using the key itself as
     HKDF input material provides implicit domain separation across chains
     without needing an explicit chain_index parameter.
 
-    This removes the unsafe caller-supplied chain_index from the API
-    (PR point 1) and grounds nonce derivation in the key schedule itself,
-    consistent with Signal spec §2.3.
+    The reuse guard (MLS §9.3) is intentionally omitted. Ratchet state
+    is persisted atomically before any message key is returned to the
+    caller — crash recovery cannot re-derive a used key, so the guard's
+    protection against state-loss replay is provided by the persistence
+    layer rather than by randomness. Omitting the guard simplifies the
+    wire format (saving 4 bytes per message) and removes a source of
+    non-determinism that would complicate testing.
+
+    Reference: Signal DR spec §2.3 — nonce derived from message key.
 
     Parameters
     ----------
-    message_key   : 32-byte message key from the symmetric ratchet
+    message_key   : _KEY_LEN-byte message key from the symmetric ratchet
     message_index : position of this message in the sending chain (uint64)
     """
-    if len(message_key) != 32:
-        raise ValueError(f"message_key must be 32 bytes, got {len(message_key)}")
+    if len(message_key) != _KEY_LEN:
+        raise ValueError(
+            f"message_key must be {_KEY_LEN} bytes, got {len(message_key)}"
+        )
     if not (0 <= message_index < 2**64):
         raise ValueError("message_index must be a uint64")
 
     index_bytes = struct.pack("<Q", message_index)   # 8 bytes, little-endian
 
-    hkdf = HKDF(
+    return HKDF(
         algorithm = hashes.SHA256(),
-        length    = 12,
+        length    = _NONCE_LEN,
         salt      = index_bytes,
         info      = b"chacha20-poly1305-nonce-v1",
-    )
-    return hkdf.derive(message_key)
+    ).derive(message_key)
 
 
-def _apply_reuse_guard(base_nonce: bytes, reuse_guard: bytes) -> bytes:
-    """
-    XOR a 4-byte reuse guard into the first 4 bytes of the base nonce.
-
-    MLS draft-ietf-mls-protocol-17 §9.3:
-      'the sender MUST generate a fresh random four-byte reuse_guard value
-       and XOR it with the first four bytes of the nonce before use.'
-
-    This protects against state-loss: if a client crashes and restores from
-    a snapshot, the deterministic base nonce might repeat — the random guard
-    ensures the final nonce is still unique with overwhelming probability.
-
-    Parameters
-    ----------
-    base_nonce  : 12-byte deterministic nonce from _derive_base_nonce()
-    reuse_guard : 4 bytes from os.urandom(4)
-    """
-    if len(base_nonce)  != 12: raise ValueError("base_nonce must be 12 bytes")
-    if len(reuse_guard) != 4:  raise ValueError("reuse_guard must be 4 bytes")
-
-    guarded = bytearray(base_nonce)
-    for i in range(4):
-        guarded[i] ^= reuse_guard[i]
-    return bytes(guarded)
-
-
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Message encryption ────────────────────────────────────────────────────────
 
 def encrypt(
-    message_key:    bytes,
-    plaintext:      bytes,
+    message_key:     bytes,
+    plaintext:       bytes,
     associated_data: bytes,
-    message_index:  int,
+    message_index:   int,
 ) -> bytes:
     """
     Encrypt plaintext with ChaCha20-Poly1305.
@@ -141,66 +125,73 @@ def encrypt(
     API surface identified in the PR review.
 
     Wire format:
-      reuse_guard (4) || nonce (12) || ciphertext || tag (16)
+      nonce (12) || ciphertext || tag (16)
 
     Parameters
     ----------
-    message_key     : 32-byte single-use key from the Double Ratchet
+    message_key     : _KEY_LEN-byte single-use key from the Double Ratchet
                       symmetric ratchet. Must never be reused.
     plaintext       : message payload bytes
     associated_data : bound context (e.g. sender_id || recipient_id ||
                       session_id). Authenticated but not encrypted.
     message_index   : position of this message in the sending chain.
-                      Used in nonce derivation; included in wire format
-                      implicitly via the nonce.
+                      Used in nonce derivation — must match on decrypt.
     """
-    base_nonce  = _derive_base_nonce(message_key, message_index)
-    reuse_guard = os.urandom(_REUSE_GUARD_LEN)
-    nonce       = _apply_reuse_guard(base_nonce, reuse_guard)
-
-    ct = ChaCha20Poly1305(message_key).encrypt(nonce, plaintext, associated_data)
-
-    # Wire: reuse_guard || nonce || ciphertext+tag
-    return reuse_guard + nonce + ct
+    nonce = _derive_nonce(message_key, message_index)
+    ct    = ChaCha20Poly1305(message_key).encrypt(nonce, plaintext, associated_data)
+    return nonce + ct
 
 
 def decrypt(
-    message_key:    bytes,
-    data:           bytes,
+    message_key:     bytes,
+    data:            bytes,
     associated_data: bytes,
-    message_index:  int,
+    message_index:   int,
 ) -> bytes:
     """
     Decrypt a ciphertext produced by encrypt().
 
-    Recovers the reuse_guard from the wire format, reconstructs the
-    expected base nonce, re-applies the guard, and verifies the tag.
+    Reconstructs the nonce from message_key and message_index, then
+    delegates authentication and decryption to ChaCha20-Poly1305.
     InvalidTag is raised if anything has been tampered with.
 
     Parameters
     ----------
-    message_key     : 32-byte single-use key from the Double Ratchet
-    data            : full wire bytes (reuse_guard || nonce || ct+tag)
+    message_key     : _KEY_LEN-byte single-use key from the Double Ratchet
+    data            : full wire bytes (nonce || ciphertext || tag)
     associated_data : must match what was passed to encrypt() exactly
     message_index   : must match what was passed to encrypt() exactly
     """
-    if len(data) < _HEADER_LEN + _TAG_LEN:
+    if len(data) < _MIN_CT_LEN:
         raise ValueError(
-            f"Ciphertext too short: need at least {_HEADER_LEN + _TAG_LEN} bytes"
+            f"Ciphertext too short: need at least {_MIN_CT_LEN} bytes, "
+            f"got {len(data)}"
         )
 
-    reuse_guard = data[:_REUSE_GUARD_LEN]
-    nonce       = data[_REUSE_GUARD_LEN : _REUSE_GUARD_LEN + _NONCE_LEN]
-    ct          = data[_HEADER_LEN:]
+    wire_nonce     = data[:_NONCE_LEN]
+    ct             = data[_NONCE_LEN:]
 
-    # Verify the nonce is consistent with the message key and index.
-    # This catches state-desync bugs where the wrong message_index is supplied.
-    expected_base = _derive_base_nonce(message_key, message_index)
-    expected_nonce = _apply_reuse_guard(expected_base, reuse_guard)
-    if nonce != expected_nonce:
-        raise InvalidTag()   # treat nonce mismatch same as tag failure
+    # Reconstruct and verify the nonce before decrypting.
+    # A mismatch means the wrong message_index was supplied or the nonce
+    # was tampered with — treat identically to a tag failure.
+    expected_nonce = _derive_nonce(message_key, message_index)
+    if not _constant_time_equal(wire_nonce, expected_nonce):
+        raise InvalidTag()
 
-    return ChaCha20Poly1305(message_key).decrypt(nonce, ct, associated_data)
+    return ChaCha20Poly1305(message_key).decrypt(expected_nonce, ct, associated_data)
+
+
+def _constant_time_equal(a: bytes, b: bytes) -> bool:
+    """
+    Compare two byte strings in constant time.
+    Prevents timing side-channels on nonce verification.
+    """
+    if len(a) != len(b):
+        return False
+    result = 0
+    for x, y in zip(a, b):
+        result |= x ^ y
+    return result == 0
 
 
 # ── Header encryption ────────────────────────────────────────────────────────
@@ -218,9 +209,7 @@ def decrypt(
 # This happens before encryption — if the process crashes after persist
 # but before sending, the counter value is skipped (safe) not reused (unsafe).
 
-# Header wire format offsets
-_HEADER_NONCE_LEN = 12   # full nonce from HeaderCounter (no reuse_guard needed)
-_HEADER_TAG_LEN   = 16
+_HEADER_MIN_CT_LEN = _NONCE_LEN + _TAG_LEN
 
 
 def encrypt_header(
@@ -242,14 +231,9 @@ def encrypt_header(
     Wire format:
       nonce (12) || ciphertext || tag (16)
 
-    Note: no reuse_guard is prepended. The stateful counter already
-    guarantees strict uniqueness within a session. The reuse_guard is
-    only needed when a deterministic value might repeat after state loss —
-    the counter's atomic persistence handles that directly.
-
     Parameters
     ----------
-    header_key       : 32-byte key for this DH ratchet epoch
+    header_key       : _KEY_LEN-byte key for this DH ratchet epoch
     header_plaintext : serialised header bytes (ratchet pub key, indices)
     associated_data  : bound context, e.g. session_id. Must match decrypt.
     counter          : HeaderCounter for this session — advanced in place
@@ -274,7 +258,7 @@ def decrypt_header(
 
     Parameters
     ----------
-    header_key      : 32-byte key for this DH ratchet epoch
+    header_key      : _KEY_LEN-byte key for this DH ratchet epoch
     data            : full wire bytes (nonce || ciphertext || tag)
     associated_data : must exactly match what was passed to encrypt_header()
 
@@ -283,13 +267,12 @@ def decrypt_header(
     ValueError  : if data is too short
     InvalidTag  : if authentication fails
     """
-    min_len = _HEADER_NONCE_LEN + _HEADER_TAG_LEN
-    if len(data) < min_len:
+    if len(data) < _HEADER_MIN_CT_LEN:
         raise ValueError(
             f"Header ciphertext too short: "
-            f"need at least {min_len} bytes, got {len(data)}"
+            f"need at least {_HEADER_MIN_CT_LEN} bytes, got {len(data)}"
         )
 
-    nonce = data[:_HEADER_NONCE_LEN]
-    ct    = data[_HEADER_NONCE_LEN:]
+    nonce = data[:_NONCE_LEN]
+    ct    = data[_NONCE_LEN:]
     return ChaCha20Poly1305(header_key).decrypt(nonce, ct, associated_data)
