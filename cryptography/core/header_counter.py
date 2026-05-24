@@ -18,9 +18,12 @@ persisted to disk before the encrypted message is sent. A crash between
 "encrypt with counter N" and "persist counter N" would cause counter N to
 be reused on recovery — a (key, nonce) collision within the session.
 
-We achieve atomicity via write-to-temp-then-rename, which is atomic on
-POSIX systems (Linux, macOS). On Windows, os.replace() provides the same
-guarantee since Python 3.3.
+We achieve atomicity via write-to-temp-then-rename followed by a directory
+fsync. The rename is atomic at the kernel level (POSIX) — readers see either
+the old file or the new one, never a partial write. The directory fsync
+ensures the directory entry itself is flushed to storage: without it, a
+power loss after the rename but before the directory is written could cause
+the new file to disappear on recovery, leaving the old counter value on disk.
 
 Reference: Signal Double Ratchet spec §4.1 — header encryption nonce
   https://signal.org/docs/specifications/doubleratchet/#header-encryption
@@ -37,14 +40,15 @@ import tempfile
 from pathlib import Path
 
 
-# Maximum counter value before a DH ratchet step MUST occur.
-# A header key should never be used for more than MAX_HEADER_MESSAGES
-# messages. In practice the DH ratchet rotates the header key far sooner;
-# this is a safety bound only.
-# uint64 gives 2^64 - 1 messages, which is effectively unbounded, but we
-# cap it here at 2^32 to match the nonce space we actually use (4 bytes
-# of the 12-byte nonce are the reuse guard; we use the remaining 8 for
-# the counter, giving 2^64 unique values — more than sufficient).
+# Key rotation limit for a single header key epoch.
+#
+# This is NOT a nonce space limit — the nonce encodes a full uint64 (8 bytes),
+# giving 2^64 unique values per header key. MAX_HEADER_MESSAGES is set to
+# 2^32 - 1 as a conservative key rotation bound: it forces a DH ratchet step
+# (and therefore a new header key) long before the nonce space is approached.
+# In practice the ratchet rotates the header key far sooner on any reply;
+# this cap exists purely as a safety backstop for pathological one-way
+# message flows.
 MAX_HEADER_MESSAGES: int = 2**32 - 1
 
 _NONCE_LEN: int = 12
@@ -187,9 +191,10 @@ class HeaderCounter:
 
         Layout: counter as little-endian uint64 (8 bytes) || 0x00 * 4
 
-        Using only 8 of the 12 bytes gives 2^64 unique values —
-        more than sufficient. The trailing zero bytes are explicit padding
-        so the nonce structure is unambiguous in the design document.
+        Using 8 of the 12 bytes gives 2^64 unique values per header key
+        epoch — far beyond any realistic session. The trailing zero bytes
+        are explicit padding so the nonce layout is unambiguous in the
+        design document.
         """
         return struct.pack("<Q", counter) + b"\x00" * 4
 
@@ -197,16 +202,23 @@ class HeaderCounter:
 
     def _persist(self, value: int | None = None) -> None:
         """
-        Write counter state atomically using write-to-temp-then-rename.
+        Write counter state atomically using write-to-temp-then-rename,
+        followed by a directory fsync.
 
-        On POSIX (Linux/macOS), os.replace() of a file in the same directory
-        is guaranteed atomic by the kernel — readers either see the old file
-        or the new one, never a partial write. This is the standard pattern
-        for crash-safe file updates.
+        Steps:
+          1. Write payload to a sibling .tmp file in the same directory.
+          2. fsync the file descriptor — flushes data to storage.
+          3. Close the file descriptor.
+          4. os.replace() — atomic rename on POSIX; readers see old or new,
+             never a partial write.
+          5. fsync the directory — flushes the directory entry (i.e. the
+             rename itself) to storage. Without this step, a power loss after
+             the rename but before the directory journal is written could cause
+             the new file to disappear on recovery, leaving the stale counter.
 
-        The temp file is written to the same directory as the target so that
-        the rename is within the same filesystem (cross-filesystem renames
-        are not atomic).
+        The temp file is written to the same directory as the target to ensure
+        the rename is within the same filesystem (cross-fs renames are not
+        atomic).
         """
         if value is None:
             value = self._counter
@@ -216,16 +228,23 @@ class HeaderCounter:
             "counter":    value,
         }, indent=2).encode("utf-8")
 
-        # Write to a sibling temp file, then atomically rename into place.
-        dir_  = self._path.parent
+        dir_ = self._path.parent
         dir_.mkdir(parents=True, exist_ok=True)
 
         fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".tmp")
         try:
             os.write(fd, payload)
-            os.fsync(fd)     # flush kernel buffer to storage before rename
+            os.fsync(fd)                            # flush file data
             os.close(fd)
-            os.replace(tmp_path, self._path)   # atomic on POSIX
+            os.replace(tmp_path, self._path)        # atomic rename
+
+            # fsync the directory to persist the rename itself.
+            dir_fd = os.open(str(dir_), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+
         except OSError:
             # Clean up the temp file if anything went wrong.
             # Do NOT update self._counter — leave state consistent.

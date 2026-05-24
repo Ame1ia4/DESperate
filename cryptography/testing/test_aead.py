@@ -28,7 +28,6 @@ from core.aead import (
     _TAG_LEN,
     _MIN_CT_LEN,
     _derive_nonce,
-    _constant_time_equal,
     decrypt,
     encrypt,
 )
@@ -164,27 +163,12 @@ class TestDeriveNonce:
         assert ct[:_NONCE_LEN] == _derive_nonce(key, 7)
 
 
-# ── Constant time equality ────────────────────────────────────────────────────
-
-class TestConstantTimeEqual:
-
-    def test_equal_bytes_returns_true(self):
-        assert _constant_time_equal(b"abc", b"abc") is True
-
-    def test_unequal_bytes_returns_false(self):
-        assert _constant_time_equal(b"abc", b"xyz") is False
-
-    def test_different_lengths_returns_false(self):
-        assert _constant_time_equal(b"ab", b"abc") is False
-
-    def test_empty_bytes_equal(self):
-        assert _constant_time_equal(b"", b"") is True
-
-    def test_single_bit_difference_returns_false(self):
-        a  = b"\x00" * 12
-        b_ = bytearray(a)
-        b_[-1] ^= 0x01
-        assert _constant_time_equal(a, bytes(b_)) is False
+# ── Constant time comparison ─────────────────────────────────────────────────
+#
+# The custom _constant_time_equal helper has been replaced with
+# hmac.compare_digest (Python stdlib, guaranteed constant-time by CPython).
+# No unit tests needed — it is a stdlib function with its own test suite.
+# Its use in decrypt() is covered implicitly by TestTamperDetection.
 
 
 # ── Encrypt / Decrypt round-trip ──────────────────────────────────────────────

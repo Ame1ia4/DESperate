@@ -8,28 +8,18 @@ Two encryption layers are provided:
   encrypt() / decrypt()
     Message payload encryption. Each message gets a unique single-use key
     from the Double Ratchet symmetric ratchet — nonce is derived from the
-    key itself, so no stateful counter is needed.
+    key itself via HKDF, so no stateful counter is needed. Nonce uniqueness
+    is guaranteed structurally by the key schedule: a fresh key is derived
+    per message and deleted after use, making (key, nonce) reuse impossible
+    without also reusing the key, which the ratchet prevents.
 
   encrypt_header() / decrypt_header()
     Message header encryption. The same header key is reused across all
-    messages in a DH ratchet epoch, so nonce uniqueness requires a
-    stateful monotonic counter (HeaderCounter). The counter is advanced
-    and persisted atomically before every encryption.
-
-Nonce construction for message encryption:
-  Base nonce derived via HKDF(key=message_key, salt=message_index) — nonce
-  uniqueness is guaranteed by the Double Ratchet key schedule, which produces
-  a unique message key per message. The reuse guard (MLS §9.3) is omitted
-  because ratchet state is persisted atomically before any message key is
-  used — crash recovery cannot re-derive a previously used key. This matches
-  Signal's own implementation.
-
-Nonce construction for header encryption:
-  Nonce comes directly from HeaderCounter.next_nonce() — a uint64 counter
-  encoded as 12 bytes, strictly monotonically increasing, persisted atomically
-  before every use. No reuse guard needed: atomic persistence provides the
-  same guarantee directly. Cross-session uniqueness is provided by independent
-  header keys derived per session, not by the counter value alone.
+    messages in a DH ratchet epoch, so nonce uniqueness requires a stateful
+    monotonic counter (HeaderCounter). The counter is incremented and
+    persisted atomically before every encryption — if the process crashes
+    after persisting but before sending, the counter value is skipped (safe)
+    rather than reused (unsafe).
 
 Wire format — message:  nonce(12) || ciphertext || tag(16)
 Wire format — header:   nonce(12) || ciphertext || tag(16)
@@ -42,6 +32,7 @@ References:
 
 from __future__ import annotations
 
+import hmac
 import struct
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -58,7 +49,7 @@ from cryptography.exceptions import InvalidTag
 # sends many ratchet-advancing messages without valid ciphertexts.
 MAX_SKIP: int = 1_000
 
-_KEY_LEN  = 32   # ChaCha20-Poly1305 key length (bytes)
+_KEY_LEN   = 32   # ChaCha20-Poly1305 key length (bytes)
 _NONCE_LEN = 12   # ChaCha20-Poly1305 nonce length (bytes)
 _TAG_LEN   = 16   # Poly1305 authentication tag length (bytes)
 
@@ -77,13 +68,16 @@ def _derive_nonce(message_key: bytes, message_index: int) -> bytes:
     HKDF input material provides implicit domain separation across chains
     without needing an explicit chain_index parameter.
 
-    The reuse guard (MLS §9.3) is intentionally omitted. Ratchet state
-    is persisted atomically before any message key is returned to the
-    caller — crash recovery cannot re-derive a used key, so the guard's
-    protection against state-loss replay is provided by the persistence
-    layer rather than by randomness. Omitting the guard simplifies the
-    wire format (saving 4 bytes per message) and removes a source of
-    non-determinism that would complicate testing.
+    Nonce uniqueness guarantee:
+      - Across chains: different chain steps produce different message keys,
+        which produce different nonces even at the same message_index.
+      - Within a chain: different message_index values produce different
+        HKDF outputs under the same key.
+      - Against state-loss replay: ratchet state is persisted atomically
+        before any message key is returned to the caller, so crash recovery
+        cannot re-derive a previously used key. This is the same guarantee
+        the MLS reuse guard (§9.3) provides, achieved via the persistence
+        layer instead. The guard is therefore not needed here.
 
     Reference: Signal DR spec §2.3 — nonce derived from message key.
 
@@ -122,7 +116,7 @@ def encrypt(
 
     Nonce is derived internally from message_key and message_index —
     the caller never supplies a nonce directly, eliminating the unsafe
-    API surface identified in the PR review.
+    API surface where a caller could accidentally reuse one.
 
     Wire format:
       nonce (12) || ciphertext || tag (16)
@@ -151,8 +145,9 @@ def decrypt(
     """
     Decrypt a ciphertext produced by encrypt().
 
-    Reconstructs the nonce from message_key and message_index, then
-    delegates authentication and decryption to ChaCha20-Poly1305.
+    Reconstructs the expected nonce from message_key and message_index,
+    verifies it against the wire using hmac.compare_digest (constant-time),
+    then delegates authentication and decryption to ChaCha20-Poly1305.
     InvalidTag is raised if anything has been tampered with.
 
     Parameters
@@ -171,43 +166,29 @@ def decrypt(
     wire_nonce     = data[:_NONCE_LEN]
     ct             = data[_NONCE_LEN:]
 
-    # Reconstruct and verify the nonce before decrypting.
+    # Reconstruct and verify the nonce in constant time before decrypting.
+    # hmac.compare_digest is used rather than a hand-rolled loop — it is
+    # guaranteed constant-time by the CPython implementation and is the
+    # stdlib-recommended tool for timing-safe comparison (Python docs §hmac).
     # A mismatch means the wrong message_index was supplied or the nonce
-    # was tampered with — treat identically to a tag failure.
+    # was tampered with — treat identically to an AEAD tag failure.
     expected_nonce = _derive_nonce(message_key, message_index)
-    if not _constant_time_equal(wire_nonce, expected_nonce):
+    if not hmac.compare_digest(wire_nonce, expected_nonce):
         raise InvalidTag()
 
     return ChaCha20Poly1305(message_key).decrypt(expected_nonce, ct, associated_data)
 
 
-def _constant_time_equal(a: bytes, b: bytes) -> bool:
-    """
-    Compare two byte strings in constant time.
-    Prevents timing side-channels on nonce verification.
-    """
-    if len(a) != len(b):
-        return False
-    result = 0
-    for x, y in zip(a, b):
-        result |= x ^ y
-    return result == 0
-
-
 # ── Header encryption ────────────────────────────────────────────────────────
 #
-# Headers contain ratchet public keys and message indices. Unlike message
-# keys, the header key is reused across every message in a DH ratchet epoch,
-# so nonce uniqueness cannot be derived from the key alone — it requires a
-# stateful counter.
+# Message headers contain ratchet public keys and message indices. The header
+# key is reused across every message in a DH ratchet epoch — unlike message
+# keys which rotate every message — so nonce uniqueness must be enforced by
+# a stateful monotonic counter rather than derived from the key itself.
 #
-# The HeaderCounter is owned by the ratchet session, not by this module.
-# aead.py calls counter.next_nonce() which:
-#   1. Increments the counter
-#   2. Persists it atomically to disk
-#   3. Returns the nonce bytes
-# This happens before encryption — if the process crashes after persist
-# but before sending, the counter value is skipped (safe) not reused (unsafe).
+# The HeaderCounter (core/ratchet/header_counter.py) is owned by the ratchet
+# session and passed in by the caller. It atomically persists the counter
+# before returning a nonce, so no reuse guard is needed here either.
 
 _HEADER_MIN_CT_LEN = _NONCE_LEN + _TAG_LEN
 
@@ -223,10 +204,11 @@ def encrypt_header(
 
     Uses a stateful monotonic counter for nonce uniqueness — required
     because the same header_key is reused across multiple messages within
-    a DH ratchet epoch (unlike message keys which are single-use).
+    a DH ratchet epoch, unlike message keys which are single-use.
 
-    The counter is advanced and persisted atomically before encryption.
-    If the persist fails, an OSError is raised and no encryption occurs.
+    The counter is incremented and persisted atomically before encryption.
+    If the persist fails, an OSError is raised and no encryption occurs —
+    the caller must not attempt to send in this case.
 
     Wire format:
       nonce (12) || ciphertext || tag (16)
@@ -252,7 +234,7 @@ def decrypt_header(
     Decrypt a header ciphertext produced by encrypt_header().
 
     The nonce is read directly from the wire — the receiver does not need
-    a counter because nonce verification is handled by the Poly1305 tag.
+    a counter because nonce authenticity is verified by the Poly1305 tag.
     If the nonce has been tampered with, decryption produces the wrong
     keystream and the tag fails.
 
