@@ -16,8 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .constants import MAX_HEADER_MESSAGES, NONCE_LEN
-
+from .constants import MAX_HEADER_MESSAGES
 
 class HeaderCounterError(Exception):
     """Raised when the counter reaches an unsafe state."""

@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 from cryptography.exceptions import InvalidTag
 
-from .constants import KEY_LEN, NONCE_LEN, TAG_LEN, MIN_CT_LEN, MAX_SKIP, NONCE_INFO
+from .constants import KEY_LEN, NONCE_LEN, MIN_CT_LEN, NONCE_INFO
 
 
 # ── Internal nonce derivation ────────────────────────────────────────────────
