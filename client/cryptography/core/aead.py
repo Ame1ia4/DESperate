@@ -3,31 +3,12 @@ core/aead.py
 
 ChaCha20-Poly1305 AEAD (RFC 8439).
 
-Two encryption layers are provided:
-
-  encrypt() / decrypt()
-    Message payload encryption. Each message gets a unique single-use key
-    from the Double Ratchet symmetric ratchet — nonce is derived from the
-    key itself via HKDF, so no stateful counter is needed. Nonce uniqueness
-    is guaranteed structurally by the key schedule: a fresh key is derived
-    per message and deleted after use, making (key, nonce) reuse impossible
-    without also reusing the key, which the ratchet prevents.
-
-  encrypt_header() / decrypt_header()
-    Message header encryption. The same header key is reused across all
-    messages in a DH ratchet epoch, so nonce uniqueness requires a stateful
-    monotonic counter (HeaderCounter). The counter is incremented and
-    persisted atomically before every encryption — if the process crashes
-    after persisting but before sending, the counter value is skipped (safe)
-    rather than reused (unsafe).
+Two encryption layers:
+  encrypt() / decrypt()               — message payload, nonce derived from key via HKDF
+  encrypt_header() / decrypt_header() — header, nonce from stateful HeaderCounter
 
 Wire format — message:  nonce(12) || ciphertext || tag(16)
 Wire format — header:   nonce(12) || ciphertext || tag(16)
-
-References:
-  RFC 8439 (ChaCha20-Poly1305): https://www.rfc-editor.org/rfc/rfc8439
-  Signal Double Ratchet spec:    https://signal.org/docs/specifications/doubleratchet/
-  MLS protocol draft-17 §9.3:   https://datatracker.ietf.org/doc/html/draft-ietf-mls-protocol-17
 """
 
 from __future__ import annotations
@@ -48,24 +29,6 @@ from .constants import KEY_LEN, NONCE_LEN, TAG_LEN, MIN_CT_LEN, MAX_SKIP, NONCE_
 def _derive_nonce(message_key: bytes, message_index: int) -> bytes:
     """
     Derive a 12-byte nonce from the message key and message index.
-
-    Because the Double Ratchet key schedule guarantees each message_key
-    is unique per (chain_step, message_index), using the key itself as
-    HKDF input material provides implicit domain separation across chains
-    without needing an explicit chain_index parameter.
-
-    Nonce uniqueness guarantee:
-      - Across chains: different chain steps produce different message keys,
-        which produce different nonces even at the same message_index.
-      - Within a chain: different message_index values produce different
-        HKDF outputs under the same key.
-      - Against state-loss replay: ratchet state is persisted atomically
-        before any message key is returned to the caller, so crash recovery
-        cannot re-derive a previously used key. This is the same guarantee
-        the MLS reuse guard (§9.3) provides, achieved via the persistence
-        layer instead. The guard is therefore not needed here.
-
-    Reference: Signal DR spec §2.3 — nonce derived from message key.
 
     Parameters
     ----------
@@ -100,22 +63,17 @@ def encrypt(
     """
     Encrypt plaintext with ChaCha20-Poly1305.
 
-    Nonce is derived internally from message_key and message_index —
-    the caller never supplies a nonce directly, eliminating the unsafe
-    API surface where a caller could accidentally reuse one.
-
-    Wire format:
-      nonce (12) || ciphertext || tag (16)
+    Wire format: nonce (12) || ciphertext || tag (16)
 
     Parameters
     ----------
-    message_key     : KEY_LEN-byte single-use key from the Double Ratchet
-                      symmetric ratchet. Must never be reused.
+    message_key     : KEY_LEN-byte single-use key from the Double Ratchet.
+                      Must never be reused.
     plaintext       : message payload bytes
     associated_data : bound context (e.g. sender_id || recipient_id ||
                       session_id). Authenticated but not encrypted.
-    message_index   : position of this message in the sending chain.
-                      Used in nonce derivation — must match on decrypt.
+    message_index   : position in the sending chain; used in nonce
+                      derivation — must match on decrypt.
     """
     nonce = _derive_nonce(message_key, message_index)
     ct    = ChaCha20Poly1305(message_key).encrypt(nonce, plaintext, associated_data)
@@ -152,12 +110,6 @@ def decrypt(
     wire_nonce     = data[:NONCE_LEN]
     ct             = data[NONCE_LEN:]
 
-    # Reconstruct and verify the nonce in constant time before decrypting.
-    # hmac.compare_digest is used rather than a hand-rolled loop — it is
-    # guaranteed constant-time by the CPython implementation and is the
-    # stdlib-recommended tool for timing-safe comparison (Python docs §hmac).
-    # A mismatch means the wrong message_index was supplied or the nonce
-    # was tampered with — treat identically to an AEAD tag failure.
     expected_nonce = _derive_nonce(message_key, message_index)
     if not hmac.compare_digest(wire_nonce, expected_nonce):
         raise InvalidTag()
@@ -166,15 +118,6 @@ def decrypt(
 
 
 # ── Header encryption ────────────────────────────────────────────────────────
-#
-# Message headers contain ratchet public keys and message indices. The header
-# key is reused across every message in a DH ratchet epoch — unlike message
-# keys which rotate every message — so nonce uniqueness must be enforced by
-# a stateful monotonic counter rather than derived from the key itself.
-#
-# The HeaderCounter (core/ratchet/header_counter.py) is owned by the ratchet
-# session and passed in by the caller. It atomically persists the counter
-# before returning a nonce, so no reuse guard is needed here either.
 
 def encrypt_header(
     header_key:       bytes,
@@ -185,16 +128,10 @@ def encrypt_header(
     """
     Encrypt a message header under ChaCha20-Poly1305.
 
-    Uses a stateful monotonic counter for nonce uniqueness — required
-    because the same header_key is reused across multiple messages within
-    a DH ratchet epoch, unlike message keys which are single-use.
-
     The counter is incremented and persisted atomically before encryption.
-    If the persist fails, an OSError is raised and no encryption occurs —
-    the caller must not attempt to send in this case.
+    If the persist fails, an OSError is raised and no encryption occurs.
 
-    Wire format:
-      nonce (12) || ciphertext || tag (16)
+    Wire format: nonce (12) || ciphertext || tag (16)
 
     Parameters
     ----------
@@ -215,11 +152,6 @@ def decrypt_header(
 ) -> bytes:
     """
     Decrypt a header ciphertext produced by encrypt_header().
-
-    The nonce is read directly from the wire — the receiver does not need
-    a counter because nonce authenticity is verified by the Poly1305 tag.
-    If the nonce has been tampered with, decryption produces the wrong
-    keystream and the tag fails.
 
     Parameters
     ----------

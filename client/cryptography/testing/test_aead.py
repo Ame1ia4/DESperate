@@ -2,18 +2,9 @@
 Unit tests for core/aead.py
 ChaCha20-Poly1305 AEAD with HKDF-derived nonces.
 
-Run with: pytest test_aead.py -v
-
 Wire format under test:
   nonce (12 bytes) || ciphertext || tag (16 bytes)
-  = 28 bytes of overhead per message (down from 32 — reuse guard removed)
-
-Reuse guard omission rationale:
-  The MLS §9.3 reuse guard protects against crash-recovery nonce reuse.
-  We omit it because ratchet state is persisted atomically before any
-  message key is returned to the caller — crash recovery cannot re-derive
-  a used key. Atomic persistence provides the same guarantee directly.
-  This matches Signal's own implementation.
+  = 28 bytes overhead per message
 """
 
 import struct
@@ -46,11 +37,7 @@ def key():
 
 @pytest.fixture
 def ad():
-    """
-    Length-prefixed AD: prevents the concatenation ambiguity where
-    b"alice" + b"bob" == b"aliceb" + b"ob". Tests that need raw AD
-    bytes can construct their own.
-    """
+    """Length-prefixed associated data. Tests needing raw AD can construct their own."""
     sender    = b"alice"
     recipient = b"bob"
     return (
@@ -96,11 +83,6 @@ class TestConstants:
 # ── Nonce derivation ──────────────────────────────────────────────────────────
 
 class TestDeriveNonce:
-    """
-    _derive_nonce(message_key, message_index) is the HKDF-based deterministic
-    nonce. It takes the key (not a caller-supplied chain index) so domain
-    separation is inherited from the Double Ratchet key schedule.
-    """
 
     def test_output_is_12_bytes(self, key):
         assert len(_derive_nonce(key, 0)) == NONCE_LEN
@@ -112,11 +94,6 @@ class TestDeriveNonce:
         assert _derive_nonce(key, 0) != _derive_nonce(key, 1)
 
     def test_different_key_gives_different_nonce(self):
-        """
-        Domain separation comes from the key, not a chain_index counter.
-        Two different message keys (from different ratchet steps) must
-        produce different nonces even at the same message_index.
-        """
         assert _derive_nonce(_make_key(0), 0) != _derive_nonce(_make_key(1), 0)
 
     def test_large_message_index_boundary(self, key):
@@ -150,17 +127,8 @@ class TestDeriveNonce:
         assert len(nonces) == 1000
 
     def test_nonce_is_first_12_bytes_of_wire_format(self, key, ad):
-        """Wire format starts with nonce — no reuse guard prefix."""
         ct = encrypt(key, b"test", ad, message_index=7)
         assert ct[:NONCE_LEN] == _derive_nonce(key, 7)
-
-
-# ── Constant time comparison ─────────────────────────────────────────────────
-#
-# The custom _constant_time_equal helper has been replaced with
-# hmac.compare_digest (Python stdlib, guaranteed constant-time by CPython).
-# No unit tests needed — it is a stdlib function with its own test suite.
-# Its use in decrypt() is covered implicitly by TestTamperDetection.
 
 
 # ── Encrypt / Decrypt round-trip ──────────────────────────────────────────────
@@ -186,16 +154,10 @@ class TestEncryptDecryptRoundtrip:
         assert len(ct) == NONCE_LEN + len(plaintext) + TAG_LEN
 
     def test_nonce_is_first_12_bytes(self, key, plaintext, ad):
-        """Wire format starts with nonce — no reuse guard prefix."""
         ct = encrypt(key, plaintext, ad, message_index=3)
         assert ct[:NONCE_LEN] == _derive_nonce(key, 3)
 
     def test_encryption_is_deterministic(self, key, plaintext, ad):
-        """
-        Without the reuse guard, encryption is fully deterministic.
-        Same (key, plaintext, ad, index) → same wire bytes every time.
-        Safe because the key is single-use — the ratchet prevents reuse.
-        """
         ct1 = encrypt(key, plaintext, ad, message_index=0)
         ct2 = encrypt(key, plaintext, ad, message_index=0)
         assert ct1 == ct2
@@ -206,10 +168,6 @@ class TestEncryptDecryptRoundtrip:
         assert ct0 != ct1
 
     def test_wrong_message_index_on_decrypt_raises(self, key, plaintext, ad):
-        """
-        decrypt() re-derives the expected nonce and verifies it against
-        the wire. A mismatched index is caught before ChaCha20 is invoked.
-        """
         ct = encrypt(key, plaintext, ad, message_index=5)
         with pytest.raises(InvalidTag):
             decrypt(key, ct, ad, message_index=6)
@@ -237,11 +195,6 @@ class TestAssociatedData:
 
     def test_ad_length_prefix_prevents_concatenation_ambiguity(
             self, key, plaintext):
-        """
-        Without length-prefixing, b"alice"||b"bob" == b"aliceb"||b"ob".
-        This test documents the ambiguity and confirms length-prefixed AD
-        resolves it — the application layer must use unambiguous AD.
-        """
         raw_equal_1 = b"alice"  + b"bob"    # b"alicebob"
         raw_equal_2 = b"aliceb" + b"ob"     # b"alicebob" — same bytes!
         assert raw_equal_1 == raw_equal_2   # confirms the ambiguity exists
@@ -258,10 +211,6 @@ class TestAssociatedData:
             decrypt(key, ct, lp_2, message_index=0)
 
     def test_sender_recipient_swap_rejected(self, key, plaintext):
-        """
-        A server cannot replay alice→bob as bob→alice if AD encodes
-        direction with length-prefixed fields.
-        """
         def lp(s: bytes) -> bytes:
             return struct.pack("!H", len(s)) + s
 
@@ -304,10 +253,6 @@ class TestTamperDetection:
             decrypt(key, ct + b"\x00", ad, message_index=0)
 
     def test_nonce_tampering_raises(self, key, plaintext, ad):
-        """
-        Corrupting the nonce (first 12 bytes) causes the nonce consistency
-        check to fail before ChaCha20 is even invoked.
-        """
         ct = bytearray(encrypt(key, plaintext, ad, message_index=0))
         ct[0] ^= 0xFF   # flip first byte of nonce
         with pytest.raises(InvalidTag):
@@ -348,18 +293,9 @@ class TestWrongKey:
 # ── MAX_SKIP documentation ────────────────────────────────────────────────────
 
 class TestMaxSkip:
-    """
-    MAX_SKIP bounds how many out-of-order message keys may be buffered.
-    Enforcement lives in the ratchet layer, not in aead.py itself.
-    These tests document the contract and make it auditable.
-    """
 
     def test_max_skip_is_positive_int(self):
         assert isinstance(MAX_SKIP, int) and MAX_SKIP > 0
 
     def test_max_skip_prevents_unbounded_dos(self):
-        """
-        Signal DR spec §2.6: exceeding MAX_SKIP must be an error at the
-        ratchet layer. Confirms the constant is accessible for that check.
-        """
         assert MAX_SKIP + 1 > MAX_SKIP

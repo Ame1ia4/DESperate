@@ -112,10 +112,6 @@ class TestNextNonce:
         assert len(set(nonces)) == 100
 
     def test_nonces_are_strictly_increasing(self, counter):
-        """
-        Nonces encode the counter value — decoding them should give a
-        strictly increasing sequence. This is the core monotonicity guarantee.
-        """
         values = []
         for _ in range(10):
             nonce = counter.next_nonce()
@@ -125,10 +121,6 @@ class TestNextNonce:
         assert values == list(range(1, 11))
 
     def test_counter_persisted_before_return(self, counter, counter_path):
-        """
-        The counter on disk must reflect the new value before next_nonce
-        returns — atomicity guarantee.
-        """
         counter.next_nonce()
         data = json.loads(counter_path.read_text())
         assert data["counter"] == 1
@@ -144,10 +136,6 @@ class TestNextNonce:
 
     def test_counter_unchanged_in_memory_if_persist_fails(
             self, counter, counter_path):
-        """
-        If the atomic write fails, the in-memory counter must NOT advance.
-        Caller gets OSError and can retry — no nonce is consumed.
-        """
         original = counter.current
 
         with patch("core.header_counter.os.replace", side_effect=OSError("disk full")):
@@ -183,12 +171,6 @@ class TestCrossSessionUniqueness:
 
     def test_two_sessions_at_counter_zero_have_different_nonces_via_keys(
             self, tmp_path):
-        """
-        Two sessions both start their counter at 0 and produce nonce=1 on
-        the first call. This is NOT nonce reuse because each session has a
-        different header key. This test documents that the counter alone
-        does not provide cross-session uniqueness — the header key does.
-        """
         path_a = tmp_path / "session_a" / "counter.json"
         path_b = tmp_path / "session_b" / "counter.json"
         c_a = HeaderCounter(path_a, session_id="session_a")
@@ -197,11 +179,7 @@ class TestCrossSessionUniqueness:
         nonce_a = c_a.next_nonce()
         nonce_b = c_b.next_nonce()
 
-        # Nonces are identical — but this is safe because keys differ.
-        # This test exists to make that design decision explicit and
-        # documentable in the interview.
-        assert nonce_a == nonce_b   # same counter → same nonce bytes
-        # Safety comes from: encrypt(key_A, nonce) ≠ encrypt(key_B, nonce)
+        assert nonce_a == nonce_b   # same counter → same nonce bytes (safe: keys differ)
 
     def test_different_sessions_never_share_a_counter_file(self, tmp_path):
         """Each session must have its own counter file — never share one."""
@@ -217,12 +195,6 @@ class TestCrossSessionUniqueness:
 class TestAtomicity:
 
     def test_loaded_counter_after_crash_is_safe(self, counter, counter_path):
-        """
-        Simulate: process encrypts at counter=3, persists counter=3,
-        then crashes before sending. On recovery, counter loads as 3.
-        Next nonce will be 4 — counter 3 is skipped (lost), not reused.
-        Losing a nonce value is the safe failure mode.
-        """
         for _ in range(3):
             counter.next_nonce()
         assert counter.current == 3
