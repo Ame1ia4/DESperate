@@ -15,7 +15,7 @@ This ensures everyone is using the same githooks folder rather than the local gi
 
 ## Git Hooks
 
-Hooks live in `.githooks/` and are set up automatically by `safe-install`.
+Hooks live in `.githooks/`.
 
 | Hook | When | What it does |
 |---|---|---|
@@ -31,7 +31,7 @@ cp .env.example .env
 
 Required variables:
 ```
-DATABASE_URL=postgresql://user:password@localhost:5432/epic
+DATABASE_URL=postgresql://user:password@localhost:...
 BLOCKCHAIN_PRIVATE_KEY=0x...
 NODE_ENV=development
 ```
@@ -64,12 +64,15 @@ For auto-deploy to work, add these to GitHub Secrets (repo → Settings → Secr
 ## Project Structure
 
 ```
-.githooks/          git hooks (pre-commit, pre-push, commit-msg)
-.github/workflows/  CI pipeline
-server/             Node.js backend
-cpp_client/         C++ client component
-qt_client/          Qt/QML desktop client
-blockchain/         Solidity smart contracts
+.githooks/               git hooks (pre-commit, pre-push, commit-msg)
+.github/workflows/       CI pipeline
+server/                  Node.js backend
+  server/database/       PostgreSQL schema
+client/                  Client-side components (no server access to these)
+  client/cryptography/   Python E2EE cryptography microservice
+cpp_client/              C++ client component
+qt_client/               Qt/QML desktop client
+blockchain/              Solidity smart contracts
 ```
 
 
@@ -78,7 +81,7 @@ blockchain/         Solidity smart contracts
 ## Cryptography Microservice
 
 ### Install
-in the crytography folder first run :
+in the `client/cryptography/` folder first run:
 
 python -m venv venv
 
