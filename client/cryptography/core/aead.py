@@ -40,21 +40,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 from cryptography.exceptions import InvalidTag
 
-
-# ── Constants ────────────────────────────────────────────────────────────────
-
-# Maximum number of skipped message keys to store per session.
-# Matches Signal Double Ratchet spec §2.6 recommendation.
-# Prevents unbounded memory growth under a DoS scenario where an attacker
-# sends many ratchet-advancing messages without valid ciphertexts.
-MAX_SKIP: int = 1_000
-
-_KEY_LEN   = 32   # ChaCha20-Poly1305 key length (bytes)
-_NONCE_LEN = 12   # ChaCha20-Poly1305 nonce length (bytes)
-_TAG_LEN   = 16   # Poly1305 authentication tag length (bytes)
-
-# Minimum valid ciphertext length: nonce + tag (empty plaintext)
-_MIN_CT_LEN = _NONCE_LEN + _TAG_LEN
+from .constants import KEY_LEN, NONCE_LEN, TAG_LEN, MIN_CT_LEN, MAX_SKIP, NONCE_INFO
 
 
 # ── Internal nonce derivation ────────────────────────────────────────────────
@@ -83,12 +69,12 @@ def _derive_nonce(message_key: bytes, message_index: int) -> bytes:
 
     Parameters
     ----------
-    message_key   : _KEY_LEN-byte message key from the symmetric ratchet
+    message_key   : KEY_LEN-byte message key from the symmetric ratchet
     message_index : position of this message in the sending chain (uint64)
     """
-    if len(message_key) != _KEY_LEN:
+    if len(message_key) != KEY_LEN:
         raise ValueError(
-            f"message_key must be {_KEY_LEN} bytes, got {len(message_key)}"
+            f"message_key must be {KEY_LEN} bytes, got {len(message_key)}"
         )
     if not (0 <= message_index < 2**64):
         raise ValueError("message_index must be a uint64")
@@ -97,9 +83,9 @@ def _derive_nonce(message_key: bytes, message_index: int) -> bytes:
 
     return HKDF(
         algorithm = hashes.SHA256(),
-        length    = _NONCE_LEN,
+        length    = NONCE_LEN,
         salt      = index_bytes,
-        info      = b"chacha20-poly1305-nonce-v1",
+        info      = NONCE_INFO,
     ).derive(message_key)
 
 
@@ -123,7 +109,7 @@ def encrypt(
 
     Parameters
     ----------
-    message_key     : _KEY_LEN-byte single-use key from the Double Ratchet
+    message_key     : KEY_LEN-byte single-use key from the Double Ratchet
                       symmetric ratchet. Must never be reused.
     plaintext       : message payload bytes
     associated_data : bound context (e.g. sender_id || recipient_id ||
@@ -152,19 +138,19 @@ def decrypt(
 
     Parameters
     ----------
-    message_key     : _KEY_LEN-byte single-use key from the Double Ratchet
+    message_key     : KEY_LEN-byte single-use key from the Double Ratchet
     data            : full wire bytes (nonce || ciphertext || tag)
     associated_data : must match what was passed to encrypt() exactly
     message_index   : must match what was passed to encrypt() exactly
     """
-    if len(data) < _MIN_CT_LEN:
+    if len(data) < MIN_CT_LEN:
         raise ValueError(
-            f"Ciphertext too short: need at least {_MIN_CT_LEN} bytes, "
+            f"Ciphertext too short: need at least {MIN_CT_LEN} bytes, "
             f"got {len(data)}"
         )
 
-    wire_nonce     = data[:_NONCE_LEN]
-    ct             = data[_NONCE_LEN:]
+    wire_nonce     = data[:NONCE_LEN]
+    ct             = data[NONCE_LEN:]
 
     # Reconstruct and verify the nonce in constant time before decrypting.
     # hmac.compare_digest is used rather than a hand-rolled loop — it is
@@ -190,9 +176,6 @@ def decrypt(
 # session and passed in by the caller. It atomically persists the counter
 # before returning a nonce, so no reuse guard is needed here either.
 
-_HEADER_MIN_CT_LEN = _NONCE_LEN + _TAG_LEN
-
-
 def encrypt_header(
     header_key:       bytes,
     header_plaintext: bytes,
@@ -215,7 +198,7 @@ def encrypt_header(
 
     Parameters
     ----------
-    header_key       : _KEY_LEN-byte key for this DH ratchet epoch
+    header_key       : KEY_LEN-byte key for this DH ratchet epoch
     header_plaintext : serialised header bytes (ratchet pub key, indices)
     associated_data  : bound context, e.g. session_id. Must match decrypt.
     counter          : HeaderCounter for this session — advanced in place
@@ -240,7 +223,7 @@ def decrypt_header(
 
     Parameters
     ----------
-    header_key      : _KEY_LEN-byte key for this DH ratchet epoch
+    header_key      : KEY_LEN-byte key for this DH ratchet epoch
     data            : full wire bytes (nonce || ciphertext || tag)
     associated_data : must exactly match what was passed to encrypt_header()
 
@@ -249,12 +232,12 @@ def decrypt_header(
     ValueError  : if data is too short
     InvalidTag  : if authentication fails
     """
-    if len(data) < _HEADER_MIN_CT_LEN:
+    if len(data) < MIN_CT_LEN:
         raise ValueError(
             f"Header ciphertext too short: "
-            f"need at least {_HEADER_MIN_CT_LEN} bytes, got {len(data)}"
+            f"need at least {MIN_CT_LEN} bytes, got {len(data)}"
         )
 
-    nonce = data[:_NONCE_LEN]
-    ct    = data[_NONCE_LEN:]
+    nonce = data[:NONCE_LEN]
+    ct    = data[NONCE_LEN:]
     return ChaCha20Poly1305(header_key).decrypt(nonce, ct, associated_data)

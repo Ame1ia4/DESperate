@@ -36,22 +36,11 @@ from __future__ import annotations
 import json
 import os
 import struct
+import sys
 import tempfile
 from pathlib import Path
 
-
-# Key rotation limit for a single header key epoch.
-#
-# This is NOT a nonce space limit — the nonce encodes a full uint64 (8 bytes),
-# giving 2^64 unique values per header key. MAX_HEADER_MESSAGES is set to
-# 2^32 - 1 as a conservative key rotation bound: it forces a DH ratchet step
-# (and therefore a new header key) long before the nonce space is approached.
-# In practice the ratchet rotates the header key far sooner on any reply;
-# this cap exists purely as a safety backstop for pathological one-way
-# message flows.
-MAX_HEADER_MESSAGES: int = 2**32 - 1
-
-_NONCE_LEN: int = 12
+from .constants import MAX_HEADER_MESSAGES, NONCE_LEN
 
 
 class HeaderCounterError(Exception):
@@ -238,12 +227,14 @@ class HeaderCounter:
             os.close(fd)
             os.replace(tmp_path, self._path)        # atomic rename
 
-            # fsync the directory to persist the rename itself.
-            dir_fd = os.open(str(dir_), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
+            # fsync the directory to persist the rename itself (POSIX only).
+            # Windows NTFS makes renames durable without a directory fsync.
+            if sys.platform != "win32":
+                dir_fd = os.open(str(dir_), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
 
         except OSError:
             # Clean up the temp file if anything went wrong.

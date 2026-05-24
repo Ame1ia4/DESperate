@@ -13,12 +13,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.header_counter import (
-    HeaderCounter,
-    HeaderCounterError,
-    MAX_HEADER_MESSAGES,
-    _NONCE_LEN,
-)
+from core.header_counter import HeaderCounter, HeaderCounterError
+from core.constants import MAX_HEADER_MESSAGES, NONCE_LEN
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -104,7 +100,7 @@ class TestNextNonce:
 
     def test_returns_12_bytes(self, counter):
         nonce = counter.next_nonce()
-        assert len(nonce) == _NONCE_LEN
+        assert len(nonce) == NONCE_LEN
 
     def test_counter_increments_by_one(self, counter):
         assert counter.current == 0
@@ -154,7 +150,7 @@ class TestNextNonce:
         """
         original = counter.current
 
-        with patch("header_counter.os.replace", side_effect=OSError("disk full")):
+        with patch("core.header_counter.os.replace", side_effect=OSError("disk full")):
             with pytest.raises(OSError):
                 counter.next_nonce()
 
@@ -240,7 +236,7 @@ class TestAtomicity:
 
     def test_temp_file_cleaned_up_on_write_failure(self, counter, tmp_path):
         """No stale .tmp files should remain after a failed write."""
-        with patch("header_counter.os.replace", side_effect=OSError("fail")):
+        with patch("core.header_counter.os.replace", side_effect=OSError("fail")):
             with pytest.raises(OSError):
                 counter.next_nonce()
 

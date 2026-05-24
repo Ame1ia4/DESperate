@@ -64,12 +64,15 @@ For auto-deploy to work, add these to GitHub Secrets (repo → Settings → Secr
 ## Project Structure
 
 ```
-.githooks/          git hooks (pre-commit, pre-push, commit-msg)
-.github/workflows/  CI pipeline
-server/             Node.js backend
-cpp_client/         C++ client component
-qt_client/          Qt/QML desktop client
-blockchain/         Solidity smart contracts
+.githooks/               git hooks (pre-commit, pre-push, commit-msg)
+.github/workflows/       CI pipeline
+server/                  Node.js backend
+  server/database/       PostgreSQL schema
+client/                  Client-side components (no server access to these)
+  client/cryptography/   Python E2EE cryptography microservice
+cpp_client/              C++ client component
+qt_client/               Qt/QML desktop client
+blockchain/              Solidity smart contracts
 ```
 
 
@@ -78,7 +81,7 @@ blockchain/         Solidity smart contracts
 ## Cryptography Microservice
 
 ### Install
-in the crytography folder first run :
+in the `client/cryptography/` folder first run:
 
 python -m venv venv
 
