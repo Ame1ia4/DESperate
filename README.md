@@ -71,3 +71,24 @@ cpp_client/         C++ client component
 qt_client/          Qt/QML desktop client
 blockchain/         Solidity smart contracts
 ```
+
+
+--- 
+
+## Cryptography Microservice
+
+### Install
+in the crytography folder first run :
+
+python -m venv venv
+
+to create the virtual enviroment
+
+then:
+if on mac/linux: 
+source venv/bin/activate        
+if on windows :
+venv\Scripts\activate           
+
+then: 
+pip install -r requirements.txt
