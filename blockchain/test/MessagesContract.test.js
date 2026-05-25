@@ -28,9 +28,6 @@ describe("MessageIntegrity", function () {
         .to.be.revertedWithCustomError(contract, "ZeroOwner");
     });
 
-    it("initialises count to zero", async function () {
-      expect(await contract.getCount()).to.equal(0n);
-    });
   });
 
   describe("storeHash", function () {
@@ -38,11 +35,6 @@ describe("MessageIntegrity", function () {
       await expect(contract.storeHash(ROOT_1))
         .to.emit(contract, "HashStored")
         .withArgs(ROOT_1, anyValue);
-    });
-
-    it("increments count", async function () {
-      await contract.storeHash(ROOT_1);
-      expect(await contract.getCount()).to.equal(1n);
     });
 
     it("reverts when non-owner calls", async function () {
@@ -70,11 +62,6 @@ describe("MessageIntegrity", function () {
       await expect(tx).to.emit(contract, "HashStored").withArgs(ROOT_1, anyValue);
       await expect(tx).to.emit(contract, "HashStored").withArgs(ROOT_2, anyValue);
       await expect(tx).to.emit(contract, "HashStored").withArgs(ROOT_3, anyValue);
-    });
-
-    it("increments count by batch size", async function () {
-      await contract.storeBatchHashes([ROOT_1, ROOT_2, ROOT_3]);
-      expect(await contract.getCount()).to.equal(3n);
     });
 
     it("reverts with EmptyBatch for empty array", async function () {
@@ -115,53 +102,45 @@ describe("MessageIntegrity", function () {
         .to.be.revertedWith("Only owner can submit");
     });
 
-    it("accepts exactly MAX_BATCH_SIZE (100) roots", async function () {
-      const roots = Array.from({ length: 100 }, (_, i) =>
+    it("accepts exactly MAX_BATCH_SIZE roots", async function () {
+      const roots = Array.from({ length: 50 }, (_, i) =>
         ethers.keccak256(ethers.toUtf8Bytes(`root-${i}`))
       );
       await expect(contract.storeBatchHashes(roots)).to.not.be.reverted;
-      expect(await contract.getCount()).to.equal(100n);
     });
 
     it("all roots in a batch share the same block timestamp", async function () {
-      await contract.storeBatchHashes([ROOT_1, ROOT_2, ROOT_3]);
-      const [ts1] = await contract.validateRoot(ROOT_1);
-      const [ts2] = await contract.validateRoot(ROOT_2);
-      const [ts3] = await contract.validateRoot(ROOT_3);
-      expect(ts1).to.equal(ts2);
-      expect(ts2).to.equal(ts3);
+      const tx = await contract.storeBatchHashes([ROOT_1, ROOT_2, ROOT_3]);
+      const receipt = await tx.wait();
+      const timestamps = receipt.logs.map(log => contract.interface.parseLog(log).args.timestamp);
+      expect(timestamps[0]).to.equal(timestamps[1]);
+      expect(timestamps[1]).to.equal(timestamps[2]);
     });
 
     it("does not partially write valid roots before a revert", async function () {
       // ROOT_1 is valid but ROOT_1 repeated is a duplicate — entire tx must revert
       await expect(contract.storeBatchHashes([ROOT_1, ROOT_1]))
         .to.be.revertedWithCustomError(contract, "DuplicateRoot");
-      const [, found] = await contract.validateRoot(ROOT_1);
-      expect(found).to.be.false;
-      expect(await contract.getCount()).to.equal(0n);
+      expect(await contract.validateRoot(ROOT_1)).to.be.false;
     });
   });
 
   describe("validateRoot", function () {
-    it("returns (0, false) for an unstored root", async function () {
-      const [timestamp, found] = await contract.validateRoot(ROOT_1);
-      expect(found).to.be.false;
-      expect(timestamp).to.equal(0n);
+    it("returns false for an unstored root", async function () {
+      expect(await contract.validateRoot(ROOT_1)).to.be.false;
     });
 
-    it("returns (timestamp, true) for a stored root", async function () {
+    it("returns true for a stored root", async function () {
       await contract.storeHash(ROOT_1);
-      const [timestamp, found] = await contract.validateRoot(ROOT_1);
-      expect(found).to.be.true;
-      expect(timestamp).to.be.gt(0n);
+      expect(await contract.validateRoot(ROOT_1)).to.be.true;
     });
 
-    it("timestamp matches the block timestamp", async function () {
+    it("event timestamp matches the block timestamp", async function () {
       const tx = await contract.storeHash(ROOT_1);
       const receipt = await tx.wait();
       const block = await ethers.provider.getBlock(receipt.blockNumber);
-      const [timestamp] = await contract.validateRoot(ROOT_1);
-      expect(timestamp).to.equal(BigInt(block.timestamp));
+      const event = contract.interface.parseLog(receipt.logs[0]);
+      expect(event.args.timestamp).to.equal(BigInt(block.timestamp));
     });
   });
 
@@ -176,15 +155,4 @@ describe("MessageIntegrity", function () {
     });
   });
 
-  describe("getCount", function () {
-    it("returns 0 initially", async function () {
-      expect(await contract.getCount()).to.equal(0n);
-    });
-
-    it("increments with each stored root", async function () {
-      await contract.storeHash(ROOT_1);
-      await contract.storeHash(ROOT_2);
-      expect(await contract.getCount()).to.equal(2n);
-    });
-  });
 });

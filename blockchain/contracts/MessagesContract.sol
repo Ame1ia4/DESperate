@@ -18,16 +18,10 @@ contract MessageIntegrity {
     /// @notice Maximum number of roots accepted in a single `storeBatchHashes`
     ///         call. Prevents unbounded calldata from hitting the block gas
     ///         limit and producing an opaque out-of-gas revert.
-    uint256 public constant MAX_BATCH_SIZE = 100;
-
-    /// @notice Maps a Merkle root to the block timestamp at which it was stored.
-    mapping(bytes32 => uint256) private timestamps;
+    uint256 public constant MAX_BATCH_SIZE = 50;
 
     /// @notice Tracks whether a given Merkle root has been stored.
     mapping(bytes32 => bool) private rootExists;
-
-    /// @notice Running count of all roots stored across all submissions.
-    uint256 private _count;
 
     // =========================================================================
     // Custom errors
@@ -108,8 +102,6 @@ contract MessageIntegrity {
             if (rootExists[merkleRoot])   revert DuplicateRoot(i, merkleRoot);
 
             rootExists[merkleRoot] = true;
-            timestamps[merkleRoot] = ts;
-            _count++;
 
             emit HashStored(merkleRoot, ts);
         }
@@ -119,24 +111,12 @@ contract MessageIntegrity {
     // Read functions (called by the verify page)
     // =========================================================================
 
-    /// @notice Check whether a Merkle root is on-chain and retrieve its timestamp.
+    /// @notice Check whether a Merkle root has been stored on-chain.
     /// @param  merkleRoot The root to look up.
-    /// @return timestamp  Block timestamp when this root was stored. Zero if not found.
     /// @return found      True if this root exists on-chain, false otherwise.
-    function validateRoot(bytes32 merkleRoot)
-        external
-        view
-        returns (uint256 timestamp, bool found)
-    {
-        if (!rootExists[merkleRoot]) {
-            return (0, false);
-        }
-        return (timestamps[merkleRoot], true);
+    ///                    Timestamp is available from the HashStored event via the tx hash.
+    function validateRoot(bytes32 merkleRoot) external view returns (bool found) {
+        return rootExists[merkleRoot];
     }
 
-    /// @notice Returns the total number of Merkle roots stored.
-    /// @return count Total roots stored across all submissions.
-    function getCount() external view returns (uint256 count) {
-        return _count;
-    }
 }
