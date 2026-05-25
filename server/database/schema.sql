@@ -374,34 +374,35 @@ CREATE INDEX idx_messages_deleted
 -- MERKLE ROOTS
 -- Blockchain Verification Anchors
 --
--- Hash algorithm: keccak256 (NOT SHA-256).
+-- Hash algorithm: keccak256.
 -- Must match the on-chain Solidity contract which uses
--- Solidity's built-in keccak256().  Using SHA-256 off-chain
--- while the contract uses keccak256 produces non-matching
--- digests and every verification check fails.
+-- Solidity's built-in keccak256().
+
+-- Merkle roots submitted to the MessageIntegrity contract on Sepolia.
+-- Verify by calling validateRoot(bytes32) on-chain; retrieve the
+-- timestamp via the HashStored event using tx_hash.
 -- =========================================================
 
 CREATE TABLE merkle_roots (
     id SERIAL PRIMARY KEY,
 
-    -- CHAR(66): '0x' prefix + 64 hex chars = keccak256 digest
+    -- 0x-prefixed keccak256 root. Strip '0x' before passing to contract.
     merkle_root CHAR(66)
         NOT NULL
         UNIQUE,
 
-    -- Ethereum transaction hash returned after submitting the
-    -- root to the Sepolia smart contract.  NULL until the
-    -- transaction is broadcast; set by the application once
-    -- ethers.js / web3 returns the tx hash.
-    -- Required by the verification page to look up on-chain data.
-    tx_hash CHAR(66),
+    -- Set once ethers.js returns the transaction hash after broadcast.
+    tx_hash CHAR(66)
+        UNIQUE,
 
-    created_at TIMESTAMP
-        NOT NULL DEFAULT NOW(),
-
-    is_pending BOOLEAN
-        NOT NULL DEFAULT TRUE
+    -- TRUE once the transaction has been broadcast to Sepolia.
+    broadcast_to_chain BOOLEAN
+        NOT NULL DEFAULT FALSE
 );
+
+CREATE INDEX idx_merkle_roots_tx
+    ON merkle_roots(tx_hash)
+    WHERE tx_hash IS NOT NULL;
 
 -- =========================================================
 -- MESSAGE QUEUE
