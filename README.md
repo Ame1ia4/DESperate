@@ -129,7 +129,38 @@ blockchain/              Solidity smart contracts
 ```
 
 
---- 
+---
+
+## Blockchain / Smart Contracts
+
+The `blockchain/` folder contains the `MessageIntegrity` Solidity contract and its Hardhat test suite.
+
+### Setup
+
+```bash
+cd blockchain
+npm ci
+```
+
+### Compile
+
+```bash
+npx hardhat compile
+```
+
+### Run tests
+
+```bash
+npx hardhat test
+```
+
+Tests cover all contract functions, error cases, ETH rejection, and the no-partial-write guarantee. 25 tests total.
+
+### CI
+
+Set `HAS_BLOCKCHAIN` to `true` in GitHub → Settings → Actions → Variables to enable the blockchain job in CI.
+
+---
 
 ## Cryptography Microservice
 
