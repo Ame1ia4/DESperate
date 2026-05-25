@@ -7,9 +7,62 @@ After cloning the repo, run:
 
 ```bash
 npm run setup
+npm install
 ```
 
 This ensures everyone is using the same githooks folder rather than the local git/hooks.
+npm install installs the required packages obv
+
+---
+
+## Run Server
+These commands are if you are in the server/ directory.
+
+### Why PM2
+PM2 is a process manager for Node.js. Without it, the server stops the moment you
+close your SSH session. PM2 keeps it running in the background, automatically restarts
+it if it crashes, and starts it again on VM reboot.
+
+### Starting the server
+to start the server, run this in the VM:
+
+```bash
+sudo pm2 start server.js --name des-perate
+```
+
+### Stopping the server
+```bash
+sudo pm2 stop des-perate
+```
+
+### Restarting the server
+```bash
+sudo pm2 restart des-perate
+```
+### Checking status
+```bash
+sudo pm2 status
+```
+
+### Viewing live logs
+```bash
+sudo pm2 logs des-perate
+```
+
+### Survive VM reboots
+Run this once after first starting the server:
+```bash
+sudo pm2 save
+sudo pm2 startup
+```
+Follow the command that `pm2 startup` prints — it will give you a line to copy and run.
+
+### Updating PM2
+```bash
+sudo npm install -g pm2@latest
+sudo pm2 restart des-perate
+```
+Keep PM2 updated — CVE-2025-5891 affected versions below 6.0.9 so make sure the version isn't below that.
 
 ---
 
