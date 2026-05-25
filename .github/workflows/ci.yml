@@ -153,8 +153,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: blockchain/package-lock.json
 
-      - name: Install Hardhat (no install scripts)
+      - name: Install dependencies (no install scripts)
         working-directory: blockchain
         run: npm ci --ignore-scripts
 
@@ -164,7 +166,7 @@ jobs:
 
       - name: Run contract tests
         working-directory: blockchain
-        run: npx hardhat test --if-present
+        run: npx hardhat test
 
       - name: Check contract address not hardcoded
         run: |

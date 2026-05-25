@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title  MessageIntegrity
+/// @title  MessagesContract
 /// @author EPIC Team
 /// @notice Stores keccak256 Merkle roots of message conversation batches on
 ///         the Ethereum Sepolia testnet, providing tamper-evident integrity
