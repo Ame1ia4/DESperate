@@ -9,7 +9,7 @@ Run with: pytest tests/test_kdf.py -v
 import os
 import pytest
 
-from kdf import (
+from core.kdf import (
     # HKDF
     hkdf_derive,
     hkdf_derive_many,

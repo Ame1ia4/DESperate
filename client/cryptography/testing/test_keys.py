@@ -7,6 +7,7 @@ Run with: pytest tests/test_keys.py -v
 """
 
 import pytest
+pytest.importorskip("oqs", reason="liboqs native library not installed")
 from core.keys import (
     KEM_ALG,
     SIG_ALG,

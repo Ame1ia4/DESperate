@@ -217,6 +217,9 @@ jobs:
           cache: pip
           cache-dependency-path: client/cryptography/requirements.txt
 
+      - name: Install build dependencies
+        run: sudo apt-get install -y cmake build-essential
+
       - name: Install dependencies
         working-directory: client/cryptography
         run: pip install -r requirements.txt
