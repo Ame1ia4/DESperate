@@ -4,10 +4,11 @@
   "description": "packages for epic des-perate app",
   "main": "index.js",
   "scripts": {
-    "setup": "git config --local core.hooksPath .githooks"
+    "setup": "git config --local core.hooksPath .githooks",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
-    "migrate:create": "node-pg-migrate create"
+    "migrate:create": "node-pg-migrate create",
+    "test:sessions": "node --test server/test/sessions.test.js"
   },
   "repository": {
     "type": "git",

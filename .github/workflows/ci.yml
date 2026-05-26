@@ -69,18 +69,14 @@ jobs:
         working-directory: server
         run: npm audit --audit-level=high
 
-      - name: Run tests (with database)
+      - name: Run session tests (no database required)
+        run: node --test server/test/sessions.test.js
+
+      - name: Run integration tests (requires database)
         if: vars.HAS_DATABASE == 'true'
         working-directory: server
         env:
           DATABASE_URL: postgresql://epic:epic_test@localhost:5432/epic_test
-          NODE_ENV: test
-        run: npm test --if-present
-
-      - name: Run tests (no database yet)
-        if: vars.HAS_DATABASE != 'true'
-        working-directory: server
-        env:
           NODE_ENV: test
         run: npm test --if-present
 
