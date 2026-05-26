@@ -91,6 +91,48 @@ NODE_ENV=development
 
 ---
 
+## Database Migrations
+
+The `schema.sql` file is the baseline — run it once on a fresh database only.
+All structural changes after that must be migrations, never edits to `schema.sql`.
+
+### Creating a migration
+
+```bash
+npm run migrate:create -- your_description_here
+```
+
+This creates a timestamped file in `migrations/`. Edit it:
+
+```js
+export const up = (pgm) => {
+  pgm.addColumn('devices', {
+    push_token: { type: 'varchar(255)', notNull: false }
+  })
+}
+
+export const down = (pgm) => {
+  pgm.dropColumn('devices', 'push_token')
+}
+```
+
+### Running migrations
+
+```bash
+npm run migrate        # apply all pending migrations
+npm run migrate:down   # undo the last migration
+```
+
+Safe to run multiple times — already-applied migrations are skipped automatically.
+
+### Rules
+
+- Never edit a migration that has already been run on the database
+- If you made a mistake, create a new migration to fix it
+- Always commit migration files to the repo so the server and all team members stay in sync
+
+---
+
 ## CI/CD
 
 GitHub Actions runs automatically on every push to `main` or `dev`.

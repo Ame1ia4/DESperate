@@ -5,6 +5,9 @@
   "main": "index.js",
   "scripts": {
     "setup": "git config --local core.hooksPath .githooks"
+    "migrate": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "migrate:create": "node-pg-migrate create"
   },
   "repository": {
     "type": "git",
@@ -26,6 +29,7 @@
     "express": "5.2.1",
     "express-rate-limit": "8.5.2",
     "helmet": "8.1.0",
+    "node-pg-migrate": "8.0.4",
     "pg": "8.21.0",
     "ws": "8.20.1"
   },
