@@ -1,8 +1,20 @@
 import QtQuick
+import QtQuick.Controls
 
-Window {
-    width: 640
-    height: 480
+ApplicationWindow {
+
+    width: 1200
+    height: 800
+
     visible: true
-    title: qsTr("Hello World")
+
+    title: "Secure Messenger"
+
+    StackView {
+        id: stackView
+
+        anchors.fill: parent
+
+        initialItem: LoginView {}
+    }
 }

@@ -10,12 +10,39 @@ qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appsecure_messenger
     main.cpp
+
+    src/services/ApiClient.cpp
+    src/services/CryptoBridge.cpp
+
+    src/models/MessageModel.cpp
 )
 
 qt_add_qml_module(appsecure_messenger
     URI secure_messenger
     QML_FILES
         Main.qml
+        SOURCES src/types/Types.h
+        SOURCES src/services/ApiClient.h
+        SOURCES src/services/ApiClient.cpp
+        SOURCES src/services/CryptoBridge.h src/services/CryptoBridge.cpp
+        SOURCES src/models/MessageModel.h src/models/MessageModel.cpp
+        QML_FILES qml/views/MessageView.qml
+        QML_FILES qml/views/LoginView.qml
+        SOURCES src/controllers/AuthController.h src/controllers/AuthController.cpp
+        SOURCES src/controllers/MessageController.h src/controllers/MessageController.cpp
+        SOURCES src/services/SecureStorage.h src/services/SecureStorage.cpp
+        SOURCES src/controllers/ConversationController.h src/controllers/ConversationController.cpp
+        SOURCES src/models/ConversationModel.h src/models/ConversationModel.cpp
+        SOURCES src/models/UserModel.h src/models/UserModel.cpp
+        SOURCES src/services/BlockchainVerifier.h src/services/BlockchainVerifier.cpp
+        SOURCES src/services/Keystore.h src/services/Keystore.cpp
+        SOURCES src/main.cpp
+        SOURCES src/network/TLSManager.h src/network/TLSManager.cpp
+        SOURCES src/storage/LocalDatabase.h src/storage/LocalDatabase.cpp
+        SOURCES src/crypto/CryptoPacket.h src/crypto/CryptoPacket.cpp
+        QML_FILES qml/views/ConversationList.qml
+        QML_FILES qml/views/MessageBubble.qml
+        QML_FILES qml/views/VerifyDialog.qml
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
