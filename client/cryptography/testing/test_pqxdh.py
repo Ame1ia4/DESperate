@@ -92,13 +92,9 @@ class _StubIdentityBundle:
             "opks": [
                 {
                     "opk_id":      i,
-                    "opk_pub":     os.urandom(32).hex(),    # X25519 classical leg
-                    "opk_kem_pub": os.urandom(1568).hex(),  # ML-KEM PQ leg
+                    "opk_pub":     os.urandom(32).hex(),
+                    "opk_kem_pub": os.urandom(1568).hex(),
                 }
-                for i in range(3)
-            ],
-            "opks_kem": [
-                {"opk_id": i, "opk_pub": os.urandom(1568).hex()}
                 for i in range(3)
             ],
         }
@@ -343,9 +339,8 @@ class TestResponder:
         """Build fake local OPK stores matching the bundle."""
         local_x_opks   = {}
         local_kem_opks = {}
-        for opk in bob_public.get("opks_x25519", []):
+        for opk in bob_public.get("opks", []):
             local_x_opks[opk["opk_id"]]   = os.urandom(32)
-        for opk in bob_public.get("opks_kem", []):
             local_kem_opks[opk["opk_id"]] = os.urandom(3168)
         return local_x_opks, local_kem_opks
 
@@ -391,8 +386,8 @@ class TestResponder:
             respond(
                 local_bundle      = bob,
                 initiation        = init_result.bundle,
-                local_opks        = {},
-                local_kem_opk_sks = {},
+                local_x25519_opks = {},
+                local_kem_opks    = {},
             )
 
     def test_identity_kem_fallback_responds_correctly(

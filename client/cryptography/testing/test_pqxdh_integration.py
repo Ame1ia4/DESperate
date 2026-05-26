@@ -56,8 +56,8 @@ def bob_public(bob_bundle):
 def bob_local_opks(bob_bundle):
     """Bob's X25519 OPK secret keys keyed by OPK id."""
     return {
-        opk.opk_id: opk.x25519_keypair.private_key_bytes
-        for opk in bob_bundle.opks
+        opk.opk_id: opk.secret_key
+        for opk in bob_bundle.x25519_opks
     }
 
 @pytest.fixture(scope="module")
@@ -210,8 +210,8 @@ class TestOPKHandlingReal:
         bob_result = respond(
             local_bundle      = bob_bundle,
             initiation        = alice_result.bundle,
-            local_opks        = {},
-            local_kem_opk_sks = {},
+            local_x25519_opks = {},
+            local_kem_opks    = {},
         )
 
         assert alice_result.SK == bob_result.SK
@@ -308,8 +308,8 @@ class TestCompromisedServer:
         pub          = bob_bundle.to_public_bundle()
         alice_result = initiate(alice_bundle, pub)
 
-        local_x   = {opk.opk_id: opk.x25519_keypair.private_key_bytes for opk in bob_bundle.opks}
-        local_kem = {opk.opk_id: opk.secret_key for opk in bob_bundle.opks}
+        local_x   = {opk.opk_id: opk.secret_key for opk in bob_bundle.x25519_opks}
+        local_kem = {opk.opk_id: opk.secret_key for opk in bob_bundle.kem_opks}
 
         # First response — succeeds, OPK consumed
         respond(
@@ -330,6 +330,6 @@ class TestCompromisedServer:
             respond(
                 local_bundle      = bob_bundle,
                 initiation        = alice_result.bundle,
-                local_opks        = local_x,
-                local_kem_opk_sks = local_kem,
+                local_x25519_opks = local_x,
+                local_kem_opks    = local_kem,
             )
