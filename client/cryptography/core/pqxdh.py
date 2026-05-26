@@ -56,7 +56,7 @@ from typing import Optional
 
 import oqs
 
-from cryptography.core.keys import (
+from core.keys import (
     KEM_ALG,
     IdentityBundle,
     X25519Keypair,

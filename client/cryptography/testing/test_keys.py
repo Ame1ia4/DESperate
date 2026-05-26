@@ -14,7 +14,8 @@ from core.keys import (
     KEMKeypair,
     SigningKeypair,
     X25519Keypair,
-    OneTimePrekey,
+    X25519OneTimePrekey,  # ← replaces OneTimePrekey
+    KEMOneTimePrekey,  # ← new
     SignedPrekey,
     IdentityBundle,
     generate_kem_keypair,
