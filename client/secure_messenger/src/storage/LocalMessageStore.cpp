@@ -1,3 +1,3 @@
-#include "LocalDatabase.h"
+#include "LocalMessageStore.h"
 
 LocalDatabase::LocalDatabase() {}
