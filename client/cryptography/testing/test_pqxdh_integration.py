@@ -190,6 +190,8 @@ class TestOPKHandlingReal:
     def test_no_opk_allow_false_raises(self, alice_bundle, bob_public):
         no_opk_bundle = dict(bob_public)
         no_opk_bundle["opks"] = []
+        no_opk_bundle["opks_x25519"] = []
+        no_opk_bundle["opks_kem"] = []
 
         with pytest.raises(NoPrekeyError):
             initiate(alice_bundle, no_opk_bundle, allow_no_opk=False)
@@ -203,6 +205,8 @@ class TestOPKHandlingReal:
         """
         no_opk_bundle = bob_bundle.to_public_bundle()
         no_opk_bundle["opks"] = []
+        no_opk_bundle["opks_x25519"] = []
+        no_opk_bundle["opks_kem"] = []
 
         alice_result = initiate(alice_bundle, no_opk_bundle, allow_no_opk=True)
         assert alice_result.bundle.used_identity_kem is True

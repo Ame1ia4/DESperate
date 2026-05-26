@@ -227,31 +227,46 @@ class IdentityBundle:
     x25519_opks:  list[X25519OneTimePrekey] = field(default_factory=list)
     kem_opks:     list[KEMOneTimePrekey]    = field(default_factory=list)
 
+    @property
+    def opks(self) -> list[KEMOneTimePrekey]:
+        """Alias for kem_opks — the PQ one-time prekeys."""
+        return self.kem_opks
+
     def to_public_bundle(self) -> dict:
         """
         Serialise the public half of this bundle for upload to the server.
         No private key material is included.
 
-        The server serves this to initiating parties. The two OPK lists are
-        kept separate so the initiator clearly knows which keys are X25519
-        (for DH4) and which are ML-KEM (for PQ encapsulation).
+        Includes both separated (opks_x25519, opks_kem) and combined (opks)
+        formats for compatibility.
         """
+        x25519_list = [
+            {"opk_id": opk.opk_id, "opk_pub": opk.public_key.hex()}
+            for opk in self.x25519_opks
+        ]
+        kem_list = [
+            {"opk_id": opk.opk_id, "opk_pub": opk.public_key.hex()}
+            for opk in self.kem_opks
+        ]
+        combined_list = [
+            {
+                "opk_id":      x_opk.opk_id,
+                "opk_pub":     x_opk.public_key.hex(),
+                "opk_kem_pub": kem_opk.public_key.hex(),
+            }
+            for x_opk, kem_opk in zip(self.x25519_opks, self.kem_opks)
+        ]
         return {
-            "user_id":           self.user_id,
-            "ik_kem_pub":        self.ik_kem.public_key.hex(),
-            "ik_sig_pub":        self.ik_sig.public_key.hex(),
-            "ik_classical_pub":  self.ik_classical.public_key_bytes.hex(),
-            "spk_id":            self.spk.spk_id,
-            "spk_pub":           self.spk.keypair.public_key_bytes.hex(),
-            "spk_sig":           self.spk.signature.hex(),
-            "opks": [
-                {
-                    "opk_id":      x_opk.opk_id,
-                    "opk_pub":     x_opk.public_key.hex(),
-                    "opk_kem_pub": kem_opk.public_key.hex(),
-                }
-                for x_opk, kem_opk in zip(self.x25519_opks, self.kem_opks)
-            ],
+            "user_id":          self.user_id,
+            "ik_kem_pub":       self.ik_kem.public_key.hex(),
+            "ik_sig_pub":       self.ik_sig.public_key.hex(),
+            "ik_classical_pub": self.ik_classical.public_key_bytes.hex(),
+            "spk_id":           self.spk.spk_id,
+            "spk_pub":          self.spk.keypair.public_key_bytes.hex(),
+            "spk_sig":          self.spk.signature.hex(),
+            "opks":             combined_list,
+            "opks_x25519":      x25519_list,
+            "opks_kem":         kem_list,
         }
 
     def to_private_bundle(self) -> dict:
@@ -260,17 +275,25 @@ class IdentityBundle:
         local storage. Never store this output in plaintext.
         """
         return {
-            "user_id":               self.user_id,
-            "ik_kem_pub":            self.ik_kem.public_key.hex(),
-            "ik_kem_sec":            self.ik_kem.secret_key.hex(),
-            "ik_sig_pub":            self.ik_sig.public_key.hex(),
-            "ik_sig_sec":            self.ik_sig.secret_key.hex(),
-            "ik_classical_pub":      self.ik_classical.public_key_bytes.hex(),
-            "ik_classical_sec":      self.ik_classical.private_key_bytes.hex(),
-            "spk_id":                self.spk.spk_id,
-            "spk_pub":               self.spk.keypair.public_key_bytes.hex(),
-            "spk_sec":               self.spk.keypair.private_key_bytes.hex(),
-            "spk_sig":               self.spk.signature.hex(),
+            "user_id":          self.user_id,
+            "ik_kem_pub":       self.ik_kem.public_key.hex(),
+            "ik_kem_sec":       self.ik_kem.secret_key.hex(),
+            "ik_sig_pub":       self.ik_sig.public_key.hex(),
+            "ik_sig_sec":       self.ik_sig.secret_key.hex(),
+            "ik_classical_pub": self.ik_classical.public_key_bytes.hex(),
+            "ik_classical_sec": self.ik_classical.private_key_bytes.hex(),
+            "spk_id":           self.spk.spk_id,
+            "spk_pub":          self.spk.keypair.public_key_bytes.hex(),
+            "spk_sec":          self.spk.keypair.private_key_bytes.hex(),
+            "spk_sig":          self.spk.signature.hex(),
+            "opks": [
+                {
+                    "opk_id":  opk.opk_id,
+                    "opk_pub": opk.public_key.hex(),
+                    "opk_sec": opk.secret_key.hex(),
+                }
+                for opk in self.kem_opks
+            ],
             "opks_x25519": [
                 {
                     "opk_id":  opk.opk_id,
@@ -332,39 +355,45 @@ def generate_signed_prekey(
     )
 
 
-def generate_one_time_prekeys(
-    count:    int = OPK_COUNT,
+def generate_x25519_one_time_prekeys(
+    count:    int,
     start_id: int = 1,
-) -> tuple[list[X25519OneTimePrekey], list[KEMOneTimePrekey]]:
-    """
-    Generate a batch of PQXDH one-time prekeys (both classical and PQ legs).
-    Each OPK is consumed by exactly one PQXDH session initiation.
-    The server must not reuse OPKs — if no OPKs remain, the initiator
-    falls back to the SPK only (reduced forward secrecy, document this).
-    """
-    x25519_opks = []
-    kem_opks    = []
-
+) -> list[X25519OneTimePrekey]:
+    """Generate a batch of X25519 one-time prekeys (classical DH4 leg)."""
+    result = []
     for i in range(count):
         opk_id = start_id + i
-
         kp = X25519Keypair.generate()
-        x25519_opks.append(X25519OneTimePrekey(
+        result.append(X25519OneTimePrekey(
             opk_id     = opk_id,
             public_key = kp.public_key_bytes,
             secret_key = kp.private_key_bytes,
         ))
+    return result
 
+
+def generate_one_time_prekeys(
+    count:    int = OPK_COUNT,
+    start_id: int = 1,
+) -> list[KEMOneTimePrekey]:
+    """
+    Generate a batch of ML-KEM-1024 one-time prekeys (PQ encapsulation leg).
+    Each OPK is consumed by exactly one PQXDH session initiation.
+    The server must not reuse OPKs — if no OPKs remain, the initiator
+    falls back to the identity key (reduced PQ forward secrecy).
+    """
+    result = []
+    for i in range(count):
+        opk_id = start_id + i
         with oqs.KeyEncapsulation(KEM_ALG) as kem:
             pub = kem.generate_keypair()
             sec = kem.export_secret_key()
-        kem_opks.append(KEMOneTimePrekey(
+        result.append(KEMOneTimePrekey(
             opk_id     = opk_id,
             public_key = pub,
             secret_key = sec,
         ))
-
-    return x25519_opks, kem_opks
+    return result
 
 
 def generate_identity_bundle(
@@ -379,13 +408,12 @@ def generate_identity_bundle(
     user_id   : the user's identifier (e.g. username or UUID)
     opk_count : number of OPK pairs to generate (default from constants)
     """
-    ik_kem          = generate_kem_keypair()
-    ik_sig          = generate_signing_keypair()
-    ik_classical    = X25519Keypair.generate()
-    spk             = generate_signed_prekey(ik_sig, spk_id=1)
-    x25519_opks, kem_opks = generate_one_time_prekeys(
-        count=opk_count, start_id=1
-    )
+    ik_kem       = generate_kem_keypair()
+    ik_sig       = generate_signing_keypair()
+    ik_classical = X25519Keypair.generate()
+    spk          = generate_signed_prekey(ik_sig, spk_id=1)
+    x25519_opks  = generate_x25519_one_time_prekeys(count=opk_count, start_id=1)
+    kem_opks     = generate_one_time_prekeys(count=opk_count, start_id=1)
 
     return IdentityBundle(
         user_id      = user_id,
@@ -423,7 +451,10 @@ def replenish_one_time_prekeys(
     Returns (new_x25519_opks, new_kem_opks) — both empty if already at target.
     """
     if not existing_x25519:
-        return generate_one_time_prekeys(count=target_count, start_id=1)
+        return (
+            generate_x25519_one_time_prekeys(count=target_count, start_id=1),
+            generate_one_time_prekeys(count=target_count, start_id=1),
+        )
 
     highest_id = max(opk.opk_id for opk in existing_x25519)
     shortfall  = target_count - len(existing_x25519)
@@ -431,4 +462,7 @@ def replenish_one_time_prekeys(
     if shortfall <= 0:
         return [], []
 
-    return generate_one_time_prekeys(count=shortfall, start_id=highest_id + 1)
+    return (
+        generate_x25519_one_time_prekeys(count=shortfall, start_id=highest_id + 1),
+        generate_one_time_prekeys(count=shortfall, start_id=highest_id + 1),
+    )

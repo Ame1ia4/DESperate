@@ -72,6 +72,9 @@ from core.kdf import hkdf_derive, INFO_PQXDH_SK
 # 32 bytes of 0xFF prevent cross-protocol confusion.
 _PQXDH_F: bytes = b"\xff" * 32
 
+# PQXDH spec §3.3 — HKDF salt is a 32-byte zero string.
+PQXDH_HKDF_SALT: bytes = b"\x00" * 32
+
 # HKDF output length — 32 bytes = 256-bit shared secret.
 _SK_LEN: int = 32
 
@@ -166,8 +169,16 @@ def initiate(
     spk_b_pub       = bytes.fromhex(remote_bundle["spk_pub"])
     spk_b_sig       = bytes.fromhex(remote_bundle["spk_sig"])
     spk_b_id        = remote_bundle["spk_id"]
-    opks_x25519     = remote_bundle.get("opks_x25519", [])  # X25519 OPKs (32 bytes)
-    opks_kem        = remote_bundle.get("opks_kem",    [])  # ML-KEM OPKs (1568 bytes)
+
+    # Prefer new split format (opks_x25519 / opks_kem) when both keys present.
+    # Fall back to old combined format ("opks" with opk_pub + opk_kem_pub).
+    if "opks_x25519" in remote_bundle and "opks_kem" in remote_bundle:
+        opks_x25519 = remote_bundle["opks_x25519"]
+        opks_kem    = remote_bundle["opks_kem"]
+    else:
+        old_opks    = remote_bundle.get("opks", [])
+        opks_x25519 = [{"opk_id": o["opk_id"], "opk_pub": o["opk_pub"]}     for o in old_opks]
+        opks_kem    = [{"opk_id": o["opk_id"], "opk_pub": o["opk_kem_pub"]} for o in old_opks]
 
     # ── Step 2: Verify SPK signature ──────────────────────────────────────────
     if not verify_spk_signature(spk_b_pub, spk_b_sig, ik_b_sig_pub):
@@ -199,9 +210,9 @@ def initiate(
     # CT_pq is transmitted to Bob in the InitiationBundle.
     used_identity_kem = False
 
-    if opks:
+    if opks_kem:
         # PQ OPK available — preferred path, best PQ forward secrecy
-        opk_b_kem_pub = bytes.fromhex(opks[0]["opk_kem_pub"])
+        opk_b_kem_pub = bytes.fromhex(opks_kem[0]["opk_pub"])
         ct_pq, ss_pq  = _kem_encapsulate(opk_b_kem_pub)
     elif allow_no_opk:
         # Fallback: encapsulate to Bob's ML-KEM identity key.

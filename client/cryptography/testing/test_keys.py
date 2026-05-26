@@ -22,6 +22,7 @@ from core.keys import (
     generate_signing_keypair,
     generate_signed_prekey,
     generate_one_time_prekeys,
+    generate_x25519_one_time_prekeys,
     generate_identity_bundle,
     verify_spk_signature,
     replenish_one_time_prekeys,
@@ -334,13 +335,15 @@ class TestIdentityBundle:
 class TestReplenishOPKs:
 
     def test_replenish_fills_to_target(self):
-        existing_x, existing_k = generate_one_time_prekeys(count=5, start_id=1)
+        existing_x = generate_x25519_one_time_prekeys(count=5, start_id=1)
+        existing_k = generate_one_time_prekeys(count=5, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=20)
         assert len(new_x) == 15
         assert len(new_k) == 15
 
     def test_replenish_ids_continue_from_highest(self):
-        existing_x, existing_k = generate_one_time_prekeys(count=5, start_id=1)
+        existing_x = generate_x25519_one_time_prekeys(count=5, start_id=1)
+        existing_k = generate_one_time_prekeys(count=5, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=8)
         assert new_x[0].opk_id == 6
         assert new_x[-1].opk_id == 8
@@ -353,13 +356,15 @@ class TestReplenishOPKs:
         assert new_x[0].opk_id == 1
 
     def test_replenish_when_already_at_target_returns_empty(self):
-        existing_x, existing_k = generate_one_time_prekeys(count=20, start_id=1)
+        existing_x = generate_x25519_one_time_prekeys(count=20, start_id=1)
+        existing_k = generate_one_time_prekeys(count=20, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=20)
         assert new_x == []
         assert new_k == []
 
     def test_replenish_ids_do_not_collide_with_existing(self):
-        existing_x, existing_k = generate_one_time_prekeys(count=10, start_id=1)
+        existing_x = generate_x25519_one_time_prekeys(count=10, start_id=1)
+        existing_k = generate_one_time_prekeys(count=10, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=15)
         existing_ids = {o.opk_id for o in existing_x}
         new_ids      = {o.opk_id for o in new_x}
