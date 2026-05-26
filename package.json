@@ -8,7 +8,9 @@
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "migrate:create": "node-pg-migrate create",
-    "test:sessions": "node --test server/test/sessions.test.js"
+    "test": "node --test server/test/sessions.test.js server/test/crypto.test.js",
+    "test:sessions": "node --test server/test/sessions.test.js",
+    "test:crypto": "node --test server/test/crypto.test.js"
   },
   "repository": {
     "type": "git",

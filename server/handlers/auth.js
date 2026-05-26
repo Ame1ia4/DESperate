@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import argon2 from 'argon2'
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa'
-import { ml_kem768 } from '@noble/post-quantum/ml-kem'
+import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { query, withTransaction } from '../database/db.js'
 import {
   createChallenge,
@@ -11,6 +11,7 @@ import {
   deleteAllSessionsForDevice,
 } from '../sessions.js'
 import { verifyDualSignature } from '../utils/crypto.js'
+
 
 // ── Key size constants ──────────────────────────────────────────────────────
 
