@@ -16,18 +16,9 @@ These tests prove the real crypto produces correct results.
 import pytest
 import os
 
-# Replace this at the top of test_pqxdh_integration.py:
+# Skip entire module if liboqs is not installed
 oqs = pytest.importorskip("oqs", reason="liboqs-python not installed")
 
-# With this:
-import sys
-try:
-    import oqs
-except (ImportError, RuntimeError, SystemExit):
-    pytest.skip(
-        "liboqs shared library not available — run on Linux VM",
-        allow_module_level=True
-    )
 from core.keys import generate_identity_bundle
 from core.pqxdh import (
     initiate,
@@ -62,7 +53,7 @@ def bob_local_opks(bob_bundle):
     """Bob's X25519 OPK secret keys keyed by OPK id."""
     return {
         opk.opk_id: opk.secret_key
-        for opk in bob_bundle.opks
+        for opk in bob_bundle.x25519_opks
     }
 
 @pytest.fixture(scope="module")
@@ -70,7 +61,7 @@ def bob_local_kem_opks(bob_bundle):
     """Bob's ML-KEM OPK secret keys keyed by OPK id."""
     return {
         opk.opk_id: opk.secret_key
-        for opk in bob_bundle.opks
+        for opk in bob_bundle.kem_opks
     }
 
 
@@ -93,8 +84,8 @@ class TestHandshakeCorrectness:
         bob_result   = respond(
             local_bundle      = bob_bundle,
             initiation        = alice_result.bundle,
-            local_opks        = bob_local_opks,
-            local_kem_opk_sks = bob_local_kem_opks,
+            local_x25519_opks = bob_local_opks,
+            local_kem_opks    = bob_local_kem_opks,
         )
 
         assert alice_result.SK == bob_result.SK, (
@@ -248,8 +239,8 @@ class TestBundleSerialisationReal:
         bob_result = respond(
             local_bundle      = bob_bundle,
             initiation        = received,       # deserialised bundle
-            local_opks        = bob_local_opks,
-            local_kem_opk_sks = bob_local_kem_opks,
+            local_x25519_opks = bob_local_opks,
+            local_kem_opks    = bob_local_kem_opks,
         )
 
         assert alice_result.SK == bob_result.SK
@@ -313,15 +304,15 @@ class TestCompromisedServer:
         pub          = bob_bundle.to_public_bundle()
         alice_result = initiate(alice_bundle, pub)
 
-        local_x   = {opk.opk_id: opk.secret_key for opk in bob_bundle.opks}
-        local_kem = {opk.opk_id: opk.secret_key for opk in bob_bundle.opks}
+        local_x   = {opk.opk_id: opk.secret_key for opk in bob_bundle.x25519_opks}
+        local_kem = {opk.opk_id: opk.secret_key for opk in bob_bundle.kem_opks}
 
         # First response — succeeds, OPK consumed
         respond(
             local_bundle      = bob_bundle,
             initiation        = alice_result.bundle,
-            local_opks        = local_x,
-            local_kem_opk_sks = local_kem,
+            local_x25519_opks = local_x,
+            local_kem_opks    = local_kem,
         )
 
         # Simulate OPK deletion after consumption

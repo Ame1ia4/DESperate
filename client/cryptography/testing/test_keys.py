@@ -7,7 +7,6 @@ Run with: pytest tests/test_keys.py -v
 """
 
 import pytest
-pytest.importorskip("oqs", reason="liboqs native library not installed")
 from core.keys import (
     KEM_ALG,
     SIG_ALG,
@@ -270,7 +269,8 @@ class TestIdentityBundle:
         assert bundle.user_id == "alice"
 
     def test_bundle_has_correct_opk_count(self, bundle):
-        assert len(bundle.opks) == 5
+        assert len(bundle.x25519_opks) == 5
+        assert len(bundle.kem_opks) == 5
 
     def test_public_bundle_contains_no_secret_keys(self, bundle):
         pub = bundle.to_public_bundle()
@@ -315,8 +315,10 @@ class TestIdentityBundle:
 
     def test_opk_ids_in_public_bundle_are_unique(self, bundle):
         pub = bundle.to_public_bundle()
-        ids = [o["opk_id"] for o in pub["opks"]]
-        assert len(set(ids)) == len(ids)
+        ids_x = [o["opk_id"] for o in pub["opks_x25519"]]
+        ids_k = [o["opk_id"] for o in pub["opks_kem"]]
+        assert len(set(ids_x)) == len(ids_x)
+        assert ids_x == ids_k   # paired OPKs must share the same IDs
 
     def test_two_bundles_for_same_user_have_different_keys(self):
         """Registration must always generate fresh key material."""
@@ -331,31 +333,33 @@ class TestIdentityBundle:
 class TestReplenishOPKs:
 
     def test_replenish_fills_to_target(self):
-        existing = generate_one_time_prekeys(count=5, start_id=1)
-        new_opks = replenish_one_time_prekeys(existing, target_count=20)
-        assert len(new_opks) == 15
+        existing_x, existing_k = generate_one_time_prekeys(count=5, start_id=1)
+        new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=20)
+        assert len(new_x) == 15
+        assert len(new_k) == 15
 
     def test_replenish_ids_continue_from_highest(self):
-        existing = generate_one_time_prekeys(count=5, start_id=1)
-        # existing IDs are 1..5
-        new_opks = replenish_one_time_prekeys(existing, target_count=8)
-        # new IDs should start at 6
-        assert new_opks[0].opk_id == 6
-        assert new_opks[-1].opk_id == 8
+        existing_x, existing_k = generate_one_time_prekeys(count=5, start_id=1)
+        new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=8)
+        assert new_x[0].opk_id == 6
+        assert new_x[-1].opk_id == 8
+        assert new_k[0].opk_id == 6
+        assert new_k[-1].opk_id == 8
 
     def test_replenish_with_empty_existing(self):
-        new_opks = replenish_one_time_prekeys([], target_count=10)
-        assert len(new_opks) == 10
-        assert new_opks[0].opk_id == 1
+        new_x, new_k = replenish_one_time_prekeys([], [], target_count=10)
+        assert len(new_x) == 10
+        assert new_x[0].opk_id == 1
 
     def test_replenish_when_already_at_target_returns_empty(self):
-        existing = generate_one_time_prekeys(count=20, start_id=1)
-        new_opks = replenish_one_time_prekeys(existing, target_count=20)
-        assert new_opks == []
+        existing_x, existing_k = generate_one_time_prekeys(count=20, start_id=1)
+        new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=20)
+        assert new_x == []
+        assert new_k == []
 
     def test_replenish_ids_do_not_collide_with_existing(self):
-        existing = generate_one_time_prekeys(count=10, start_id=1)
-        new_opks = replenish_one_time_prekeys(existing, target_count=15)
-        existing_ids = {o.opk_id for o in existing}
-        new_ids      = {o.opk_id for o in new_opks}
+        existing_x, existing_k = generate_one_time_prekeys(count=10, start_id=1)
+        new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=15)
+        existing_ids = {o.opk_id for o in existing_x}
+        new_ids      = {o.opk_id for o in new_x}
         assert existing_ids.isdisjoint(new_ids)
