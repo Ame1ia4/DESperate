@@ -69,6 +69,7 @@ References:
 
 from __future__ import annotations
 
+import ctypes
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -243,7 +244,7 @@ def initiate(
 
     if opks:
         # PQ OPK available — preferred path, best PQ forward secrecy
-        opk_b_kem_pub = bytes.fromhex(opks[0]["opk_pub"])
+        opk_b_kem_pub = bytes.fromhex(opks[0]["opk_kem_pub"])
         ct_pq, ss_pq  = _kem_encapsulate(opk_b_kem_pub)
     elif allow_no_opk:
         # Fallback: encapsulate to Bob's ML-KEM identity key.
@@ -270,17 +271,18 @@ def initiate(
     # SS_pq is appended last — the PQ leg wraps the classical material,
     # meaning a quantum adversary must break ML-KEM to recover SK even if
     # they can compute classical DH. (PQXDH spec §4, "Security Properties")
-    ikm = _PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq
+    ikm = bytearray(_PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq)
     SK  = hkdf_derive(
-        ikm  = ikm,
+        ikm  = bytes(ikm),
         salt = PQXDH_HKDF_SALT,   # PQXDH spec §3.3: salt is a zero string
         info = INFO_PQXDH_SK,
         length = _SK_LEN,
     )
 
-    # Zeroise intermediate DH outputs — they are no longer needed and
-    # should not remain in memory longer than necessary.
-    _zeroise(dh1, dh2, dh3, dh4, ss_pq, ikm)
+    # Zeroise IKM — it holds all DH and KEM secrets combined.
+    # ikm is a bytearray so _zeroise can overwrite it in place.
+    # dh1..ss_pq are immutable bytes from the crypto library; we drop references.
+    _zeroise(ikm)
 
     bundle = InitiationBundle(
         ik_classical_pub  = local_bundle.ik_classical.public_key_bytes,
@@ -366,15 +368,15 @@ def respond(
 
     # ── Step 4: Derive shared secret SK ──────────────────────────────────────
     # Must produce the same SK as Alice — identical IKM construction.
-    ikm = _PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq
+    ikm = bytearray(_PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq)
     SK  = hkdf_derive(
-        ikm    = ikm,
+        ikm    = bytes(ikm),
         salt   = PQXDH_HKDF_SALT,
         info   = INFO_PQXDH_SK,
         length = _SK_LEN,
     )
 
-    _zeroise(dh1, dh2, dh3, dh4, ss_pq, ikm)
+    _zeroise(ikm)
 
     return PQXDHResult(SK=SK, bundle=None)
 
@@ -412,20 +414,20 @@ def _x25519_dh(secret_key_bytes: bytes, peer_public_bytes: bytes) -> bytes:
     return priv.exchange(pub)
 
 
-def _zeroise(*bufs: bytes) -> None:
+def _zeroise(*bufs) -> None:
     """
-    Best-effort zeroisation of sensitive byte buffers.
+    Zeroisation of sensitive byte buffers.
 
-    Python does not guarantee memory zeroisation — the GC may retain
-    copies. This is a best-effort measure; for production deployments,
-    use a C extension (e.g. libsodium's sodium_memzero) for guarantees.
-    We document this as a known limitation.
+    bytearray inputs are overwritten with zeros in place via ctypes — this
+    reliably zeroes the underlying memory on CPython.
+
+    bytes inputs are immutable; their memory cannot be zeroed from Python.
+    The cryptography library zeroes its own key objects at the C layer.
+    Callers should prefer bytearray for any buffer they construct (e.g. IKM).
     """
     for buf in bufs:
-        if buf:
-            try:
-                # bytes are immutable in Python — we can't zero them in place.
-                # The del hint below is the best we can do in pure Python.
-                del buf
-            except Exception:
-                pass
+        if not buf:
+            continue
+        if isinstance(buf, bytearray):
+            n = len(buf)
+            ctypes.memset((ctypes.c_char * n).from_buffer(buf), 0, n)

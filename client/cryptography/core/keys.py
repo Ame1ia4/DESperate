@@ -153,16 +153,21 @@ class X25519Keypair:
 @dataclass
 class OneTimePrekey:
     """
-    A single ML-KEM-1024 one-time prekey (OPK).
+    A single PQXDH one-time prekey (OPK) — contains both legs:
+      x25519_keypair : X25519 classical leg (DH4 in X3DH)
+      public_key     : ML-KEM-1024 public key (PQ encapsulation target)
+      secret_key     : ML-KEM-1024 secret key (PQ decapsulation)
+
     Each OPK is consumed by exactly one PQXDH session initiation.
     The server tracks which OPKs remain; clients must replenish when low.
 
-    opk_id      — server-assigned identifier, returned to initiator so
-                  the recipient knows which OPK was used for decapsulation
+    opk_id — server-assigned identifier, returned to initiator so
+             the recipient knows which OPK was used for DH4 / decapsulation.
     """
-    opk_id:     int
-    public_key: bytes
-    secret_key: bytes
+    opk_id:         int
+    x25519_keypair: X25519Keypair  # classical DH4 leg
+    public_key:     bytes          # ML-KEM-1024 public key  (1568 bytes)
+    secret_key:     bytes          # ML-KEM-1024 secret key  (3168 bytes)
 
     def __repr__(self) -> str:
         return f"OneTimePrekey(id={self.opk_id}, public={self.public_key.hex()[:16]}…)"
@@ -230,7 +235,11 @@ class IdentityBundle:
             "spk_pub":           self.spk.keypair.public_key_bytes.hex(),
             "spk_sig":           self.spk.signature.hex(),
             "opks": [
-                {"opk_id": opk.opk_id, "opk_pub": opk.public_key.hex()}
+                {
+                    "opk_id":      opk.opk_id,
+                    "opk_pub":     opk.x25519_keypair.public_key_bytes.hex(),
+                    "opk_kem_pub": opk.public_key.hex(),
+                }
                 for opk in self.opks
             ],
         }
@@ -255,9 +264,11 @@ class IdentityBundle:
             "spk_sig":               self.spk.signature.hex(),
             "opks": [
                 {
-                    "opk_id":  opk.opk_id,
-                    "opk_pub": opk.public_key.hex(),
-                    "opk_sec": opk.secret_key.hex(),
+                    "opk_id":      opk.opk_id,
+                    "opk_pub":     opk.x25519_keypair.public_key_bytes.hex(),
+                    "opk_sec":     opk.x25519_keypair.private_key_bytes.hex(),
+                    "opk_kem_pub": opk.public_key.hex(),
+                    "opk_kem_sec": opk.secret_key.hex(),
                 }
                 for opk in self.opks
             ],
@@ -312,20 +323,22 @@ def generate_one_time_prekeys(
     start_id: int = 1,
 ) -> list[OneTimePrekey]:
     """
-    Generate a batch of ML-KEM-1024 one-time prekeys.
+    Generate a batch of PQXDH one-time prekeys (both classical and PQ legs).
     Each OPK is consumed by exactly one PQXDH session initiation.
     The server must not reuse OPKs — if no OPKs remain, the initiator
     falls back to the SPK only (reduced forward secrecy, document this).
     """
     opks = []
     for i in range(count):
+        x25519_keypair = X25519Keypair.generate()
         with oqs.KeyEncapsulation(KEM_ALG) as kem:
             public_key = kem.generate_keypair()
             secret_key = kem.export_secret_key()
         opks.append(OneTimePrekey(
-            opk_id     = start_id + i,
-            public_key = public_key,
-            secret_key = secret_key,
+            opk_id         = start_id + i,
+            x25519_keypair = x25519_keypair,
+            public_key     = public_key,
+            secret_key     = secret_key,
         ))
     return opks
 

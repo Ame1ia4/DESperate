@@ -16,11 +16,6 @@ These tests prove the real crypto produces correct results.
 import pytest
 import os
 
-# Replace this at the top of test_pqxdh_integration.py:
-oqs = pytest.importorskip("oqs", reason="liboqs-python not installed")
-
-# With this:
-import sys
 try:
     import oqs
 except (ImportError, RuntimeError, SystemExit):
@@ -61,7 +56,7 @@ def bob_public(bob_bundle):
 def bob_local_opks(bob_bundle):
     """Bob's X25519 OPK secret keys keyed by OPK id."""
     return {
-        opk.opk_id: opk.secret_key
+        opk.opk_id: opk.x25519_keypair.private_key_bytes
         for opk in bob_bundle.opks
     }
 
@@ -313,7 +308,7 @@ class TestCompromisedServer:
         pub          = bob_bundle.to_public_bundle()
         alice_result = initiate(alice_bundle, pub)
 
-        local_x   = {opk.opk_id: opk.secret_key for opk in bob_bundle.opks}
+        local_x   = {opk.opk_id: opk.x25519_keypair.private_key_bytes for opk in bob_bundle.opks}
         local_kem = {opk.opk_id: opk.secret_key for opk in bob_bundle.opks}
 
         # First response — succeeds, OPK consumed

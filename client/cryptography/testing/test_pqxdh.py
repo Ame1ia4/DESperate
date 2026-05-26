@@ -87,7 +87,11 @@ class _StubIdentityBundle:
             "spk_pub":          self.spk.keypair.public_key_bytes.hex(),
             "spk_sig":          self.spk.signature.hex(),
             "opks": [
-                {"opk_id": i, "opk_pub": os.urandom(32).hex()}
+                {
+                    "opk_id":      i,
+                    "opk_pub":     os.urandom(32).hex(),    # X25519 classical leg
+                    "opk_kem_pub": os.urandom(1568).hex(),  # ML-KEM PQ leg
+                }
                 for i in range(3)
             ],
         }
