@@ -46,16 +46,15 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     NoEncryption,
 )
-
-# ── Constants ────────────────────────────────────────────────────────────────
-
-KEM_ALG  = "ML-KEM-1024"
-SIG_ALG  = "ML-DSA-87"
-
-# Number of one-time prekeys to generate per bundle.
-# Consumed one-per-session; server should alert user when running low.
-# Signal uses 100; 20 is reasonable for a project deployment.
-OPK_COUNT = 20
+from .constants import (
+    KEM_ALG,
+    SIG_ALG,
+    OPK_COUNT,
+    KEM_PUBLIC_KEY_LEN,
+    KEM_CIPHERTEXT_LEN,
+    DSA_PUBLIC_KEY_LEN,
+    DSA_SIGNATURE_LEN,
+)
 
 
 # ── Key size assertions (fail fast if liboqs version is unexpected) ──────────
@@ -69,14 +68,14 @@ def _assert_key_sizes() -> None:
     with oqs.KeyEncapsulation(KEM_ALG) as kem:
         pub = kem.generate_keypair()
         ct, _ = kem.encap_secret(pub)
-        assert len(pub) == 1568, f"ML-KEM-1024 public key: expected 1568, got {len(pub)}"
-        assert len(ct)  == 1568, f"ML-KEM-1024 ciphertext: expected 1568, got {len(ct)}"
+        assert len(pub) == KEM_PUBLIC_KEY_LEN, f"ML-KEM-1024 public key: expected {KEM_PUBLIC_KEY_LEN}, got {len(pub)}"
+        assert len(ct)  == KEM_CIPHERTEXT_LEN, f"ML-KEM-1024 ciphertext: expected {KEM_CIPHERTEXT_LEN}, got {len(ct)}"
 
     with oqs.Signature(SIG_ALG) as sig:
         pub = sig.generate_keypair()
         s   = sig.sign(b"probe")
-        assert len(pub) == 2592, f"ML-DSA-87 public key: expected 2592, got {len(pub)}"
-        assert len(s)   == 4627, f"ML-DSA-87 signature:  expected 4627, got {len(s)}"
+        assert len(pub) == DSA_PUBLIC_KEY_LEN, f"ML-DSA-87 public key: expected {DSA_PUBLIC_KEY_LEN}, got {len(pub)}"
+        assert len(s)   == DSA_SIGNATURE_LEN,  f"ML-DSA-87 signature:  expected {DSA_SIGNATURE_LEN}, got {len(s)}"
 
 
 # ── Keypair dataclasses ──────────────────────────────────────────────────────

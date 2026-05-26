@@ -76,24 +76,18 @@ from typing import Optional
 import oqs
 
 from core.keys import (
-    KEM_ALG,
-    SIG_ALG,
     IdentityBundle,
     X25519Keypair,
     verify_spk_signature,
 )
 from core.kdf import hkdf_derive, INFO_PQXDH_SK
-
-
-# ── Constants ────────────────────────────────────────────────────────────────
-
-# PQXDH spec §3.3 — padding constant prepended to IKM before HKDF.
-# 32 bytes of 0xFF prevent cross-protocol confusion where an attacker
-# attempts to use a PQXDH output as input to a different protocol.
-_PQXDH_F: bytes = b"\xff" * 32
-
-# HKDF output length — 32 bytes = 256-bit shared secret.
-_SK_LEN: int = 32
+from core.constants import (
+    KEM_ALG,
+    SIG_ALG,
+    PQXDH_F as _PQXDH_F,
+    PQXDH_HKDF_SALT,
+    PQXDH_SK_LEN as _SK_LEN,
+)
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
@@ -279,7 +273,7 @@ def initiate(
     ikm = _PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq
     SK  = hkdf_derive(
         ikm  = ikm,
-        salt = b"\x00" * 32,   # PQXDH spec §3.3: salt is a zero string
+        salt = PQXDH_HKDF_SALT,   # PQXDH spec §3.3: salt is a zero string
         info = INFO_PQXDH_SK,
         length = _SK_LEN,
     )
@@ -375,7 +369,7 @@ def respond(
     ikm = _PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq
     SK  = hkdf_derive(
         ikm    = ikm,
-        salt   = b"\x00" * 32,
+        salt   = PQXDH_HKDF_SALT,
         info   = INFO_PQXDH_SK,
         length = _SK_LEN,
     )

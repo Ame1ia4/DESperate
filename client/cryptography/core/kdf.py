@@ -95,19 +95,15 @@ INFO_LOCAL_KEY_MASTER   = b"local-v1-master-key"
 
 
 # ── Argon2id parameters ──────────────────────────────────────────────────────
-#
-# OWASP Password Storage Cheat Sheet recommendation (as of 2024):
-#   https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-#
-# These are the minimum recommended values. Do not reduce them.
-# Increasing memory_cost or time_cost improves security at the cost of
-# latency — acceptable for a login flow, potentially not for a hot path.
-
-ARGON2_TIME_COST    = 3         # iterations
-ARGON2_MEMORY_COST  = 65536     # KiB = 64 MB
-ARGON2_PARALLELISM  = 4         # threads
-ARGON2_HASH_LEN     = 32        # bytes — 256-bit output
-ARGON2_SALT_LEN     = 16        # bytes — 128-bit random salt per hash
+# Imported from constants — defined and justified there (OWASP Password
+# Storage Cheat Sheet). Do not redefine or override them here.
+from .constants import (
+    ARGON2_TIME_COST,
+    ARGON2_MEMORY_COST,
+    ARGON2_PARALLELISM,
+    ARGON2_HASH_LEN,
+    ARGON2_SALT_LEN,
+)
 
 # Pre-configured PasswordHasher for server-side password verification.
 # Uses the constants above so parameters are defined in one place.
