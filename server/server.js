@@ -25,7 +25,8 @@ const requireAuth = (req, res, next) => {
 }
 
 // ── Public routes ──
-app.get('/', (_, res) => res.redirect('https://www.youtube.com/watch?v=ftgcwsBqS0U'))
+app.get('/', (_, res) => res.sendFile('pages/home.html', { root: '.' }))
+app.get('/verification', (_, res) => res.sendFile('pages/verification.html', { root: '.' }))
 app.get('/health', (_, res) => res.json({ status: 'ok' }))
 
 app.post('/auth/register',  authLimiter, (_, res) => res.json({ message: 'register stub' }))
