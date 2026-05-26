@@ -65,7 +65,7 @@ def bob_local_kem_opks(bob_bundle):
     """Bob's ML-KEM OPK secret keys keyed by OPK id."""
     return {
         opk.opk_id: opk.secret_key
-        for opk in bob_bundle.opks
+        for opk in bob_bundle.kem_opks
     }
 
 
@@ -88,8 +88,8 @@ class TestHandshakeCorrectness:
         bob_result   = respond(
             local_bundle      = bob_bundle,
             initiation        = alice_result.bundle,
-            local_opks        = bob_local_opks,
-            local_kem_opk_sks = bob_local_kem_opks,
+            local_x25519_opks = bob_local_opks,
+            local_kem_opks    = bob_local_kem_opks,
         )
 
         assert alice_result.SK == bob_result.SK, (
@@ -243,8 +243,8 @@ class TestBundleSerialisationReal:
         bob_result = respond(
             local_bundle      = bob_bundle,
             initiation        = received,       # deserialised bundle
-            local_opks        = bob_local_opks,
-            local_kem_opk_sks = bob_local_kem_opks,
+            local_x25519_opks = bob_local_opks,
+            local_kem_opks    = bob_local_kem_opks,
         )
 
         assert alice_result.SK == bob_result.SK
@@ -315,8 +315,8 @@ class TestCompromisedServer:
         respond(
             local_bundle      = bob_bundle,
             initiation        = alice_result.bundle,
-            local_opks        = local_x,
-            local_kem_opk_sks = local_kem,
+            local_x25519_opks = local_x,
+            local_kem_opks    = local_kem,
         )
 
         # Simulate OPK deletion after consumption

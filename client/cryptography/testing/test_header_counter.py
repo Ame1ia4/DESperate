@@ -1,109 +1,78 @@
 """
 tests/test_header_counter.py
 
-Unit tests for core/ratchet/header_counter.py
+Unit tests for core/header_counter.py
 
-Run with: pytest tests/test_header_counter.py -v
+HeaderCounter is now an in-memory object. Persistence is handled by
+StateStore — see test_state_store.py for counter persistence tests.
+
+Run with: pytest testing/test_header_counter.py -v
 """
 
-import json
-import os
 import struct
 import pytest
-from pathlib import Path
-from unittest.mock import patch
 
-from core.header_counter import HeaderCounter, HeaderCounterError
+from core.header_counter import (
+    HeaderCounter,
+    HeaderCounterError,
+)
 from core.constants import MAX_HEADER_MESSAGES, NONCE_LEN
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
+# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def counter_path(tmp_path) -> Path:
-    return tmp_path / "session_abc" / "header_counter.json"
-
-@pytest.fixture
-def counter(counter_path) -> HeaderCounter:
-    return HeaderCounter(counter_path, session_id="session_abc")
+def counter():
+    return HeaderCounter(session_id="session-abc")
 
 
 # ── Construction ──────────────────────────────────────────────────────────────
 
 class TestConstruction:
 
-    def test_creates_file_on_init(self, counter, counter_path):
-        assert counter_path.exists()
-
-    def test_initial_counter_is_zero(self, counter):
+    def test_default_counter_starts_at_zero(self, counter):
         assert counter.current == 0
 
-    def test_session_id_stored(self, counter):
-        assert counter.session_id == "session_abc"
+    def test_initial_value_respected(self):
+        c = HeaderCounter(session_id="s", initial=42)
+        assert c.current == 42
 
-    def test_persisted_file_is_valid_json(self, counter, counter_path):
-        data = json.loads(counter_path.read_text())
-        assert data["counter"]    == 0
-        assert data["session_id"] == "session_abc"
-
-    def test_negative_initial_raises(self, counter_path):
+    def test_negative_initial_raises(self):
         with pytest.raises(ValueError):
-            HeaderCounter(counter_path, session_id="s", initial=-1)
+            HeaderCounter(session_id="s", initial=-1)
 
-    def test_creates_parent_directories(self, tmp_path):
-        deep = tmp_path / "a" / "b" / "c" / "counter.json"
-        HeaderCounter(deep, session_id="s")
-        assert deep.exists()
+    def test_initial_exceeding_max_raises(self):
+        with pytest.raises(HeaderCounterError):
+            HeaderCounter(session_id="s", initial=MAX_HEADER_MESSAGES + 1)
 
+    def test_initial_at_max_is_accepted(self):
+        """Counter at MAX is valid — next_nonce() will raise, not __init__."""
+        c = HeaderCounter(session_id="s", initial=MAX_HEADER_MESSAGES)
+        assert c.current == MAX_HEADER_MESSAGES
 
-# ── Load ──────────────────────────────────────────────────────────────────────
+    def test_session_id_stored(self, counter):
+        assert counter.session_id == "session-abc"
 
-class TestLoad:
-
-    def test_load_restores_counter(self, counter, counter_path):
-        # Advance the counter a few times
-        for _ in range(5):
-            counter.next_nonce()
-        assert counter.current == 5
-
-        restored = HeaderCounter.load(counter_path)
-        assert restored.current == 5
-
-    def test_load_restores_session_id(self, counter, counter_path):
-        restored = HeaderCounter.load(counter_path)
-        assert restored.session_id == "session_abc"
-
-    def test_load_missing_file_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
-            HeaderCounter.load(tmp_path / "nonexistent.json")
-
-    def test_load_corrupt_negative_counter_raises(self, counter_path):
-        counter_path.parent.mkdir(parents=True, exist_ok=True)
-        counter_path.write_text(
-            json.dumps({"session_id": "s", "counter": -1})
-        )
-        with pytest.raises(HeaderCounterError, match="negative"):
-            HeaderCounter.load(counter_path)
-
-    def test_load_counter_exceeding_max_raises(self, counter_path):
-        counter_path.parent.mkdir(parents=True, exist_ok=True)
-        counter_path.write_text(
-            json.dumps({"session_id": "s", "counter": MAX_HEADER_MESSAGES + 1})
-        )
-        with pytest.raises(HeaderCounterError, match="MAX_HEADER_MESSAGES"):
-            HeaderCounter.load(counter_path)
+    def test_no_files_created(self, tmp_path):
+        """
+        HeaderCounter no longer manages files — StateStore does.
+        Verify no files are created on construction.
+        """
+        import os
+        before = set(os.listdir(tmp_path))
+        HeaderCounter(session_id="s")
+        after  = set(os.listdir(tmp_path))
+        assert before == after
 
 
 # ── next_nonce ────────────────────────────────────────────────────────────────
 
 class TestNextNonce:
 
-    def test_returns_12_bytes(self, counter):
-        nonce = counter.next_nonce()
-        assert len(nonce) == NONCE_LEN
+    def test_returns_nonce_len_bytes(self, counter):
+        assert len(counter.next_nonce()) == NONCE_LEN
 
-    def test_counter_increments_by_one(self, counter):
-        assert counter.current == 0
+    def test_increments_counter(self, counter):
         counter.next_nonce()
         assert counter.current == 1
 
@@ -120,29 +89,16 @@ class TestNextNonce:
         assert values == sorted(values)
         assert values == list(range(1, 11))
 
-    def test_counter_persisted_before_return(self, counter, counter_path):
-        counter.next_nonce()
-        data = json.loads(counter_path.read_text())
-        assert data["counter"] == 1
-
-    def test_max_counter_raises(self, counter_path):
-        """Counter must refuse to exceed MAX_HEADER_MESSAGES."""
-        counter = HeaderCounter(
-            counter_path, session_id="s",
-            initial=MAX_HEADER_MESSAGES
-        )
+    def test_max_counter_raises(self):
+        c = HeaderCounter(session_id="s", initial=MAX_HEADER_MESSAGES)
         with pytest.raises(HeaderCounterError, match="MAX_HEADER_MESSAGES"):
-            counter.next_nonce()
+            c.next_nonce()
 
-    def test_counter_unchanged_in_memory_if_persist_fails(
-            self, counter, counter_path):
-        original = counter.current
-
-        with patch("core.header_counter.os.replace", side_effect=OSError("disk full")):
-            with pytest.raises(OSError):
-                counter.next_nonce()
-
-        assert counter.current == original
+    def test_counter_unchanged_on_error(self):
+        c = HeaderCounter(session_id="s", initial=MAX_HEADER_MESSAGES)
+        with pytest.raises(HeaderCounterError):
+            c.next_nonce()
+        assert c.current == MAX_HEADER_MESSAGES
 
 
 # ── Nonce encoding ────────────────────────────────────────────────────────────
@@ -150,81 +106,95 @@ class TestNextNonce:
 class TestNonceEncoding:
 
     def test_first_nonce_encodes_counter_1(self, counter):
-        nonce = counter.next_nonce()
+        nonce   = counter.next_nonce()
         decoded = struct.unpack("<Q", nonce[:8])[0]
         assert decoded == 1
 
     def test_trailing_bytes_are_zero(self, counter):
         nonce = counter.next_nonce()
-        assert nonce[8:] == b"\x00" * 4
+        assert nonce[8:] == b"\x00" * (NONCE_LEN - 8)
 
-    def test_nonce_at_counter_N_encodes_N(self, counter):
+    def test_nonce_at_counter_n_encodes_n(self, counter):
         for _ in range(42):
             nonce = counter.next_nonce()
         decoded = struct.unpack("<Q", nonce[:8])[0]
         assert decoded == 42
 
 
-# ── Cross-session uniqueness ──────────────────────────────────────────────────
+# ── Reset ─────────────────────────────────────────────────────────────────────
 
-class TestCrossSessionUniqueness:
+class TestReset:
 
-    def test_two_sessions_at_counter_zero_have_different_nonces_via_keys(
-            self, tmp_path):
-        path_a = tmp_path / "session_a" / "counter.json"
-        path_b = tmp_path / "session_b" / "counter.json"
-        c_a = HeaderCounter(path_a, session_id="session_a")
-        c_b = HeaderCounter(path_b, session_id="session_b")
-
-        nonce_a = c_a.next_nonce()
-        nonce_b = c_b.next_nonce()
-
-        assert nonce_a == nonce_b   # same counter → same nonce bytes (safe: keys differ)
-
-    def test_different_sessions_never_share_a_counter_file(self, tmp_path):
-        """Each session must have its own counter file — never share one."""
-        path_a = tmp_path / "session_a.json"
-        path_b = tmp_path / "session_b.json"
-        HeaderCounter(path_a, session_id="session_a")
-        HeaderCounter(path_b, session_id="session_b")
-        assert path_a != path_b
-
-
-# ── Atomicity and crash recovery ──────────────────────────────────────────────
-
-class TestAtomicity:
-
-    def test_loaded_counter_after_crash_is_safe(self, counter, counter_path):
-        for _ in range(3):
+    def test_reset_sets_counter_to_zero(self, counter):
+        """
+        Reset must be called when the DH ratchet step rotates the header key.
+        The new key starts its counter at 0 — identical nonce values across
+        different keys are not nonce reuse.
+        """
+        for _ in range(10):
             counter.next_nonce()
-        assert counter.current == 3
+        assert counter.current == 10
+        counter.reset()
+        assert counter.current == 0
 
-        # Simulate crash and recovery
-        recovered = HeaderCounter.load(counter_path)
-        nonce = recovered.next_nonce()
+    def test_nonces_after_reset_start_from_one(self, counter):
+        for _ in range(5):
+            counter.next_nonce()
+        counter.reset()
+        nonce   = counter.next_nonce()
+        decoded = struct.unpack("<Q", nonce[:8])[0]
+        assert decoded == 1
+
+    def test_reset_allows_reuse_of_nonce_values(self, counter):
+        """
+        After reset, nonce values repeat — but the header key has rotated
+        so (key, nonce) pairs are still unique. This test documents that
+        counter values alone are not the uniqueness guarantee; the key is.
+        """
+        n1 = counter.next_nonce()   # counter=1 under old key
+        counter.reset()
+        n2 = counter.next_nonce()   # counter=1 under new key
+        assert n1 == n2             # same nonce bytes — different keys
+
+    def test_counter_can_advance_normally_after_reset(self, counter):
+        counter.next_nonce()
+        counter.reset()
+        for _ in range(5):
+            counter.next_nonce()
+        assert counter.current == 5
+
+
+# ── Restore from persisted value ──────────────────────────────────────────────
+
+class TestRestoreFromPersistedValue:
+
+    def test_restored_counter_continues_from_saved_value(self):
+        """
+        Simulate saving counter value to StateStore and restoring it.
+        The restored counter must continue from where it left off,
+        not restart from 0.
+        """
+        original = HeaderCounter(session_id="s")
+        for _ in range(7):
+            original.next_nonce()
+
+        saved_value = original.current   # = 7
+
+        # Simulate process restart — create new counter from saved value
+        restored = HeaderCounter(session_id="s", initial=saved_value)
+        nonce    = restored.next_nonce()
 
         decoded = struct.unpack("<Q", nonce[:8])[0]
-        assert decoded == 4   # skipped nothing — 3 was already persisted
+        assert decoded == 8   # continues from 7, not 1
 
-    def test_temp_file_cleaned_up_on_write_failure(self, counter, tmp_path):
-        """No stale .tmp files should remain after a failed write."""
-        with patch("core.header_counter.os.replace", side_effect=OSError("fail")):
-            with pytest.raises(OSError):
-                counter.next_nonce()
+    def test_restored_counter_does_not_reuse_previous_nonces(self):
+        """
+        Nonces produced before saving must not appear again after restore.
+        """
+        original = HeaderCounter(session_id="s")
+        pre_restore_nonces = {original.next_nonce() for _ in range(5)}
 
-        tmp_files = list(counter._path.parent.glob("*.tmp"))
-        assert tmp_files == []
+        restored = HeaderCounter(session_id="s", initial=original.current)
+        post_restore_nonces = {restored.next_nonce() for _ in range(5)}
 
-
-# ── Deletion ──────────────────────────────────────────────────────────────────
-
-class TestDeletion:
-
-    def test_delete_removes_file(self, counter, counter_path):
-        counter.delete()
-        assert not counter_path.exists()
-
-    def test_delete_is_idempotent(self, counter):
-        """Deleting twice must not raise — file may already be gone."""
-        counter.delete()
-        counter.delete()   # should not raise
+        assert pre_restore_nonces.isdisjoint(post_restore_nonces)

@@ -71,11 +71,14 @@ class _StubIdentityBundle:
     ik_sig: _StubSigningKeypair
     ik_classical: _StubX25519Keypair
     spk: _StubSPK
-    opks: list = None
+    x25519_opks: list = None
+    kem_opks: list = None
 
     def __post_init__(self):
-        if self.opks is None:
-            self.opks = []
+        if self.x25519_opks is None:
+            self.x25519_opks = []
+        if self.kem_opks is None:
+            self.kem_opks = []
 
     def to_public_bundle(self) -> dict:
         return {
@@ -92,6 +95,10 @@ class _StubIdentityBundle:
                     "opk_pub":     os.urandom(32).hex(),    # X25519 classical leg
                     "opk_kem_pub": os.urandom(1568).hex(),  # ML-KEM PQ leg
                 }
+                for i in range(3)
+            ],
+            "opks_kem": [
+                {"opk_id": i, "opk_pub": os.urandom(1568).hex()}
                 for i in range(3)
             ],
         }
@@ -257,7 +264,8 @@ class TestOPKHandling:
     def test_no_opk_allow_false_raises(self, alice, bob_public):
         """No OPKs + allow_no_opk=False must raise NoPrekeyError."""
         from core.pqxdh import initiate, NoPrekeyError
-        bob_public["opks"] = []
+        bob_public["opks_x25519"] = []
+        bob_public["opks_kem"] = []
         with pytest.raises(NoPrekeyError):
             initiate(alice, bob_public, allow_no_opk=False)
 
@@ -267,7 +275,8 @@ class TestOPKHandling:
         KNOWN LIMITATION: reduced PQ forward secrecy — document in design doc.
         """
         from core.pqxdh import initiate
-        bob_public["opks"] = []
+        bob_public["opks_x25519"] = []
+        bob_public["opks_kem"] = []
         result = initiate(alice, bob_public, allow_no_opk=True)
         assert result.bundle.used_identity_kem is True
         assert result.bundle.opk_id is None
@@ -334,8 +343,9 @@ class TestResponder:
         """Build fake local OPK stores matching the bundle."""
         local_x_opks   = {}
         local_kem_opks = {}
-        for opk in bob_public.get("opks", []):
+        for opk in bob_public.get("opks_x25519", []):
             local_x_opks[opk["opk_id"]]   = os.urandom(32)
+        for opk in bob_public.get("opks_kem", []):
             local_kem_opks[opk["opk_id"]] = os.urandom(3168)
         return local_x_opks, local_kem_opks
 
@@ -348,8 +358,8 @@ class TestResponder:
         resp_result = respond(
             local_bundle      = bob,
             initiation        = init_result.bundle,
-            local_opks        = local_x,
-            local_kem_opk_sks = local_kem,
+            local_x25519_opks = local_x,
+            local_kem_opks    = local_kem,
         )
         assert len(resp_result.SK) == 32
 
@@ -363,8 +373,8 @@ class TestResponder:
         resp_result = respond(
             local_bundle      = bob,
             initiation        = init_result.bundle,
-            local_opks        = local_x,
-            local_kem_opk_sks = local_kem,
+            local_x25519_opks = local_x,
+            local_kem_opks    = local_kem,
         )
         assert resp_result.bundle is None
 
@@ -393,15 +403,16 @@ class TestResponder:
         """
         from core.pqxdh import initiate, respond
 
-        bob_public["opks"] = []
+        bob_public["opks_x25519"] = []
+        bob_public["opks_kem"] = []
         init_result = initiate(alice, bob_public, allow_no_opk=True)
         assert init_result.bundle.used_identity_kem is True
 
         resp_result = respond(
             local_bundle      = bob,
             initiation        = init_result.bundle,
-            local_opks        = {},
-            local_kem_opk_sks = {},
+            local_x25519_opks = {},
+            local_kem_opks    = {},
         )
         assert len(resp_result.SK) == 32
 
