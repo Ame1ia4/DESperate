@@ -25,7 +25,7 @@ CLASSICAL LEG (X3DH — RFC 7748, Signal X3DH spec)
 PQ LEG (ML-KEM-1024 — FIPS 203)
   (CT_pq, SS_pq) = ML-KEM-1024.Encaps(OPK_B_kem_pub)
   -- if no ML-KEM OPK available, falls back to Bob's ML-KEM identity key
-     (reduced PQ forward secrecy — document as known limitation)
+     (reduced PQ forward secrecy — documented as known limitation)
 
 KEY DERIVATION (PQXDH spec §3.3)
   F   = 0xFF * 32  (padding constant — prevents cross-protocol attacks)
@@ -36,6 +36,10 @@ OPK PAIRING
   Each session initiation consumes one X25519 OPK (for DH4) and one ML-KEM
   OPK (for PQ encapsulation). Both are identified by the same opk_id so the
   responder can look up both secret keys from a single index.
+
+  Remote bundles must provide both opks_x25519 and opks_kem as parallel
+  lists with matching opk_ids at every index. The old combined "opks" format
+  (opk_pub + opk_kem_pub in one list) is no longer supported.
 
 TRUST MODEL
   TOFU with local pinning. First-contact MITM by a compromised server is a
@@ -62,6 +66,7 @@ from core.keys import (
     IdentityBundle,
     X25519Keypair,
     verify_spk_signature,
+    _assert_opk_lists_valid,
 )
 from core.kdf import hkdf_derive, INFO_PQXDH_SK
 
@@ -94,6 +99,12 @@ class SPKVerificationError(PQXDHError):
 class NoPrekeyError(PQXDHError):
     """
     Raised when no one-time prekey is available and allow_no_opk=False.
+    """
+
+class MalformedBundleError(PQXDHError):
+    """
+    Raised when a remote bundle is missing required fields or has
+    mismatched opks_x25519 / opks_kem lists.
     """
 
 
@@ -140,6 +151,47 @@ class PQXDHResult:
     bundle: Optional[InitiationBundle]  # None on responder side
 
 
+# ── Bundle parsing ────────────────────────────────────────────────────────────
+
+def _parse_remote_opks(
+    remote_bundle: dict,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Extract and validate opks_x25519 and opks_kem from a remote public bundle.
+
+    Both lists must be present, have the same length, and have matching
+    opk_ids at every index. Raises MalformedBundleError on any violation.
+
+    Returns (opks_x25519, opks_kem) as raw dicts for use in initiate().
+    """
+    if "opks_x25519" not in remote_bundle or "opks_kem" not in remote_bundle:
+        raise MalformedBundleError(
+            "Remote bundle is missing opks_x25519 or opks_kem. "
+            "The old combined 'opks' format is no longer supported — "
+            "ensure the remote device is running an up-to-date client."
+        )
+
+    opks_x25519: list[dict] = remote_bundle["opks_x25519"]
+    opks_kem:    list[dict] = remote_bundle["opks_kem"]
+
+    if len(opks_x25519) != len(opks_kem):
+        raise MalformedBundleError(
+            f"Remote bundle opks_x25519 and opks_kem have different lengths: "
+            f"opks_x25519={len(opks_x25519)}, opks_kem={len(opks_kem)}. "
+            f"Bundle may be corrupted or from a compromised server."
+        )
+
+    for i, (x_opk, k_opk) in enumerate(zip(opks_x25519, opks_kem)):
+        if x_opk["opk_id"] != k_opk["opk_id"]:
+            raise MalformedBundleError(
+                f"Remote bundle OPK ID mismatch at index {i}: "
+                f"opks_x25519[{i}].opk_id={x_opk['opk_id']}, "
+                f"opks_kem[{i}].opk_id={k_opk['opk_id']}."
+            )
+
+    return opks_x25519, opks_kem
+
+
 # ── Initiator (Alice) ─────────────────────────────────────────────────────────
 
 def initiate(
@@ -159,8 +211,10 @@ def initiate(
 
     Raises
     ------
-    SPKVerificationError : if Bob's SPK signature does not verify
-    NoPrekeyError        : if no OPK is available and allow_no_opk=False
+    SPKVerificationError  : if Bob's SPK signature does not verify
+    NoPrekeyError         : if no OPK is available and allow_no_opk=False
+    MalformedBundleError  : if the remote bundle is missing or has mismatched
+                            opks_x25519 / opks_kem lists
     """
     # ── Step 1: Parse Bob's public bundle ─────────────────────────────────────
     ik_b_classical  = bytes.fromhex(remote_bundle["ik_classical_pub"])
@@ -170,15 +224,7 @@ def initiate(
     spk_b_sig       = bytes.fromhex(remote_bundle["spk_sig"])
     spk_b_id        = remote_bundle["spk_id"]
 
-    # Prefer new split format (opks_x25519 / opks_kem) when both keys present.
-    # Fall back to old combined format ("opks" with opk_pub + opk_kem_pub).
-    if "opks_x25519" in remote_bundle and "opks_kem" in remote_bundle:
-        opks_x25519 = remote_bundle["opks_x25519"]
-        opks_kem    = remote_bundle["opks_kem"]
-    else:
-        old_opks    = remote_bundle.get("opks", [])
-        opks_x25519 = [{"opk_id": o["opk_id"], "opk_pub": o["opk_pub"]}     for o in old_opks]
-        opks_kem    = [{"opk_id": o["opk_id"], "opk_pub": o["opk_kem_pub"]} for o in old_opks]
+    opks_x25519, opks_kem = _parse_remote_opks(remote_bundle)
 
     # ── Step 2: Verify SPK signature ──────────────────────────────────────────
     if not verify_spk_signature(spk_b_pub, spk_b_sig, ik_b_sig_pub):
@@ -203,11 +249,15 @@ def initiate(
         opk_x       = opks_x25519[0]
         opk_x_pub   = bytes.fromhex(opk_x["opk_pub"])
         opk_id_used = opk_x["opk_id"]
-        dh4         = ek_a.dh(opk_x_pub)   # 32-byte X25519 key — correct
+        dh4         = ek_a.dh(opk_x_pub)
 
     # ── Step 5: PQ leg (ML-KEM-1024) ──────────────────────────────────────────
     # Encapsulate to Bob's ML-KEM OPK (preferred) or identity key (fallback).
     # CT_pq is transmitted to Bob in the InitiationBundle.
+    #
+    # opks_x25519 and opks_kem are guaranteed to have the same length and
+    # matching opk_ids by _parse_remote_opks — if opks_x25519 is non-empty
+    # then opks_kem is also non-empty at the same index.
     used_identity_kem = False
 
     if opks_kem:
@@ -237,14 +287,12 @@ def initiate(
     ikm = bytearray(_PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq)
     SK  = hkdf_derive(
         ikm  = bytes(ikm),
-        salt = PQXDH_HKDF_SALT,   # PQXDH spec §3.3: salt is a zero string
+        salt = PQXDH_HKDF_SALT,
         info = INFO_PQXDH_SK,
         length = _SK_LEN,
     )
 
     # Zeroise IKM — it holds all DH and KEM secrets combined.
-    # ikm is a bytearray so _zeroise can overwrite it in place.
-    # dh1..ss_pq are immutable bytes from the crypto library; we drop references.
     _zeroise(ikm)
 
     bundle = InitiationBundle(
@@ -310,7 +358,7 @@ def respond(
             )
         ss_pq = _kem_decapsulate(ct_pq, local_kem_opks[opk_id])
 
-    # ── Step 4: Derive shared secret SK ──────────────────────────────────────
+    # ── Derive shared secret SK ───────────────────────────────────────────────
     # Must produce the same SK as Alice — identical IKM construction.
     ikm = bytearray(_PQXDH_F + dh1 + dh2 + dh3 + dh4 + ss_pq)
     SK  = hkdf_derive(
