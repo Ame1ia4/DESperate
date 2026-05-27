@@ -1,7 +1,7 @@
 import { query } from '../../database/db.js'
-import { createChallenge } from '../../sessions.js'
 
 // Issues a one-time nonce for a device to sign as proof of identity.
+// TODO: requires createChallenge from sessions.js (separate PR)
 export async function challenge(req, res) {
   const { device_id } = req.body
 
@@ -18,6 +18,7 @@ export async function challenge(req, res) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
-  const nonce = createChallenge(device_id)
-  return res.json({ nonce: nonce.toString('hex') })
+  // TODO: const nonce = createChallenge(device_id)
+  // TODO: return res.json({ nonce: nonce.toString('hex') })
+  return res.status(501).json({ error: 'Not implemented' })
 }
