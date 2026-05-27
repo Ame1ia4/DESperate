@@ -144,6 +144,14 @@ export async function register(req, res) {
     parallelism: ARGON2_PARALLELISM,
   })
 
+  const { rows: taken } = await query(
+    'SELECT 1 FROM users WHERE username = $1',
+    [username]
+  )
+  if (taken.length > 0) {
+    return res.status(409).json({ error: 'Registration failed' })
+  }
+
   try {
     const deviceId = await withTransaction(async (client) => {
       const { rows: [user] } = await client.query(
@@ -189,10 +197,7 @@ export async function register(req, res) {
 
   } catch (err) {
     if (err.cause?.code === '23505') {
-      if (err.cause.table === 'users') {
-        return res.status(409).json({ error: 'Username already taken' })
-      }
-      return res.status(409).json({ error: 'Device already registered' })
+      return res.status(409).json({ error: 'Registration failed' })
     }
     throw err
   }
