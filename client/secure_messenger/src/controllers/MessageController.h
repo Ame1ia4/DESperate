@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QJsonObject>
 
 class ApiClient;
 class CryptoServiceClient;
@@ -27,6 +28,15 @@ public:
         QString recipientDeviceId,
         QString plaintext
         );
+    Q_INVOKABLE void receiveEnvelope(
+        QJsonObject envelope
+        );
+
+signals:
+    void messageSendFailed(QString reason);
+    void messageSent();
+    void messageReceiveFailed(QString reason);
+    void messageReceived();
 
 private:
     ApiClient* m_api;

@@ -30,9 +30,7 @@ QVariant MessageModel::data(
     switch (role) {
 
     case ContentRole:
-        return QString::fromUtf8(
-            msg.ciphertext.toHex()
-            );
+        return msg.plaintext;
 
     case TimestampRole:
         return msg.timestamp;
@@ -58,7 +56,7 @@ MessageModel::roleNames() const
 }
 
 void MessageModel::addMessage(
-    const Message &message
+    const DecryptedMessage &message
     )
 {
     beginInsertRows(

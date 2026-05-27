@@ -1,10 +1,23 @@
-#ifndef LOCALMESSAGESTORE_H
-#define LOCALMESSAGESTORE_H
+#pragma once
 
-class LocalDatabase
+#include <QObject>
+#include <QJsonObject>
+#include <vector>
+
+#include "../types/Types.h"
+
+class LocalMessageStore : public QObject
 {
-public:
-    LocalDatabase();
-};
+    Q_OBJECT
 
-#endif // LOCALMESSAGESTORE_H
+public:
+    explicit LocalMessageStore(QObject* parent = nullptr);
+
+    void storeOutgoingMessage(const QJsonObject& envelope);
+    void storeOutgoingEnvelope(const MessageEnvelope& envelope);
+
+    std::vector<MessageEnvelope> envelopes() const;
+
+private:
+    std::vector<MessageEnvelope> m_envelopes;
+};

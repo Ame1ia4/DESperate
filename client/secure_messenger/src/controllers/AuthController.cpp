@@ -25,11 +25,12 @@ void AuthController::unlock(
     const QString& password
     )
 {
+    Q_UNUSED(username)
     bool unlocked = m_crypto->unlockKeystore(password);
 
     if (!unlocked)
     {
-        emit loginFailed("Invalid password");
+        emit loginFailed("Authentication failed.");
         return;
     }
 
@@ -45,9 +46,16 @@ void AuthController::registerDevice(
     )
 {
     auto bundle = m_crypto->generateIdentityBundle(password);
+    if (bundle.isEmpty())
+    {
+        emit registrationFailed("Registration failed.");
+        return;
+    }
 
     m_api->registerUser(
         username,
         bundle
         );
+
+    emit registrationSucceeded();
 }

@@ -10,29 +10,27 @@ enum class VerificationState {
     Failed
 };
 
-struct Message {
+struct MessageEnvelope {
     QString id;
-
     QString conversationId;
-
     QString senderDeviceId;
-
-
-    QString plaintext;
-
     QByteArray ciphertext;
     QByteArray nonce;
     QByteArray associatedData;
-
     QString txHash;
-
     QString merkleRoot;
-
     QDateTime timestamp;
+    VerificationState verificationState = VerificationState::Pending;
+    bool isDeleted = false;
+};
 
-    VerificationState verificationState =
-        VerificationState::Pending;
-
+struct DecryptedMessage {
+    QString id;
+    QString conversationId;
+    QString senderDeviceId;
+    QString plaintext;
+    QDateTime timestamp;
+    VerificationState verificationState = VerificationState::Pending;
     bool isDeleted = false;
 };
 

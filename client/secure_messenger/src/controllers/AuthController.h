@@ -38,6 +38,8 @@ signals:
     void authenticatedChanged();
     void loginFailed(QString reason);
     void loginSucceeded();
+    void registrationFailed(QString reason);
+    void registrationSucceeded();
 
 private:
     bool m_authenticated = false;

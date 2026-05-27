@@ -9,6 +9,21 @@ ApiClient::ApiClient(QObject* parent)
 {
 }
 
+void ApiClient::registerUser(
+    const QString& username,
+    const QJsonObject& bundle
+    )
+{
+    auto request = makeRequest("/auth/register");
+
+    QJsonObject bodyObject;
+    bodyObject["username"] = username;
+    bodyObject["bundle"] = bundle;
+
+    QByteArray body = QJsonDocument(bodyObject).toJson();
+    m_network.post(request, body);
+}
+
 QNetworkRequest ApiClient::makeRequest(
     const QString& path
     )
@@ -39,5 +54,18 @@ void ApiClient::sendMessage(
     QByteArray body =
         QJsonDocument(encryptedEnvelope).toJson();
 
+    m_network.post(request, body);
+}
+
+void ApiClient::pullMessages(
+    const QString& deviceId
+    )
+{
+    auto request = makeRequest("/messages/pull");
+
+    QJsonObject bodyObject;
+    bodyObject["device_id"] = deviceId;
+
+    QByteArray body = QJsonDocument(bodyObject).toJson();
     m_network.post(request, body);
 }

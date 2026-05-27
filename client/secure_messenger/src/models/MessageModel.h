@@ -33,9 +33,9 @@ public:
     roleNames() const override;
 
     void addMessage(
-        const Message &message
+        const DecryptedMessage &message
         );
 
 private:
-    std::vector<Message> m_messages;
+    std::vector<DecryptedMessage> m_messages;
 };
