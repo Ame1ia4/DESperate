@@ -3,7 +3,11 @@ import express from 'express'
 import helmet from 'helmet'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
 import { verifyRoot } from './verification/verify.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const app = express()
 
@@ -26,7 +30,9 @@ const requireAuth = (req, res, next) => {
 }
 
 // ── Public routes ──
-app.get('/', (_, res) => res.redirect('https://www.youtube.com/watch?v=ftgcwsBqS0U'))
+// merkle verification:
+app.use(express.static(join(__dirname, 'verification')))
+app.get('/', (_, res) => res.sendFile(join(__dirname, 'verification', 'verification.html')))
 app.get('/health', (_, res) => res.json({ status: 'ok' }))
 
 app.get('/api/verify', async (req, res) => {
