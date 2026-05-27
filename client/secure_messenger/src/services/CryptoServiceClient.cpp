@@ -128,8 +128,8 @@ void CryptoServiceClient::encryptMessageAsync(
             conversationId
             );
 
-        if (envelope.isEmpty()) {
-            emit encryptFailed("Encryption failed.");
+        if (!m_lastError.isEmpty()) {
+            emit encryptFailed(m_lastError);
             return;
         }
 
@@ -143,8 +143,8 @@ void CryptoServiceClient::decryptMessageAsync(
 {
     QTimer::singleShot(0, this, [this, envelope]() {
         const auto plaintext = decryptMessage(envelope);
-        if (plaintext.isEmpty()) {
-            emit decryptFailed("Decryption failed.");
+        if (!m_lastError.isEmpty()) {
+            emit decryptFailed(m_lastError);
             return;
         }
 

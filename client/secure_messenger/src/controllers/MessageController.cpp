@@ -6,21 +6,7 @@
 #include "models/MessageModel.h"
 #include "types/Types.h"
 
-#include <algorithm>
 #include <QDateTime>
-
-namespace {
-void wipeQStringBestEffort(QString& value)
-{
-    if (value.isNull()) {
-        return;
-    }
-
-    auto* chars = value.data();
-    std::fill(chars, chars + value.size(), QChar(u'\0'));
-    value.clear();
-}
-}
 
 MessageController::MessageController(
     ApiClient* api,
@@ -45,6 +31,14 @@ void MessageController::sendMessage(
     QString plaintext
     )
 {
+    // Plaintext is copied into encryptMessageAsync before this returns; QString
+    // implicit sharing means caller-side wiping would not clear other copies.
+    // Real protection belongs at the crypto-service process boundary.
+
+    // Concurrent sends share one CryptoServiceClient. SingleShotConnection
+    // pairs one callback per call, but overlapping operations can still
+    // interleave; request IDs or per-call task objects are needed for isolation.
+
     connect(
         m_crypto,
         &CryptoServiceClient::encryptCompleted,
@@ -72,8 +66,6 @@ void MessageController::sendMessage(
         recipientDeviceId,
         conversationId
         );
-
-    wipeQStringBestEffort(plaintext);
 }
 
 void MessageController::receiveEnvelope(
