@@ -1,4 +1,3 @@
-import crypto from 'crypto'
 import argon2 from 'argon2'
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
@@ -16,12 +15,13 @@ import { verifyDualSignature } from '../utils/crypto.js'
 // ── Key size constants ──────────────────────────────────────────────────────
 
 const ED25519_PUB_BYTES  = 32
-const MLDSA_PUB_BYTES    = 1952
-const SIGNING_PUB_BYTES  = 1984   // ED25519_PUB_BYTES + MLDSA_PUB_BYTES
 const ED25519_SIG_BYTES  = 64
+const X25519_PUB_BYTES   = 32
+const MLDSA_PUB_BYTES    = ml_dsa65.publicKeyLen
 const MLDSA_SIG_BYTES    = ml_dsa65.signatureLen
 const MLKEM_PUB_BYTES    = ml_kem768.publicKeyLen
-const X25519_PUB_BYTES   = 32
+const SIGNING_PUB_BYTES  = ED25519_PUB_BYTES + MLDSA_PUB_BYTES
+const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES
 
 // ── Argon2id parameters (OWASP 2025 minimum) ───────────────────────────────
 
@@ -31,10 +31,13 @@ const ARGON2_PARALLELISM = 1
 
 // ── Input validation ────────────────────────────────────────────────────────
 
-const USERNAME_REGEX = /^[a-zA-Z0-9_]+$/
-const USERNAME_MIN   = 3
-const USERNAME_MAX   = 50
-const PASSWORD_MIN   = 12
+const USERNAME_REGEX        = /^[a-zA-Z0-9_]+$/
+const USERNAME_MIN          = 3
+const USERNAME_MAX          = 50
+const PASSWORD_MIN          = 12
+const DEVICE_NAME_MAX       = 100
+const FINGERPRINT_MAX       = 128   // matches VARCHAR(128) in schema
+const OPK_MAX               = 100
 
 // Parse a hex string and verify its decoded length matches expectedBytes.
 // Throws a 400 error on any mismatch so callers can return early.
@@ -55,6 +58,7 @@ function parseHex(hex, expectedBytes, fieldName) {
 
 // ── POST /auth/register ─────────────────────────────────────────────────────
 
+// Registers a new user with their first device and key bundle.
 export async function register(req, res) {
   const { username, password, device } = req.body
 
@@ -78,12 +82,16 @@ export async function register(req, res) {
   if (
     device.device_name !== undefined &&
     device.device_name !== null &&
-    (typeof device.device_name !== 'string' || device.device_name.length > 100)
+    (typeof device.device_name !== 'string' || device.device_name.length > DEVICE_NAME_MAX)
   ) {
     return res.status(400).json({ error: 'Invalid device_name' })
   }
 
-  if (typeof device.identity_fingerprint !== 'string' || device.identity_fingerprint.length === 0) {
+  if (
+    typeof device.identity_fingerprint !== 'string' ||
+    device.identity_fingerprint.length === 0 ||
+    device.identity_fingerprint.length > FINGERPRINT_MAX
+  ) {
     return res.status(400).json({ error: 'Invalid identity_fingerprint' })
   }
 
@@ -96,7 +104,7 @@ export async function register(req, res) {
     idkClassicalPub = parseHex(device.idk_classical_pub,      X25519_PUB_BYTES,                 'idk_classical_pub')
     signingPub      = parseHex(device.identity_signing_pub,   SIGNING_PUB_BYTES,                 'identity_signing_pub')
     signedPrekeyPub = parseHex(device.signed_prekey_pub,      X25519_PUB_BYTES,                 'signed_prekey_pub')
-    signedPrekeySig = parseHex(device.signed_prekey_signature, ED25519_SIG_BYTES + MLDSA_SIG_BYTES, 'signed_prekey_signature')
+    signedPrekeySig = parseHex(device.signed_prekey_signature, DUAL_SIG_BYTES, 'signed_prekey_signature')
 
     if (device.idk_pq_pub != null) {
       idkPqPub = parseHex(device.idk_pq_pub, MLKEM_PUB_BYTES, 'idk_pq_pub')
@@ -104,10 +112,10 @@ export async function register(req, res) {
 
     if (device.last_resort_opk_pub != null) {
       lastResortOpkPub = parseHex(device.last_resort_opk_pub,       X25519_PUB_BYTES,                 'last_resort_opk_pub')
-      lastResortOpkSig = parseHex(device.last_resort_opk_signature, ED25519_SIG_BYTES + MLDSA_SIG_BYTES, 'last_resort_opk_signature')
+      lastResortOpkSig = parseHex(device.last_resort_opk_signature, DUAL_SIG_BYTES, 'last_resort_opk_signature')
     }
 
-    if (!Array.isArray(device.opks)) {
+    if (!Array.isArray(device.opks) || device.opks.length > OPK_MAX) {
       return res.status(400).json({ error: 'Invalid opks' })
     }
     opks = device.opks.map((hex, i) => parseHex(hex, X25519_PUB_BYTES, `opks[${i}]`))
@@ -137,23 +145,23 @@ export async function register(req, res) {
     }
   }
 
-  const passwordHash = await argon2.hash(password, {
-    type:        argon2.argon2id,
-    memoryCost:  ARGON2_MEMORY_COST,
-    timeCost:    ARGON2_TIME_COST,
-    parallelism: ARGON2_PARALLELISM,
-  })
-
-  const { rows: taken } = await query(
-    'SELECT 1 FROM users WHERE username = $1',
-    [username]
-  )
+  // Run in parallel — always hash so timing is identical whether username exists or not
+  const [{ rows: taken }, passwordHash] = await Promise.all([
+    query('SELECT 1 FROM users WHERE username = $1', [username]),
+    argon2.hash(password, {
+      type:        argon2.argon2id,
+      memoryCost:  ARGON2_MEMORY_COST,
+      timeCost:    ARGON2_TIME_COST,
+      parallelism: ARGON2_PARALLELISM,
+    }),
+  ])
   if (taken.length > 0) {
     return res.status(409).json({ error: 'Registration failed' })
   }
 
+  let deviceId
   try {
-    const deviceId = await withTransaction(async (client) => {
+    deviceId = await withTransaction(async (client) => {
       const { rows: [user] } = await client.query(
         'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id',
         [username, passwordHash]
@@ -193,18 +201,29 @@ export async function register(req, res) {
       return deviceRow.id
     })
 
-    return res.status(201).json({ deviceId })
-
   } catch (err) {
     if (err.cause?.code === '23505') {
       return res.status(409).json({ error: 'Registration failed' })
     }
     throw err
+  } finally {
+    // Zero key material from memory — Buffers have fixed addresses so fill(0) is reliable
+    idkClassicalPub.fill(0)
+    signingPub.fill(0)
+    signedPrekeyPub.fill(0)
+    signedPrekeySig.fill(0)
+    idkPqPub?.fill(0)
+    lastResortOpkPub?.fill(0)
+    lastResortOpkSig?.fill(0)
+    for (const opk of opks) opk.fill(0)
   }
+
+  return res.status(201).json({ deviceId })
 }
 
 // ── POST /auth/challenge ────────────────────────────────────────────────────
 
+// Issues a one-time nonce for a device to sign as proof of identity.
 export async function challenge(req, res) {
   const { device_id } = req.body
 
@@ -218,7 +237,7 @@ export async function challenge(req, res) {
   )
 
   if (rows.length === 0) {
-    return res.status(404).json({ error: 'Device not found' })
+    return res.status(401).json({ error: 'Authentication failed' })
   }
 
   const nonce = createChallenge(device_id)
@@ -227,6 +246,7 @@ export async function challenge(req, res) {
 
 // ── POST /auth/verify ───────────────────────────────────────────────────────
 
+// Verifies the signed challenge and issues a session token on success.
 export async function verify(req, res) {
   const { device_id, ed25519_sig, ml_dsa_sig } = req.body
 
@@ -273,6 +293,7 @@ export async function verify(req, res) {
 
 // ── POST /auth/logout ───────────────────────────────────────────────────────
 
+// Invalidates the current session token.
 export async function logout(req, res) {
   deleteSession(req.sessionToken)
   return res.json({ message: 'Logged out' })
@@ -280,6 +301,7 @@ export async function logout(req, res) {
 
 // ── POST /auth/logout-all ───────────────────────────────────────────────────
 
+// Invalidates all sessions for this device (e.g. stolen token recovery).
 export async function logoutAll(req, res) {
   deleteAllSessionsForDevice(req.deviceId)
   return res.json({ message: 'Logged out' })
