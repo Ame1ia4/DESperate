@@ -414,7 +414,7 @@ function ProofCard({ anchored, locked, onInclusionRan }) {
 // ─── Root component ───────────────────────────────────────────────────────────
 
 async function verifyRoot(merkleRoot) {
-  const res = await fetch(`/api/verify?root=${encodeURIComponent(merkleRoot)}`);
+  const res = await fetch(`/api/blockchain/verify?root=${encodeURIComponent(merkleRoot)}`);
   if (!res.ok) {
     const { error } = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(error);
