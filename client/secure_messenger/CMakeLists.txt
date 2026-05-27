@@ -34,7 +34,7 @@ qt_add_qml_module(appsecure_messenger
         SOURCES
         SOURCES src/models/ConversationModel.h src/models/ConversationModel.cpp
         SOURCES
-        SOURCES src/services/BlockchainVerifier.h src/services/BlockchainVerifier.cpp
+        SOURCES
         SOURCES
         SOURCES
         SOURCES src/network/TLSManager.h src/network/TLSManager.cpp
@@ -46,13 +46,15 @@ qt_add_qml_module(appsecure_messenger
         QML_FILES qml/views/SettingsView.qml
         QML_FILES qml/views/UserSearchSheet.qml
         QML_FILES
-        RESOURCES src/crypto/crypto_service.py
-        RESOURCES src/crypto/key_store.py
-        RESOURCES src/crypto/requirements.txt
+        RESOURCES
+        RESOURCES
+        RESOURCES
         RESOURCES
         QML_FILES qml/main.qml
         RESOURCES qml/qmldir
         SOURCES main.cpp
+        SOURCES src/controllers/ConversationController.h src/controllers/ConversationController.cpp
+        SOURCES src/models/UserModel.h src/models/UserModel.cpp
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
