@@ -5,7 +5,7 @@ import { parseHex } from '../../utils/parseHex.js'
 import {
   ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM,
   USERNAME_REGEX, USERNAME_MIN, USERNAME_MAX,
-  PASSWORD_MIN, DEVICE_NAME_MAX, FINGERPRINT_MAX, OPK_MAX,
+  PASSWORD_MIN, DEVICE_NAME_MAX, OPK_MAX,
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
 } from '../../constants/auth.js'
@@ -37,14 +37,6 @@ export async function register(req, res) {
     (typeof device.device_name !== 'string' || device.device_name.length > DEVICE_NAME_MAX)
   ) {
     return res.status(400).json({ error: 'Invalid device_name' })
-  }
-
-  if (
-    typeof device.identity_fingerprint !== 'string' ||
-    device.identity_fingerprint.length === 0 ||
-    device.identity_fingerprint.length > FINGERPRINT_MAX
-  ) {
-    return res.status(400).json({ error: 'Invalid identity_fingerprint' })
   }
 
   // Parse and validate all binary key bundle fields
@@ -123,17 +115,16 @@ export async function register(req, res) {
         `INSERT INTO devices (
           user_id, device_name,
           idk_classical_pub, idk_pq_pub,
-          identity_signing_pub, identity_fingerprint,
+          identity_signing_pub,
           signed_prekey_pub, signed_prekey_signature,
           last_resort_opk_pub, last_resort_opk_signature
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
         [
           user.id,
           device.device_name ?? null,
           idkClassicalPub,
           idkPqPub,
           signingPub,
-          device.identity_fingerprint,
           signedPrekeyPub,
           signedPrekeySig,
           lastResortOpkPub,

@@ -37,7 +37,7 @@ export async function verify(req, res) {
 
   // TODO: pass nonce as message once sessions.js lands
   // Verify both signatures — identical error on any failure (oracle prevention)
-  if (!verifyDualSignature(signingPub, nonce, ed25519SigBuf, mlDsaSigBuf)) {
+  if (!await verifyDualSignature(signingPub, nonce, ed25519SigBuf, mlDsaSigBuf)) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
 

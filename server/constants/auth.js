@@ -14,9 +14,9 @@ export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES
 
 // ── Argon2id parameters (OWASP 2025 minimum) ───────────────────────────────
 
-export const ARGON2_MEMORY_COST = 19456  // 19MB
-export const ARGON2_TIME_COST   = 2
-export const ARGON2_PARALLELISM = 1
+export const ARGON2_MEMORY_COST = 65536  // 64MB — OWASP interactive tier
+export const ARGON2_TIME_COST   = 3
+export const ARGON2_PARALLELISM = 4
 
 // ── Input validation ────────────────────────────────────────────────────────
 

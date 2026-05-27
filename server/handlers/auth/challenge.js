@@ -20,5 +20,5 @@ export async function challenge(req, res) {
 
   // TODO: const nonce = createChallenge(device_id)
   // TODO: return res.json({ nonce: nonce.toString('hex') })
-  return res.status(501).json({ error: 'Not implemented' })
+  return res.status(401).json({ error: 'Authentication failed' })
 }
