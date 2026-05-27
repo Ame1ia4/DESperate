@@ -1,4 +1,4 @@
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 
 const NONCE_BYTES                  = 32
 const TOKEN_BYTES                  = 32
