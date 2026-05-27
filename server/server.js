@@ -3,6 +3,7 @@ import express from 'express'
 import helmet from 'helmet'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
+import { createChallenge, deleteSession } from './sessions.js'
 
 const app = express()
 
@@ -29,8 +30,23 @@ app.get('/', (_, res) => res.redirect('https://www.youtube.com/watch?v=ftgcwsBqS
 app.get('/health', (_, res) => res.json({ status: 'ok' }))
 
 app.post('/auth/register',  authLimiter, (_, res) => res.json({ message: 'register stub' }))
-app.post('/auth/challenge', authLimiter, (_, res) => res.json({ message: 'challenge stub' }))
+
+app.post('/auth/challenge', authLimiter, (req, res) => {
+  const { deviceId } = req.body
+  if (!deviceId || typeof deviceId !== 'string') return res.status(400).json({ error: 'deviceId required' })
+  // TODO: verify deviceId exists in DB before issuing challenge
+  const nonce = createChallenge(deviceId)
+  res.json({ nonce: nonce.toString('hex') })
+})
+
 app.post('/auth/verify',    authLimiter, (_, res) => res.json({ message: 'verify stub' }))
+
+app.post('/auth/logout', (req, res) => {
+  const header = req.headers.authorization
+  if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorised' })
+  deleteSession(header.slice(7))
+  res.status(204).end()
+})
 
 // ── Protected routes ──
 app.post('/messages',        requireAuth, (_, res) => res.json({ message: 'send stub' }))

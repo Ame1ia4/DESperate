@@ -6,6 +6,11 @@ const CHALLENGE_TTL_MS             = 30_000
 const SESSION_IDLE_TTL_MS          = 30 * 60 * 1000
 const SESSION_ABSOLUTE_TTL_MS      = 8  * 60 * 60 * 1000
 const CLEANUP_INTERVAL_MS          = 5  * 60 * 1000
+const MAX_CHALLENGES               = 10_000
+
+function _log(event, data) {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...data }))
+}
 
 // { deviceId → { nonce: Buffer, expiresAt: number } }
 const challenges = new Map()
@@ -40,6 +45,8 @@ function _removeToken(token) {
 }
 
 export function createChallenge(deviceId) {
+  if (challenges.size >= MAX_CHALLENGES)
+    challenges.delete(challenges.keys().next().value)
   const nonce = crypto.randomBytes(NONCE_BYTES)
   challenges.set(deviceId, { nonce, expiresAt: Date.now() + CHALLENGE_TTL_MS })
   return nonce
@@ -48,7 +55,9 @@ export function createChallenge(deviceId) {
 export function consumeChallenge(deviceId) {
   const entry = challenges.get(deviceId)
   challenges.delete(deviceId)  // single-use: delete regardless of outcome
-  if (!entry || Date.now() > entry.expiresAt) return null
+  if (!entry) { _log('challenge_fail', { deviceId, reason: 'not_found' }); return null }
+  if (Date.now() > entry.expiresAt) { _log('challenge_fail', { deviceId, reason: 'expired' }); return null }
+  _log('challenge_ok', { deviceId })
   return entry.nonce
 }
 
@@ -72,6 +81,7 @@ export function createSession(deviceId, userId) {
   if (!sessionsByUser.has(userId)) sessionsByUser.set(userId, new Set())
   sessionsByUser.get(userId).add(deviceId)
 
+  _log('session_created', { deviceId, userId })
   return token
 }
 
@@ -118,6 +128,7 @@ export function deleteAllSessionsForUser(userId) {
   for (const deviceId of [...userDevices]) {
     deleteAllSessionsForDevice(deviceId)
   }
+  _log('sessions_revoked_user', { userId })
 }
 
 // Sweep both maps every 5 minutes; unref so this doesn't block graceful shutdown
