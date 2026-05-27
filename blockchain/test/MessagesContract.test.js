@@ -110,8 +110,7 @@ describe("MessageIntegrity", function () {
       await expect(contract.storeBatchHashes([ROOT_1, ethers.ZeroHash]))
         .to.be.revertedWithCustomError(contract, "ZeroRoot");
       // No HashStored event should have been emitted for ROOT_1
-      const filter = contract.filters.HashStored(ROOT_1);
-      const logs = await ethers.provider.getLogs({ ...await filter, fromBlock: 0 });
+      const logs = await contract.queryFilter(contract.filters.HashStored(ROOT_1));
       expect(logs.length).to.equal(0);
     });
   });
