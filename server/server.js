@@ -3,6 +3,7 @@ import express from 'express'
 import helmet from 'helmet'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
+import { verifyRoot } from './verification/verify.js'
 
 const app = express()
 
@@ -27,6 +28,16 @@ const requireAuth = (req, res, next) => {
 // ── Public routes ──
 app.get('/', (_, res) => res.redirect('https://www.youtube.com/watch?v=ftgcwsBqS0U'))
 app.get('/health', (_, res) => res.json({ status: 'ok' }))
+
+app.get('/api/verify', async (req, res) => {
+  const { root } = req.query
+  try {
+    const result = await verifyRoot(root)
+    res.json(result)
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
 
 app.post('/auth/register',  authLimiter, (_, res) => res.json({ message: 'register stub' }))
 app.post('/auth/challenge', authLimiter, (_, res) => res.json({ message: 'challenge stub' }))

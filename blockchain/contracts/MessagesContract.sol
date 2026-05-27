@@ -20,8 +20,6 @@ contract MessageIntegrity {
     ///         limit and producing an opaque out-of-gas revert.
     uint256 public constant MAX_BATCH_SIZE = 50;
 
-    /// @notice Tracks whether a given Merkle root has been stored.
-    mapping(bytes32 => bool) private rootExists;
 
     // =========================================================================
     // Custom errors
@@ -44,10 +42,6 @@ contract MessageIntegrity {
     /// @param index Array position of the zero root.
     error ZeroRoot(uint256 index);
 
-    /// @notice Thrown when a root has already been stored.
-    /// @param index      Array position of the duplicate root.
-    /// @param merkleRoot The duplicate root value.
-    error DuplicateRoot(uint256 index, bytes32 merkleRoot);
 
     // =========================================================================
     // Events
@@ -99,24 +93,10 @@ contract MessageIntegrity {
             bytes32 merkleRoot = merkleRoots[i];
 
             if (merkleRoot == bytes32(0)) revert ZeroRoot(i);
-            if (rootExists[merkleRoot])   revert DuplicateRoot(i, merkleRoot);
-
-            rootExists[merkleRoot] = true;
-
             emit HashStored(merkleRoot, ts);
+
         }
     }
 
-    // =========================================================================
-    // Read functions (called by the verify page)
-    // =========================================================================
-
-    /// @notice Check whether a Merkle root has been stored on-chain.
-    /// @param  merkleRoot The root to look up.
-    /// @return found      True if this root exists on-chain, false otherwise.
-    ///                    Timestamp is available from the HashStored event via the tx hash.
-    function validateRoot(bytes32 merkleRoot) external view returns (bool found) {
-        return rootExists[merkleRoot];
-    }
 
 }

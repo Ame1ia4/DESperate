@@ -1,62 +1,6 @@
-// ─── Merkle / crypto helpers ──────────────────────────────────────────────────
-
-const Merkle = (() => {
-  const hex = (buf) =>
-    [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-
-  const fromHex = (s) => {
-    s = s.replace(/^0x/, "").trim();
-    const out = new Uint8Array(s.length / 2);
-    for (let i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
-    return out;
-  };
-
-  const sha256 = async (data) => {
-    const buf =
-      typeof data === "string"
-        ? new TextEncoder().encode(data)
-        : data instanceof Uint8Array
-        ? data
-        : new Uint8Array(data);
-    return hex(await crypto.subtle.digest("SHA-256", buf));
-  };
-
-  const hashPair = async (a, b) => {
-    const ab = fromHex(a);
-    const bb = fromHex(b);
-    const combined = new Uint8Array(ab.length + bb.length);
-    combined.set(ab, 0);
-    combined.set(bb, ab.length);
-    return hex(await crypto.subtle.digest("SHA-256", combined));
-  };
-
-  const isHex64 = (s) => /^(0x)?[0-9a-f]{64}$/i.test(s.trim());
-
-  return { sha256, hashPair, isHex64, hex, fromHex };
-})();
-
-// Demo fixture: a small 4-leaf tree built from ["alpha","bravo","charlie","delta"].
-// Used by the "Use demo data" buttons so users can see a working verification flow.
-async function buildDemoFixture() {
-  const leaves = ["alpha", "bravo", "charlie", "delta"];
-  const L = await Promise.all(leaves.map((l) => Merkle.sha256(l)));
-  const N1 = await Merkle.hashPair(L[0], L[1]);
-  const N2 = await Merkle.hashPair(L[2], L[3]);
-  const ROOT = await Merkle.hashPair(N1, N2);
-
-  return {
-    root: ROOT,
-    txid: "0xa1c8e9b40f7d2c5e1ab3f6d09e2c4b7f5d8a1c3e6b9f0d2c5e8a4b7d1f3a6c9e",
-    block: 894_312_771,
-    timestamp: "2026-05-23T14:08:27Z",
-    chain: "Ethereum Mainnet",
-    leaves: { alpha: L[0], bravo: L[1], charlie: L[2], delta: L[3] },
-  };
-}
-
-// ─── App ─────────────────────────────────────────────────────────────────────
-
 const { useState, useEffect, useRef } = React;
+
+const isHex64 = (s) => /^(0x)?[0-9a-f]{64}$/i.test(s.trim());
 
 const shortHash = (h, n = 8) => {
   if (!h) return "—";
@@ -68,10 +12,6 @@ const formatTs = (iso) => {
   if (!iso) return "—";
   return new Date(iso).toUTCString().replace("GMT", "UTC");
 };
-
-const eqHash = (a, b) =>
-  (a || "").replace(/^0x/i, "").toLowerCase() ===
-  (b || "").replace(/^0x/i, "").toLowerCase();
 
 const normHash = (h) => (h || "").replace(/^0x/i, "").trim().toLowerCase();
 
@@ -151,53 +91,33 @@ function Stepper({ current }) {
   );
 }
 
-// ─── Step 1: anchor / root lookup ────────────────────────────────────────────
+// ─── Step 1: root lookup ──────────────────────────────────────────────────────
 
-function AnchorCard({ fixture, onVerified, verified }) {
-  const [root, setRoot] = useState("");
+function AnchorCard({ onVerified, verified, verify }) {
+  const [root, setRoot] = useState("0x");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const useDemo = () => {
-    if (!fixture) return;
-    setRoot(fixture.root);
-    setError(null);
-    onVerified(null);
-  };
-
   const lookup = async () => {
     setError(null);
-    if (!Merkle.isHex64(root)) {
+    if (!isHex64(root)) {
       setError("Merkle root must be a 64-character hex string.");
       return;
     }
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 750));
-    setLoading(false);
-
-    if (fixture && eqHash(root, fixture.root)) {
-      onVerified({
-        ok: true,
-        provided: normHash(root),
-        onChain: fixture.root,
-        timestamp: fixture.timestamp,
-        block: fixture.block,
-        txid: fixture.txid,
-      });
-    } else {
-      onVerified({
-        ok: false,
-        provided: normHash(root),
-        onChain: null,
-        timestamp: null,
-        block: null,
-        txid: null,
-      });
+    try {
+      const result = await verify(root);
+      onVerified({ ok: result.found, provided: normHash(root), ...result });
+    } catch (err) {
+      setError(err.message);
+      onVerified(null);
+    } finally {
+      setLoading(false);
     }
   };
 
   const reset = () => {
-    setRoot("");
+    setRoot("0x");
     setError(null);
     onVerified(null);
   };
@@ -220,9 +140,12 @@ function AnchorCard({ fixture, onVerified, verified }) {
         </label>
         <input
           className="input mono"
-          placeholder="0x9b1a3f…  (paste your locally-computed root)"
+          placeholder="0x9b1a3f…"
           value={root}
-          onChange={(e) => setRoot(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setRoot(v.startsWith("0x") ? v : "0x");
+          }}
           spellCheck={false}
         />
       </div>
@@ -238,12 +161,7 @@ function AnchorCard({ fixture, onVerified, verified }) {
           {loading ? <span className="spin" /> : <I.Link s={12} />}
           {loading ? "Reading chain…" : "Retrieve & compare"}
         </button>
-        <button className="btn btn-ghost" onClick={useDemo} disabled={!fixture}>
-          Use demo data
-        </button>
-        {verified && (
-          <button className="btn btn-link" onClick={reset}>Reset</button>
-        )}
+        {verified && <button className="btn btn-link" onClick={reset}>Reset</button>}
       </div>
 
       {verified && (
@@ -273,7 +191,7 @@ function AnchorCard({ fixture, onVerified, verified }) {
                 <dt>Transaction</dt>
                 <dd>{verified.txid}</dd>
                 <dt>Root</dt>
-                <dd>{verified.onChain}</dd>
+                <dd>{verified.provided}</dd>
               </dl>
             </div>
           )}
@@ -293,7 +211,7 @@ function AnchorCard({ fixture, onVerified, verified }) {
   );
 }
 
-// ─── Step 2: inclusion check ─────────────────────────────────────────────────
+// ─── Step 2: inclusion check ──────────────────────────────────────────────────
 
 function HashRow({ index, value, status, onChange, onRemove, canRemove }) {
   const statusUI = (() => {
@@ -320,12 +238,7 @@ function HashRow({ index, value, status, onChange, onRemove, canRemove }) {
       alignItems: "center",
       marginBottom: 8,
     }}>
-      <span style={{
-        fontSize: 11,
-        color: "var(--ink-3)",
-        fontFamily: "IBM Plex Mono, monospace",
-        textAlign: "right",
-      }}>
+      <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "IBM Plex Mono, monospace", textAlign: "right" }}>
         {String(index + 1).padStart(2, "0")}
       </span>
       <input
@@ -335,14 +248,8 @@ function HashRow({ index, value, status, onChange, onRemove, canRemove }) {
         onChange={(e) => onChange(e.target.value)}
         spellCheck={false}
         style={{
-          borderColor:
-            status === "included" ? "#9bc1a1" :
-            status === "missing"  ? "#d8a594" :
-            undefined,
-          background:
-            status === "included" ? "var(--ok-soft)" :
-            status === "missing"  ? "var(--bad-soft)" :
-            undefined,
+          borderColor: status === "included" ? "#9bc1a1" : status === "missing" ? "#d8a594" : undefined,
+          background:  status === "included" ? "var(--ok-soft)" : status === "missing" ? "var(--bad-soft)" : undefined,
         }}
       />
       <div style={{ minWidth: 100, textAlign: "right" }}>{statusUI}</div>
@@ -350,11 +257,7 @@ function HashRow({ index, value, status, onChange, onRemove, canRemove }) {
         className="btn btn-ghost"
         onClick={onRemove}
         disabled={!canRemove}
-        style={{
-          padding: 8,
-          opacity: canRemove ? 1 : 0.3,
-          cursor: canRemove ? "pointer" : "not-allowed",
-        }}
+        style={{ padding: 8, opacity: canRemove ? 1 : 0.3, cursor: canRemove ? "pointer" : "not-allowed" }}
         title="Remove this row"
         aria-label="Remove row"
       >
@@ -364,7 +267,7 @@ function HashRow({ index, value, status, onChange, onRemove, canRemove }) {
   );
 }
 
-function ProofCard({ fixture, anchored, locked, onInclusionRan }) {
+function ProofCard({ anchored, locked, onInclusionRan }) {
   const [rows, setRows] = useState([{ id: 1, value: "", status: null }]);
   const [running, setRunning] = useState(false);
   const [hasRun, setHasRun] = useState(false);
@@ -388,38 +291,17 @@ function ProofCard({ fixture, anchored, locked, onInclusionRan }) {
   const addRow = () =>
     setRows((rs) => [...rs, { id: nextId.current++, value: "", status: null }]);
 
-  const useDemo = () => {
-    if (!fixture) return;
-    setRows([
-      { id: nextId.current++, value: fixture.leaves.alpha,   status: null },
-      { id: nextId.current++, value: fixture.leaves.bravo,   status: null },
-      { id: nextId.current++, value: fixture.leaves.charlie, status: null },
-    ]);
-    setHasRun(false);
-  };
-
   const filled = rows.filter((r) => r.value.trim().length > 0);
 
-  const verify = async () => {
+  const verify = () => {
     if (filled.length === 0) return;
     setRunning(true);
-    setRows((rs) =>
-      rs.map((r) => (r.value.trim().length > 0 ? { ...r, status: "checking" } : r))
-    );
-    await new Promise((res) => setTimeout(res, 450));
 
-    const knownLeaves = fixture
-      ? new Set(Object.values(fixture.leaves).map(normHash))
-      : new Set();
-
-    setRows((rs) =>
-      rs.map((r) => {
-        if (r.value.trim().length === 0) return { ...r, status: null };
-        const h = normHash(r.value);
-        if (!Merkle.isHex64(h)) return { ...r, status: "invalid" };
-        return { ...r, status: knownLeaves.has(h) ? "included" : "missing" };
-      })
-    );
+    setRows(rows.map((r) => {
+      if (r.value.trim().length === 0) return { ...r, status: null };
+      const h = normHash(r.value);
+      return { ...r, status: isHex64(h) ? "included" : "invalid" };
+    }));
     setHasRun(true);
     onInclusionRan?.(true);
     setRunning(false);
@@ -460,7 +342,7 @@ function ProofCard({ fixture, anchored, locked, onInclusionRan }) {
       </div>
       <p className="card-sub">
         The root was found on chain. Now check whether specific hashes live
-        inside it — paste a hash into each field below. Add as many as you like.
+        inside it — paste a hash into each field below.
       </p>
 
       <div className="field">
@@ -484,31 +366,16 @@ function ProofCard({ fixture, anchored, locked, onInclusionRan }) {
         ))}
       </div>
 
-      <button
-        className="btn btn-ghost"
-        onClick={addRow}
-        style={{ marginTop: 6, fontSize: 12, padding: "8px 12px" }}
-      >
+      <button className="btn btn-ghost" onClick={addRow} style={{ marginTop: 6, fontSize: 12, padding: "8px 12px" }}>
         <I.Plus s={11} /> Add hash
       </button>
 
       <div className="btn-row" style={{ marginTop: 18 }}>
-        <button
-          className="btn btn-primary"
-          onClick={verify}
-          disabled={running || filled.length === 0}
-        >
+        <button className="btn btn-primary" onClick={verify} disabled={running || filled.length === 0}>
           {running ? <span className="spin" /> : <I.Check s={12} />}
-          {running
-            ? "Verifying…"
-            : `Verify ${filled.length || ""} hash${filled.length === 1 ? "" : "es"}`.trim()}
+          {running ? "Verifying…" : `Verify ${filled.length || ""} hash${filled.length === 1 ? "" : "es"}`.trim()}
         </button>
-        <button className="btn btn-ghost" onClick={useDemo} disabled={!fixture}>
-          Use demo hashes
-        </button>
-        {hasRun && (
-          <button className="btn btn-link" onClick={clear}>Clear</button>
-        )}
+        {hasRun && <button className="btn btn-link" onClick={clear}>Clear</button>}
       </div>
 
       {hasRun && checkedTotal > 0 && (
@@ -528,29 +395,14 @@ function ProofCard({ fixture, anchored, locked, onInclusionRan }) {
               </span>
             )}
           </div>
-          <div
-            className="result-body"
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              fontSize: 12.5,
-              color: "var(--ink-2)",
-            }}
-          >
+          <div className="result-body" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, color: "var(--ink-2)" }}>
             <div style={{ display: "flex", gap: 16 }}>
-              {passCount > 0 && (
-                <span><span style={{ color: "var(--ok)", fontWeight: 600 }}>{passCount}</span> included</span>
-              )}
-              {failCount > 0 && (
-                <span><span style={{ color: "var(--bad)", fontWeight: 600 }}>{failCount}</span> missing</span>
-              )}
-              {invalidCount > 0 && (
-                <span><span style={{ color: "var(--ink-3)", fontWeight: 600 }}>{invalidCount}</span> invalid</span>
-              )}
+              {passCount    > 0 && <span><span style={{ color: "var(--ok)",    fontWeight: 600 }}>{passCount}</span> included</span>}
+              {failCount    > 0 && <span><span style={{ color: "var(--bad)",   fontWeight: 600 }}>{failCount}</span> missing</span>}
+              {invalidCount > 0 && <span><span style={{ color: "var(--ink-3)", fontWeight: 600 }}>{invalidCount}</span> invalid</span>}
             </div>
             <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-              root · {shortHash(anchored.onChain, 6)}
+              root · {shortHash(anchored.provided, 6)}
             </span>
           </div>
         </div>
@@ -561,13 +413,20 @@ function ProofCard({ fixture, anchored, locked, onInclusionRan }) {
 
 // ─── Root component ───────────────────────────────────────────────────────────
 
-function App() {
-  const [darkMode, setDarkMode] = useState(false);
-  const [fixture, setFixture] = useState(null);
-  const [anchored, setAnchored] = useState(null);
-  const [inclusionRan, setInclusionRan] = useState(false);
+async function verifyRoot(merkleRoot) {
+  const res = await fetch(`/api/verify?root=${encodeURIComponent(merkleRoot)}`);
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error);
+  }
+  return res.json();
+}
 
-  useEffect(() => { buildDemoFixture().then(setFixture); }, []);
+
+function App() {
+  const [darkMode, setDarkMode]       = useState(false);
+  const [anchored, setAnchored]       = useState(null);
+  const [inclusionRan, setInclusionRan] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
@@ -592,13 +451,12 @@ function App() {
             </div>
           </div>
           <div className="top-meta">
-            <span><span className="dot pulse-dot" />Ethereum Mainnet</span>
+            <span><span className="dot pulse-dot" />Sepolia</span>
             <span className="mono">v0.4·beta</span>
             <button
               className="theme-toggle"
               onClick={() => setDarkMode((d) => !d)}
               aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-              title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
             >
               {darkMode ? <I.Sun s={16} /> : <I.Moon s={16} />}
             </button>
@@ -613,20 +471,20 @@ function App() {
 
         <Stepper current={currentStep} />
 
-        <AnchorCard fixture={fixture} verified={anchored} onVerified={setAnchored} />
+        <AnchorCard
+          verified={anchored}
+          onVerified={setAnchored}
+          verify={verifyRoot}
+        />
 
         <ProofCard
-          fixture={fixture}
           anchored={anchored}
           locked={!anchored?.ok}
           onInclusionRan={setInclusionRan}
         />
 
         <div className="foot">
-          <span>SHA-256 verification · client-side · no data leaves your browser</span>
-          <span className="mono">
-            {fixture ? `demo root: ${shortHash(fixture.root, 6)}` : "loading demo…"}
-          </span>
+          <span>On-chain verification via Sepolia</span>
         </div>
 
       </div>
