@@ -51,6 +51,7 @@ export async function register(req, res) {
     return res.status(400).json({ error: 'Invalid device_name' })
   }
 
+  // Keys are validated by hex encoding and byte length only — no structural curve/point validation.
   let idkClassicalPub, signingPub, signedPrekeyPub, signedPrekeySig
   let idkPqPub = null
 
@@ -117,6 +118,8 @@ export async function register(req, res) {
     }
     throw err
   } finally {
+    // Best-effort: zeroes this Buffer's backing memory. Intermediate copies held
+    // by V8 or the noble library internals are not cleared.
     idkClassicalPub.fill(0)
     signingPub.fill(0)
     signedPrekeyPub.fill(0)
