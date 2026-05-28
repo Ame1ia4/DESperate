@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QObject>
-#include <QLocalSocket>
+#include <QTcpSocket>
 #include <QJsonObject>
 
 class CryptoServiceClient : public QObject
@@ -11,7 +11,9 @@ class CryptoServiceClient : public QObject
 public:
     explicit CryptoServiceClient(QObject* parent = nullptr);
 
-    bool unlockKeystore(const QString& password);
+    bool unlockKeystore(
+        const QString& password
+        );
 
     QJsonObject generateIdentityBundle(
         const QString& password
@@ -38,13 +40,27 @@ public:
         );
 
     QString lastError() const;
-    void setRpcTimeoutMs(int timeoutMs);
+
+    void setRpcTimeoutMs(
+        int timeoutMs
+        );
 
 signals:
-    void encryptCompleted(QJsonObject envelope);
-    void encryptFailed(QString reason);
-    void decryptCompleted(QString plaintext);
-    void decryptFailed(QString reason);
+    void encryptCompleted(
+        QJsonObject envelope
+        );
+
+    void encryptFailed(
+        QString reason
+        );
+
+    void decryptCompleted(
+        QString plaintext
+        );
+
+    void decryptFailed(
+        QString reason
+        );
 
 private:
     QJsonObject rpc(
@@ -53,10 +69,20 @@ private:
         );
 
     bool ensureConnected();
-    bool writeRequest(const QByteArray& payload);
+    bool startLocalCryptoService();
+    QString locateServiceScript() const;
+
+    bool writeRequest(
+        const QByteArray& payload
+        );
+
     QJsonObject readResponse();
 
-    QLocalSocket m_socket;
+private:
+    QTcpSocket m_socket;
     QString m_lastError;
     int m_rpcTimeoutMs = 3000;
+    QString m_serviceHost = QStringLiteral("127.0.0.1");
+    int m_servicePort = 54231;
+    bool m_serviceStarted = false;
 };

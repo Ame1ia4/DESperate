@@ -4,6 +4,9 @@
 #include <QJsonDocument>
 #include <QSslConfiguration>
 #include <QNetworkReply>
+#include <QUrl>
+#include <QString>
+#include <QProcessEnvironment>
 
 ApiClient::ApiClient(QObject* parent)
     : QObject(parent)
@@ -28,10 +31,14 @@ void ApiClient::registerUser(
         const auto status = reply->attribute(
             QNetworkRequest::HttpStatusCodeAttribute
             ).toInt();
+        const auto payload = reply->readAll();
         reply->deleteLater();
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
-            emit registerUserFailed();
+            const QString reason = payload.isEmpty()
+                ? QStringLiteral("Registration failed.")
+                : QString::fromUtf8(payload);
+            emit registerUserFailed(reason);
             return;
         }
 
@@ -39,12 +46,56 @@ void ApiClient::registerUser(
     });
 }
 
+void ApiClient::loginUser(
+    const QString& username,
+    const QString& password
+    )
+{
+    auto request = makeRequest("/auth/login");
+
+    QJsonObject bodyObject;
+    bodyObject["username"] = username;
+    bodyObject["password"] = password;
+
+    QByteArray body = QJsonDocument(bodyObject).toJson();
+    auto* reply = m_network.post(request, body);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error = reply->error();
+        const auto status = reply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute
+            ).toInt();
+        const auto payload = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            QString reason = QStringLiteral("No matching credentials found.");
+            if (!payload.isEmpty()) {
+                const auto parsed = QJsonDocument::fromJson(payload).object();
+                if (!parsed.value("error").toString().trimmed().isEmpty()) {
+                    reason = parsed.value("error").toString();
+                }
+            }
+            emit loginUserFailed(reason);
+            return;
+        }
+
+        emit loginUserSucceeded();
+    });
+}
+
 QNetworkRequest ApiClient::makeRequest(
     const QString& path
     )
 {
+    QString apiHost = qEnvironmentVariable("DESPERATE_API_HOST");
+    if (apiHost.trimmed().isEmpty()) {
+        apiHost = QStringLiteral("http://127.0.0.1");
+    } else if (!apiHost.contains(QStringLiteral("://"))) {
+        apiHost.prepend(QStringLiteral("http://"));
+    }
+
     QNetworkRequest request(
-        QUrl("https://api.example.com" + path)
+        QUrl(apiHost + path)
         );
 
     request.setHeader(
@@ -52,10 +103,11 @@ QNetworkRequest ApiClient::makeRequest(
         "application/json"
         );
 
-    QSslConfiguration ssl;
-    ssl.setProtocol(QSsl::TlsV1_3);
-
-    request.setSslConfiguration(ssl);
+    if (request.url().scheme() == QLatin1String("https")) {
+        QSslConfiguration ssl;
+        ssl.setProtocol(QSsl::TlsV1_3);
+        request.setSslConfiguration(ssl);
+    }
 
     return request;
 }

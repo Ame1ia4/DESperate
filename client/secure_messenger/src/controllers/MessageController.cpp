@@ -1,10 +1,10 @@
 #include "MessageController.h"
 
-#include "services/ApiClient.h"
-#include "services/CryptoServiceClient.h"
-#include "storage/LocalMessageStore.h"
-#include "models/MessageModel.h"
-#include "types/Types.h"
+#include "src/services/ApiClient.h"
+#include "src/services/CryptoServiceClient.h"
+#include "src/storage/LocalMessageStore.h"
+#include "src/models/MessageModel.h"
+#include "src/types/Types.h"
 
 #include <QJsonArray>
 #include <QDateTime>

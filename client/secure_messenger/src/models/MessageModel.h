@@ -17,7 +17,10 @@ public:
     enum Roles {
         ContentRole = Qt::UserRole + 1,
         TimestampRole,
-        VerificationRole
+        VerificationRole,
+        PlaintextRole,
+        OutgoingRole,
+        VerifiedRole
     };
 
     int rowCount(
@@ -35,6 +38,7 @@ public:
     void addMessage(
         const DecryptedMessage &message
         );
+    void clear();
 
 private:
     std::vector<DecryptedMessage> m_messages;

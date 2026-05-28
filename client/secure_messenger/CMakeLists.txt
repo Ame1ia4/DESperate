@@ -9,52 +9,46 @@ find_package(Qt6 REQUIRED COMPONENTS Quick Network)
 qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appsecure_messenger
-
-
+    main.cpp
+    resources.qrc
     src/services/ApiClient.cpp
     src/services/CryptoServiceClient.cpp
-
+    src/controllers/AuthController.cpp
+    src/controllers/MessageController.cpp
+    src/controllers/ConversationController.cpp
     src/models/MessageModel.cpp
+    src/models/ConversationModel.cpp
+    src/models/UserModel.cpp
+    src/network/TLSManager.cpp
+    src/storage/LocalMessageStore.cpp
 )
 
 qt_add_qml_module(appsecure_messenger
     URI secure_messenger
     QML_FILES
+        qml/Main.qml
+        qml/main.qml
+        qml/views/ConversationList.qml
+        qml/views/LoginView.qml
+        qml/views/SignupView.qml
+        qml/views/MessageDelegate.qml
+        qml/views/MessageView.qml
+        qml/views/SettingsView.qml
+        qml/views/UserSearchSheet.qml
+        qml/views/VerifyDialog.qml
 
-        SOURCES src/types/Types.h
-        SOURCES src/services/ApiClient.h
-        SOURCES src/services/ApiClient.cpp
-        SOURCES src/services/CryptoServiceClient.h src/services/CryptoServiceClient.cpp
-        SOURCES src/models/MessageModel.h src/models/MessageModel.cpp
-        QML_FILES qml/views/MessageView.qml
-        QML_FILES qml/views/LoginView.qml
-        SOURCES src/controllers/AuthController.h src/controllers/AuthController.cpp
-        SOURCES src/controllers/MessageController.h src/controllers/MessageController.cpp
-        SOURCES
-        SOURCES
-        SOURCES src/models/ConversationModel.h src/models/ConversationModel.cpp
-        SOURCES
-        SOURCES
-        SOURCES
-        SOURCES
-        SOURCES src/network/TLSManager.h src/network/TLSManager.cpp
-        SOURCES src/storage/LocalMessageStore.h src/storage/LocalMessageStore.cpp
-        SOURCES
-        QML_FILES qml/views/ConversationList.qml
-        QML_FILES qml/views/MessageDelegate.qml
-        QML_FILES qml/views/VerifyDialog.qml
-        QML_FILES qml/views/SettingsView.qml
-        QML_FILES qml/views/UserSearchSheet.qml
-        QML_FILES
-        RESOURCES
-        RESOURCES
-        RESOURCES
-        RESOURCES
-        QML_FILES qml/main.qml
-        RESOURCES qml/qmldir
-        SOURCES main.cpp
-        SOURCES src/controllers/ConversationController.h src/controllers/ConversationController.cpp
-        SOURCES src/models/UserModel.h src/models/UserModel.cpp
+    SOURCES
+        src/types/Types.h
+        src/services/ApiClient.h
+        src/services/CryptoServiceClient.h
+        src/controllers/AuthController.h
+        src/controllers/MessageController.h
+        src/controllers/ConversationController.h
+        src/models/MessageModel.h
+        src/models/ConversationModel.h
+        src/models/UserModel.h
+        src/network/TLSManager.h
+        src/storage/LocalMessageStore.h
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
