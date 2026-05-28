@@ -8,7 +8,7 @@ import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
-import { register, challenge, verify, logout, logoutAll } from './handlers/auth/index.js'
+import { register } from './handlers/auth/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -81,9 +81,7 @@ app.get('/api/blockchain/verify', async (req, res) => {
 })
 
 // ── Auth stubs (unprotected until WebAuthn/JWT is implemented) ──
-app.post('/auth/register',  authLimiter, register)
-app.post('/auth/challenge', authLimiter, challenge)
-app.post('/auth/verify',    authLimiter, verify)
+app.post('/auth/register', authLimiter, register)
 
 
 // ── Message / key / device stubs ──
@@ -94,10 +92,7 @@ app.post('/messages/:id/ack',(_, res) => res.json({ message: 'ack stub' }))
 app.post('/keys/opks',      (_, res) => res.json({ message: 'opk upload stub' }))
 app.get('/keys/:username',  (_, res) => res.json({ message: 'key fetch stub' }))
 
-app.post('/auth/logout',     requireAuth, logout)
-app.post('/auth/logout-all', requireAuth, logoutAll)
-
-app.post('/devices/revoke', requireAuth, (_, res) => res.json({ message: 'revoke stub' }))
+app.post('/devices/revoke', (_, res) => res.json({ message: 'revoke stub' }))
 
 // ── 404 ──
 app.use((_, res) => res.status(404).json({ error: 'Not found' }))

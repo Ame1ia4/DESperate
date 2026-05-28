@@ -154,8 +154,8 @@ describe('POST /auth/register', () => {
       })
     }
 
-    it('accepts password at minimum length (12 chars)', async () => {
-      const res = await post({ ...validBody(), password: 'a'.repeat(12) })
+    it('accepts password at minimum length (15 chars)', async () => {
+      const res = await post({ ...validBody(), password: 'a'.repeat(15) })
       assert.strictEqual(res.status, 201)
     })
   })
