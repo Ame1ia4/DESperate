@@ -4,7 +4,8 @@
 
 import pg from 'pg'
 
-// Fake env vars — db.js validates these at module load, not at connection time
+// Fake env vars — db.js and auth_init.js validate these at module load
+process.env.AUTH_FAKE_SECRET ??= 'test-fake-secret-for-hmac-keying'
 process.env.DB_HOST ??= 'test-host'
 process.env.DB_PORT ??= '5432'
 process.env.DB_USER ??= 'test-user'

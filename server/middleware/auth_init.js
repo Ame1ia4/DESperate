@@ -1,4 +1,4 @@
-import * as srp from 'secure-remote-password/server'
+import * as srp from 'secure-remote-password/server.js'
 import { createHmac, hkdfSync } from 'node:crypto'
 import { query, withTransaction } from '../database/db.js'
 import {
