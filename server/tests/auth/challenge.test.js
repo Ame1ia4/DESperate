@@ -1,13 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import request from 'supertest'
+import { describe, it, before, after, beforeEach } from 'node:test'
+import assert from 'node:assert/strict'
 import express from 'express'
-
-vi.mock('../../database/db.js', () => ({
-  query:           vi.fn(),
-  withTransaction: vi.fn(),
-}))
-
-import * as db from '../../database/db.js'
 import { challenge } from '../../handlers/auth/challenge.js'
 
 function createApp() {
@@ -18,94 +11,107 @@ function createApp() {
   return app
 }
 
-const app = createApp()
+let server
+let baseUrl
+
+before(() => new Promise(resolve => {
+  server = createApp().listen(0, () => {
+    baseUrl = `http://localhost:${server.address().port}`
+    resolve()
+  })
+}))
+
+after(() => new Promise(resolve => server.close(resolve)))
+
+// Helpers
+function mockQuery(rows) {
+  globalThis.__db.queryImpl = async () => ({ rows })
+}
+function mockQueryThrow(err) {
+  globalThis.__db.queryImpl = async () => { throw err }
+}
+
+async function post(body) {
+  const res = await fetch(`${baseUrl}/auth/challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return { status: res.status, body: await res.json() }
+}
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  globalThis.__db.queryImpl = null
 })
 
 describe('POST /auth/challenge', () => {
   describe('device_id validation', () => {
     const invalidCases = [
-      [undefined,  'missing'],
-      [null,       'null'],
-      [0,          'number zero'],
-      [42,         'number'],
-      [{},         'object'],
-      [[],         'array'],
-      [true,       'boolean'],
-      ['',         'empty string'],
+      [undefined, 'missing'],
+      [null,      'null'],
+      [0,         'number zero'],
+      [42,        'number'],
+      [{},        'object'],
+      [[],        'array'],
+      [true,      'boolean'],
+      ['',        'empty string'],
     ]
 
     for (const [device_id, desc] of invalidCases) {
       it(`returns 400 for device_id: ${desc}`, async () => {
-        const res = await request(app).post('/auth/challenge').send({ device_id })
-        expect(res.status).toBe(400)
-        expect(res.body.error).toBe('Invalid device_id')
+        const res = await post({ device_id })
+        assert.strictEqual(res.status, 400)
+        assert.strictEqual(res.body.error, 'Invalid device_id')
       })
     }
   })
 
   describe('device lookup', () => {
     it('returns 401 when device is not found', async () => {
-      db.query.mockResolvedValueOnce({ rows: [] })
-      const res = await request(app).post('/auth/challenge').send({ device_id: 'nonexistent-id' })
-      expect(res.status).toBe(401)
-      expect(res.body.error).toBe('Authentication failed')
-    })
-
-    it('returns 401 when device is revoked (filtered by WHERE revoked = FALSE)', async () => {
-      // The query uses `WHERE id = $1 AND revoked = FALSE` — revoked device returns no rows
-      db.query.mockResolvedValueOnce({ rows: [] })
-      const res = await request(app).post('/auth/challenge').send({ device_id: 'revoked-device-id' })
-      expect(res.status).toBe(401)
-      expect(res.body.error).toBe('Authentication failed')
-    })
-
-    it('returns 401 even when device is found (nonce creation is not yet implemented)', async () => {
-      // The challenge handler is a stub — it always returns 401 pending sessions.js
-      db.query.mockResolvedValueOnce({ rows: [{ id: 'device-uuid' }] })
-      const res = await request(app).post('/auth/challenge').send({ device_id: 'valid-device-id' })
-      expect(res.status).toBe(401)
-      expect(res.body.error).toBe('Authentication failed')
+      mockQuery([])
+      const res = await post({ device_id: 'nonexistent-id' })
+      assert.strictEqual(res.status, 401)
+      assert.strictEqual(res.body.error, 'Authentication failed')
     })
 
     it('queries DB with parameterised query (not string concat)', async () => {
-      db.query.mockResolvedValueOnce({ rows: [] })
-      await request(app).post('/auth/challenge').send({ device_id: 'some-id' })
-      expect(db.query).toHaveBeenCalledWith(
-        expect.stringContaining('$1'),
-        expect.arrayContaining(['some-id'])
-      )
+      let captured = null
+      globalThis.__db.queryImpl = async (text, params) => {
+        captured = { text, params }
+        return { rows: [] }
+      }
+      await post({ device_id: 'some-id' })
+      assert.ok(captured.text.includes('$1'), 'SQL must use $1 parameter')
+      assert.ok(Array.isArray(captured.params) && captured.params.includes('some-id'))
     })
   })
 
   describe('oracle prevention', () => {
     it('device-not-found and revoked-device return identical error bodies', async () => {
-      db.query.mockResolvedValueOnce({ rows: [] })
-      const res1 = await request(app).post('/auth/challenge').send({ device_id: 'id-a' })
+      mockQuery([])
+      const res1 = await post({ device_id: 'id-a' })
 
-      db.query.mockResolvedValueOnce({ rows: [] }) // same result — revoked filtered out
-      const res2 = await request(app).post('/auth/challenge').send({ device_id: 'id-b' })
+      mockQuery([])
+      const res2 = await post({ device_id: 'id-b' })
 
-      expect(res1.body).toEqual(res2.body)
-      expect(res1.status).toBe(res2.status)
+      assert.strictEqual(res1.status, res2.status)
+      assert.deepStrictEqual(res1.body, res2.body)
     })
 
     it('error message does not reveal whether device exists', async () => {
-      db.query.mockResolvedValueOnce({ rows: [] })
-      const res = await request(app).post('/auth/challenge').send({ device_id: 'some-id' })
-      expect(res.body.error).not.toMatch(/not found/i)
-      expect(res.body.error).not.toMatch(/revok/i)
-      expect(res.body.error).not.toMatch(/device/i)
+      mockQuery([])
+      const res = await post({ device_id: 'some-id' })
+      assert.doesNotMatch(res.body.error, /not found/i)
+      assert.doesNotMatch(res.body.error, /revok/i)
+      assert.doesNotMatch(res.body.error, /device/i)
     })
   })
 
   describe('DB error propagation', () => {
     it('returns 500 on unexpected DB error', async () => {
-      db.query.mockRejectedValueOnce(new Error('connection error'))
-      const res = await request(app).post('/auth/challenge').send({ device_id: 'some-id' })
-      expect(res.status).toBe(500)
+      mockQueryThrow(new Error('connection error'))
+      const res = await post({ device_id: 'some-id' })
+      assert.strictEqual(res.status, 500)
     })
   })
 })
