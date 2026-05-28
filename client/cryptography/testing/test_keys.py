@@ -21,7 +21,7 @@ from core.keys import (
     generate_kem_keypair,
     generate_signing_keypair,
     generate_signed_prekey,
-    generate_one_time_prekeys,
+    generate_kem_one_time_prekeys,
     generate_x25519_one_time_prekeys,
     generate_identity_bundle,
     verify_spk_signature,
@@ -229,34 +229,37 @@ class TestSignedPrekey:
 
 # ── One-time prekeys ─────────────────────────────────────────────────────────
 
-class TestOneTimePrekeys:
+class TestKEMOneTimePrekeys:
+    """Tests for generate_kem_one_time_prekeys — ML-KEM-1024 OPK generation."""
 
     def test_generates_correct_count(self):
-        opks = generate_one_time_prekeys(count=5)
+        opks = generate_kem_one_time_prekeys(count=5)
         assert len(opks) == 5
 
     def test_opk_ids_are_sequential_from_start(self):
-        opks = generate_one_time_prekeys(count=5, start_id=10)
+        opks = generate_kem_one_time_prekeys(count=5, start_id=10)
         assert [o.opk_id for o in opks] == [10, 11, 12, 13, 14]
 
     def test_opk_public_keys_are_1568_bytes(self):
-        opks = generate_one_time_prekeys(count=3)
+        """FIPS 203 §7.1: ML-KEM-1024 encapsulation key is 1568 bytes."""
+        opks = generate_kem_one_time_prekeys(count=3)
         for opk in opks:
             assert len(opk.public_key) == 1568
 
     def test_opk_secret_keys_are_3168_bytes(self):
-        opks = generate_one_time_prekeys(count=3)
+        """FIPS 203 §7.1: ML-KEM-1024 decapsulation key is 3168 bytes."""
+        opks = generate_kem_one_time_prekeys(count=3)
         for opk in opks:
             assert len(opk.secret_key) == 3168
 
     def test_all_opk_public_keys_are_unique(self):
         """Each OPK must be independently generated — no shared entropy."""
-        opks = generate_one_time_prekeys(count=OPK_COUNT)
+        opks = generate_kem_one_time_prekeys(count=OPK_COUNT)
         pubs = [o.public_key for o in opks]
         assert len(set(pubs)) == len(pubs)
 
     def test_zero_count_returns_empty_list(self):
-        assert generate_one_time_prekeys(count=0) == []
+        assert generate_kem_one_time_prekeys(count=0) == []
 
 
 # ── Full identity bundle ─────────────────────────────────────────────────────
@@ -281,16 +284,18 @@ class TestIdentityBundle:
         assert bundle.ik_kem.secret_key.hex()       not in serialised
         assert bundle.ik_sig.secret_key.hex()       not in serialised
         assert bundle.ik_classical.private_key_bytes.hex() not in serialised
-        for opk in bundle.opks:
+        for opk in bundle.kem_opks:
             assert opk.secret_key.hex() not in serialised
 
     def test_public_bundle_has_required_fields(self, bundle):
         pub = bundle.to_public_bundle()
         required = {
             "user_id", "ik_kem_pub", "ik_sig_pub", "ik_classical_pub",
-            "spk_id", "spk_pub", "spk_sig", "opks",
+            "spk_id", "spk_pub", "spk_sig", "opks_x25519", "opks_kem",
         }
         assert required.issubset(pub.keys())
+        # Combined "opks" key was removed — only split format is supported
+        assert "opks" not in pub
 
     def test_private_bundle_has_all_secret_keys(self, bundle):
         priv = bundle.to_private_bundle()
@@ -298,7 +303,11 @@ class TestIdentityBundle:
         assert "ik_sig_sec"       in priv
         assert "ik_classical_sec" in priv
         assert "spk_sec"          in priv
-        for opk in priv["opks"]:
+        # Private bundle uses split format — no combined "opks" key
+        assert "opks" not in priv
+        for opk in priv["opks_x25519"]:
+            assert "opk_sec" in opk
+        for opk in priv["opks_kem"]:
             assert "opk_sec" in opk
 
     def test_public_bundle_spk_signature_verifies(self, bundle):
@@ -336,14 +345,14 @@ class TestReplenishOPKs:
 
     def test_replenish_fills_to_target(self):
         existing_x = generate_x25519_one_time_prekeys(count=5, start_id=1)
-        existing_k = generate_one_time_prekeys(count=5, start_id=1)
+        existing_k = generate_kem_one_time_prekeys(count=5, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=20)
         assert len(new_x) == 15
         assert len(new_k) == 15
 
     def test_replenish_ids_continue_from_highest(self):
         existing_x = generate_x25519_one_time_prekeys(count=5, start_id=1)
-        existing_k = generate_one_time_prekeys(count=5, start_id=1)
+        existing_k = generate_kem_one_time_prekeys(count=5, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=8)
         assert new_x[0].opk_id == 6
         assert new_x[-1].opk_id == 8
@@ -357,15 +366,115 @@ class TestReplenishOPKs:
 
     def test_replenish_when_already_at_target_returns_empty(self):
         existing_x = generate_x25519_one_time_prekeys(count=20, start_id=1)
-        existing_k = generate_one_time_prekeys(count=20, start_id=1)
+        existing_k = generate_kem_one_time_prekeys(count=20, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=20)
         assert new_x == []
         assert new_k == []
 
     def test_replenish_ids_do_not_collide_with_existing(self):
         existing_x = generate_x25519_one_time_prekeys(count=10, start_id=1)
-        existing_k = generate_one_time_prekeys(count=10, start_id=1)
+        existing_k = generate_kem_one_time_prekeys(count=10, start_id=1)
         new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=15)
         existing_ids = {o.opk_id for o in existing_x}
         new_ids      = {o.opk_id for o in new_x}
         assert existing_ids.isdisjoint(new_ids)
+
+    def test_replenish_mismatched_lists_raises(self):
+        """
+        Mismatched existing lists indicate state corruption — must fail loudly
+        rather than silently generating an inconsistent replenishment batch.
+        """
+        existing_x = generate_x25519_one_time_prekeys(count=5, start_id=1)
+        existing_k = generate_kem_one_time_prekeys(count=3, start_id=1)  # shorter
+        with pytest.raises(AssertionError, match="length mismatch"):
+            replenish_one_time_prekeys(existing_x, existing_k, target_count=10)
+
+    def test_replenish_new_lists_have_matching_ids(self):
+        """New batches from replenish must have matching opk_ids at every index."""
+        existing_x = generate_x25519_one_time_prekeys(count=5, start_id=1)
+        existing_k = generate_kem_one_time_prekeys(count=5, start_id=1)
+        new_x, new_k = replenish_one_time_prekeys(existing_x, existing_k, target_count=10)
+        assert len(new_x) == len(new_k)
+        for x_opk, k_opk in zip(new_x, new_k):
+            assert x_opk.opk_id == k_opk.opk_id
+
+
+# ── OPK pairing invariant ─────────────────────────────────────────────────────
+
+class TestOPKInvariant:
+    """Tests for the x25519_opks / kem_opks pairing invariant."""
+
+    def test_identity_bundle_enforces_equal_lengths(self):
+        """
+        IdentityBundle.__post_init__ must reject lists of different lengths.
+        This prevents silent truncation in to_public_bundle's zip().
+        """
+        from core.keys import (
+            generate_kem_keypair, generate_signing_keypair,
+            generate_signed_prekey, IdentityBundle,
+        )
+        ik_kem  = generate_kem_keypair()
+        ik_sig  = generate_signing_keypair()
+        ik_x    = X25519Keypair.generate()
+        spk     = generate_signed_prekey(ik_sig)
+        x_opks  = generate_x25519_one_time_prekeys(count=3, start_id=1)
+        k_opks  = generate_kem_one_time_prekeys(count=5, start_id=1)  # longer
+
+        with pytest.raises(AssertionError, match="length mismatch"):
+            IdentityBundle(
+                user_id      = "test",
+                ik_kem       = ik_kem,
+                ik_sig       = ik_sig,
+                ik_classical = ik_x,
+                spk          = spk,
+                x25519_opks  = x_opks,
+                kem_opks     = k_opks,
+            )
+
+    def test_identity_bundle_enforces_matching_ids(self):
+        """
+        IdentityBundle.__post_init__ must reject lists with mismatched opk_ids
+        even when lengths match.
+        """
+        from core.keys import (
+            generate_kem_keypair, generate_signing_keypair,
+            generate_signed_prekey, IdentityBundle,
+        )
+        ik_kem  = generate_kem_keypair()
+        ik_sig  = generate_signing_keypair()
+        ik_x    = X25519Keypair.generate()
+        spk     = generate_signed_prekey(ik_sig)
+        x_opks  = generate_x25519_one_time_prekeys(count=3, start_id=1)   # ids 1,2,3
+        k_opks  = generate_kem_one_time_prekeys(count=3, start_id=10)     # ids 10,11,12
+
+        with pytest.raises(AssertionError, match="ID mismatch"):
+            IdentityBundle(
+                user_id      = "test",
+                ik_kem       = ik_kem,
+                ik_sig       = ik_sig,
+                ik_classical = ik_x,
+                spk          = spk,
+                x25519_opks  = x_opks,
+                kem_opks     = k_opks,
+            )
+
+    def test_public_bundle_opk_ids_match_across_lists(self):
+        """opks_x25519 and opks_kem in the public bundle must share opk_ids."""
+        bundle = generate_identity_bundle("test", opk_count=5)
+        pub    = bundle.to_public_bundle()
+        x_ids  = [o["opk_id"] for o in pub["opks_x25519"]]
+        k_ids  = [o["opk_id"] for o in pub["opks_kem"]]
+        assert x_ids == k_ids
+
+    def test_public_bundle_has_no_combined_opks_key(self):
+        """The old combined 'opks' key must not appear in the public bundle."""
+        bundle = generate_identity_bundle("test", opk_count=3)
+        pub    = bundle.to_public_bundle()
+        assert "opks" not in pub
+
+    def test_private_bundle_has_no_combined_opks_key(self):
+        """The old combined 'opks' key must not appear in the private bundle."""
+        bundle = generate_identity_bundle("test", opk_count=3)
+        priv   = bundle.to_private_bundle()
+        assert "opks" not in priv
+

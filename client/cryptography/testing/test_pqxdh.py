@@ -81,6 +81,14 @@ class _StubIdentityBundle:
             self.kem_opks = []
 
     def to_public_bundle(self) -> dict:
+        x25519_opks = [
+            {"opk_id": i, "opk_pub": os.urandom(32).hex()}
+            for i in range(3)
+        ]
+        kem_opks = [
+            {"opk_id": i, "opk_pub": os.urandom(1568).hex()}
+            for i in range(3)
+        ]
         return {
             "user_id":          self.user_id,
             "ik_kem_pub":       self.ik_kem.public_key.hex(),
@@ -89,14 +97,8 @@ class _StubIdentityBundle:
             "spk_id":           self.spk.spk_id,
             "spk_pub":          self.spk.keypair.public_key_bytes.hex(),
             "spk_sig":          self.spk.signature.hex(),
-            "opks": [
-                {
-                    "opk_id":      i,
-                    "opk_pub":     os.urandom(32).hex(),
-                    "opk_kem_pub": os.urandom(1568).hex(),
-                }
-                for i in range(3)
-            ],
+            "opks_x25519":      x25519_opks,
+            "opks_kem":         kem_opks,
         }
 
 
@@ -283,6 +285,47 @@ class TestOPKHandling:
         result = initiate(alice, bob_public)
         assert result.bundle.used_identity_kem is False
 
+    def test_missing_opks_x25519_raises_malformed(self, alice, bob_public):
+        """
+        Bundle missing opks_x25519 must raise MalformedBundleError — not
+        fall back silently to the old combined format.
+        """
+        from core.pqxdh import initiate, MalformedBundleError
+        del bob_public["opks_x25519"]
+        with pytest.raises(MalformedBundleError):
+            initiate(alice, bob_public)
+
+    def test_missing_opks_kem_raises_malformed(self, alice, bob_public):
+        """Bundle missing opks_kem must raise MalformedBundleError."""
+        from core.pqxdh import initiate, MalformedBundleError
+        del bob_public["opks_kem"]
+        with pytest.raises(MalformedBundleError):
+            initiate(alice, bob_public)
+
+    def test_mismatched_opk_list_lengths_raise_malformed(self, alice, bob_public):
+        """
+        opks_x25519 and opks_kem with different lengths must raise
+        MalformedBundleError — not silently truncate via zip().
+        """
+        from core.pqxdh import initiate, MalformedBundleError
+        bob_public["opks_kem"] = bob_public["opks_kem"][:1]  # truncate to 1
+        with pytest.raises(MalformedBundleError):
+            initiate(alice, bob_public)
+
+    def test_combined_opks_format_raises_malformed(self, alice, bob_public):
+        """
+        Old combined 'opks' format (opk_pub + opk_kem_pub in one list) is no
+        longer supported. Must raise MalformedBundleError, not succeed silently.
+        """
+        from core.pqxdh import initiate, MalformedBundleError
+        del bob_public["opks_x25519"]
+        del bob_public["opks_kem"]
+        bob_public["opks"] = [
+            {"opk_id": 0, "opk_pub": os.urandom(32).hex(), "opk_kem_pub": os.urandom(1568).hex()}
+        ]
+        with pytest.raises(MalformedBundleError):
+            initiate(alice, bob_public)
+
 
 # ── Shared secret properties ──────────────────────────────────────────────────
 
@@ -336,11 +379,12 @@ class TestSharedSecret:
 class TestResponder:
 
     def _make_local_opks(self, bob_public: dict) -> tuple[dict, dict]:
-        """Build fake local OPK stores matching the bundle."""
+        """Build fake local OPK stores matching the split bundle format."""
         local_x_opks   = {}
         local_kem_opks = {}
-        for opk in bob_public.get("opks", []):
-            local_x_opks[opk["opk_id"]]   = os.urandom(32)
+        for opk in bob_public.get("opks_x25519", []):
+            local_x_opks[opk["opk_id"]] = os.urandom(32)
+        for opk in bob_public.get("opks_kem", []):
             local_kem_opks[opk["opk_id"]] = os.urandom(3168)
         return local_x_opks, local_kem_opks
 
