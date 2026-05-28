@@ -2,6 +2,7 @@ import * as srp from 'secure-remote-password/server.js'
 import { createHmac, hkdfSync } from 'node:crypto'
 import { query, withTransaction } from '../database/db.js'
 import {
+  HEX_RE,
   USERNAME_MIN,
   USERNAME_MAX,
   USERNAME_REGEX,
@@ -40,7 +41,9 @@ export async function authInit(req, res) {
     username.length < USERNAME_MIN ||
     username.length > USERNAME_MAX ||
     !USERNAME_REGEX.test(username) ||
-    clientPublicEphemeral.length !== SRP_EPHEMERAL_HEX
+    clientPublicEphemeral.length === 0 ||
+    clientPublicEphemeral.length > SRP_EPHEMERAL_HEX ||
+    !HEX_RE.test(clientPublicEphemeral)
   ) {
     return res.status(400).json({ error: 'Invalid request' })
   }

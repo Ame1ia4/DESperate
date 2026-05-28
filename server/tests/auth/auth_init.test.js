@@ -205,8 +205,13 @@ describe('POST /auth/init', () => {
       assert.strictEqual(res.status, 400)
     })
 
-    it('rejects clientPublicEphemeral that is one char too short', async () => {
+    it('accepts clientPublicEphemeral shorter than SRP_EPHEMERAL_HEX (leading-zero-stripped value)', async () => {
       const res = await post({ ...validBody(), clientPublicEphemeral: 'a'.repeat(SRP_EPHEMERAL_HEX - 1) })
+      assert.strictEqual(res.status, 200)
+    })
+
+    it('rejects empty clientPublicEphemeral', async () => {
+      const res = await post({ ...validBody(), clientPublicEphemeral: '' })
       assert.strictEqual(res.status, 400)
     })
 
@@ -217,6 +222,11 @@ describe('POST /auth/init', () => {
 
     it('rejects non-string clientPublicEphemeral', async () => {
       const res = await post({ ...validBody(), clientPublicEphemeral: 12345 })
+      assert.strictEqual(res.status, 400)
+    })
+
+    it('rejects clientPublicEphemeral with non-hex characters', async () => {
+      const res = await post({ ...validBody(), clientPublicEphemeral: 'z'.repeat(SRP_EPHEMERAL_HEX) })
       assert.strictEqual(res.status, 400)
     })
   })

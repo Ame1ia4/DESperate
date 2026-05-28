@@ -22,10 +22,11 @@ export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES
 
 export const SRP_SALT_HEX      = 64   // library default (32 bytes)
 export const SRP_VERIFIER_HEX  = 512  // RFC 5054 Appendix A §3 — 2048-bit group
-export const SRP_EPHEMERAL_HEX = 512  // RFC 5054 §2.5.3–2.5.4 — A, B mod N
+export const SRP_EPHEMERAL_HEX = 512  // 2048-bit group: A,B = g^x mod N < 2^2048 → ≤256 bytes = 512 hex chars
 
 // ── Input validation ────────────────────────────────────────────────────────
 
+export const HEX_RE           = /^[0-9a-f]+$/i
 export const USERNAME_REGEX   = /^[a-zA-Z0-9_]+$/
 export const USERNAME_MIN     = 3
 export const USERNAME_MAX     = 50

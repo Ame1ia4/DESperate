@@ -2,14 +2,13 @@ import { query, withTransaction } from '../../database/db.js'
 import { verifyDualSignature } from '../../utils/crypto.js'
 import { parseHex } from '../../utils/parseHex.js'
 import {
+  HEX_RE,
   SRP_SALT_HEX, SRP_VERIFIER_HEX,
   USERNAME_REGEX, USERNAME_MIN, USERNAME_MAX,
   DEVICE_NAME_MAX,
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
 } from '../../constants/auth.js'
-
-const HEX_RE = /^[0-9a-f]+$/i
 
 export async function register(req, res) {
   const { username, salt, verifier, device } = req.body
