@@ -1,18 +1,51 @@
 import 'dotenv/config'
+import crypto from 'crypto'
+import { readFileSync } from 'fs'
 import express from 'express'
 import helmet from 'helmet'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { verifyRoot } from './blockchain/verify.js'
+import { verifyRoot } from './blockchain/merkle-verify.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+const verificationHtmlTemplate = readFileSync(
+  join(__dirname, 'blockchain', 'verification.html'), 'utf-8'
+)
+
 const app = express()
 
+// Per-request nonce — must be set before Helmet reads it
+app.use((_req, res, next) => {
+  res.locals.nonce = crypto.randomBytes(32).toString('base64')
+  next()
+})
+
 // ── Middleware ──
-app.use(helmet())
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: [
+        "'strict-dynamic'",
+        // Helmet calls this function per request so each response gets its own nonce
+        (_req, res) => `'nonce-${res.locals.nonce}'`,
+        // Fallbacks for browsers without strict-dynamic — ignored by CSP3-capable browsers
+        'https:',
+        "'unsafe-inline'",
+      ],
+      styleSrc:  ["'self'", 'https://fonts.googleapis.com'],
+      fontSrc:   ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc:    ["'self'"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri:   ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+}))
 app.set('trust proxy', 1)
 app.use(cors({ origin: `https://${process.env.SUBDOMAIN}` }))
 app.use(express.json({ limit: '2mb' }))
@@ -22,8 +55,15 @@ const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 })
 app.use(generalLimiter)
 
 // ── Public routes ──
+// HTML routes must come before express.static so nonces are always injected
+const serveVerification = (req, res) => {
+  const html = verificationHtmlTemplate.replace(/<script/g, `<script nonce="${res.locals.nonce}"`)
+  res.type('html').send(html)
+}
+app.get('/', serveVerification)
+app.get('/verification.html', serveVerification)
+
 app.use(express.static(join(__dirname, 'blockchain')))
-app.get('/', (_, res) => res.sendFile(join(__dirname, 'blockchain', 'verification.html')))
 app.get('/health', (_, res) => res.json({ status: 'ok' }))
 
 const HEX64_RE = /^(0x)?[0-9a-f]{64}$/i
