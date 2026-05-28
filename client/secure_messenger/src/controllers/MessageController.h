@@ -1,13 +1,32 @@
+
 #pragma once
 
 #include <QObject>
+#include <QString>
+#include <QHash>
 #include <QJsonObject>
 
-class ApiClient;
+    class ApiClient;
 class CryptoServiceClient;
 class LocalMessageStore;
 class MessageModel;
 class TrustStore;
+class SessionStore;
+class ConversationController;
+
+struct PendingMessage;
+struct DecryptedMessage;
+
+struct PendingMessage
+{
+    QString requestId;
+
+    QString conversationId;
+
+    QString recipientDeviceId;
+
+    QByteArray plaintext;
+};
 
 class MessageController : public QObject
 {
@@ -19,32 +38,70 @@ public:
         CryptoServiceClient* crypto,
         LocalMessageStore* store,
         MessageModel* model,
+        ConversationController* conversations,
         TrustStore* trust,
-        QObject* parent = nullptr
-        );
+        SessionStore* sessions,
+        QObject* parent = nullptr);
 
-    Q_INVOKABLE void sendMessage(
+public slots:
+    void sendMessage(
         QString conversationId,
         QString recipientDeviceId,
-        QString plaintext
-        );
-    Q_INVOKABLE void receiveEnvelope(
-        QJsonObject envelope
-        );
-    Q_INVOKABLE void pullAndProcessMessages(
-        QString deviceId
-        );
+        QByteArray plaintext);
+
+    void receiveEnvelope(
+        QJsonObject envelope);
+
+    void pullAndProcessMessages(
+        QString deviceId);
 
 signals:
-    void messageSendFailed(QString reason);
     void messageSent();
-    void messageReceiveFailed(QString reason);
+
     void messageReceived();
 
+    void messageSendFailed(
+        QString reason);
+
+    void messageReceiveFailed(
+        QString reason);
+
+private slots:
+    void handleEncryptCompleted(
+        QString requestId,
+        QJsonObject envelope);
+
+    void handleEncryptFailed(
+        QString requestId,
+        QString reason);
+
+    void handleDecryptCompleted(
+        QString requestId,
+        QString plaintext);
+
+    void handleDecryptFailed(
+        QString requestId,
+        QString reason);
+
 private:
-    ApiClient* m_api;
-    CryptoServiceClient* m_crypto;
-    LocalMessageStore* m_store;
-    MessageModel* m_model;
-    TrustStore* m_trust;
+    ApiClient* m_api = nullptr;
+
+    CryptoServiceClient* m_crypto = nullptr;
+
+    LocalMessageStore* m_store = nullptr;
+
+    MessageModel* m_model = nullptr;
+
+    ConversationController* m_conversations =
+        nullptr;
+
+    TrustStore* m_trust = nullptr;
+
+    SessionStore* m_sessions = nullptr;
+
+    QHash<QString, PendingMessage>
+        m_pendingMessages;
+
+    QHash<QString, QJsonObject>
+        m_pendingDecryptions;
 };

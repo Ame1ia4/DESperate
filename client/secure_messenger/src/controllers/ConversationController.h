@@ -2,18 +2,20 @@
 
 #include <QObject>
 #include <QString>
-#include <QByteArray>
 #include <QHash>
 #include <QVector>
 
-#include "../models/ConversationModel.h"
-#include "../models/MessageModel.h"
-#include "../types/Types.h"
-
-class ApiClient;
+    class ApiClient;
 class CryptoServiceClient;
+class LocalMessageStore;
+class TrustStore;
 
-class ConversationController final : public QObject
+class ConversationModel;
+class MessageModel;
+
+struct DecryptedMessage;
+
+class ConversationController : public QObject
 {
     Q_OBJECT
 
@@ -30,41 +32,62 @@ class ConversationController final : public QObject
                        NOTIFY currentConversationIdChanged)
 
 public:
-    explicit ConversationController(ApiClient* api,
-                                    CryptoServiceClient* crypto,
-                                    QObject* parent = nullptr);
+    explicit ConversationController(
+        ApiClient* api,
+        CryptoServiceClient* crypto,
+        LocalMessageStore* store,
+        TrustStore* trust,
+        QObject* parent = nullptr);
 
     ConversationModel* conversations() noexcept;
+
     MessageModel* messages() noexcept;
+
     QString currentConversationId() const noexcept;
 
-    Q_INVOKABLE void loadConversations();
+public slots:
+    void loadConversations();
 
-    Q_INVOKABLE void openConversation(const QString& conversationId);
+    void openConversation(
+        const QString& conversationId);
 
-    Q_INVOKABLE void sendMessage(const QString& conversationId,
-                                 const QString& plaintext);
+    void appendLocalMessage(
+        const DecryptedMessage& message);
 
-    Q_INVOKABLE bool verifyFingerprint(const QString& conversationId,
-                                       const QString& fingerprint);
+    bool verifyFingerprint(
+        const QString& conversationId,
+        const QString& fingerprint);
 
 signals:
-    void errorOccurred(const QString& message);
-    void fingerprintMismatch(const QString& expected,
-                             const QString& received);
     void currentConversationIdChanged();
 
+    void errorOccurred(QString reason);
+
+    void fingerprintMismatch(
+        QString expected,
+        QString received);
+
 private:
-    bool validateMessage(const QString& plaintext) const;
-
-    QByteArray buildAssociatedData(const QString& conversationId) const;
+    bool validateMessage(
+        const QString& plaintext) const;
 
 private:
-    ConversationModel m_conversationModel;
-    MessageModel m_messageModel;
-    QHash<QString, QVector<DecryptedMessage>> m_messagesByConversation;
+    ApiClient* m_apiClient = nullptr;
 
-    ApiClient* m_apiClient;
-    CryptoServiceClient* m_cryptoClient;
+    CryptoServiceClient* m_cryptoClient = nullptr;
+
+    LocalMessageStore* m_store = nullptr;
+
+    TrustStore* m_trust = nullptr;
+
+    ConversationModel* m_conversationModel = nullptr;
+
+    MessageModel* m_messageModel = nullptr;
+
     QString m_currentConversationId;
+
+    QHash<QString,
+          QVector<DecryptedMessage>>
+        m_messagesByConversation;
 };
+

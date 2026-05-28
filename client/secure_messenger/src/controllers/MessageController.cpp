@@ -1,151 +1,310 @@
 #include "MessageController.h"
 
+#include <QDateTime>
+#include <QJsonArray>
+#include <QUuid>
+
+#include "ConversationController.h"
+
+#include "src/models/MessageModel.h"
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
 #include "src/storage/LocalMessageStore.h"
-#include "src/models/MessageModel.h"
 #include "src/types/Types.h"
-
-#include <QJsonArray>
-#include <QDateTime>
 
 MessageController::MessageController(
     ApiClient* api,
     CryptoServiceClient* crypto,
     LocalMessageStore* store,
     MessageModel* model,
+    ConversationController* conversations,
     TrustStore* trust,
-    QObject* parent
-    )
+    SessionStore* sessions,
+    QObject* parent)
     : QObject(parent)
     , m_api(api)
     , m_crypto(crypto)
     , m_store(store)
     , m_model(model)
+    , m_conversations(conversations)
     , m_trust(trust)
+    , m_sessions(sessions)
 {
-}
-
-void MessageController::sendMessage(
-    QString conversationId,
-    QString recipientDeviceId,
-    QString plaintext
-    )
-{
-    // Plaintext is copied into encryptMessageAsync before this returns; QString
-    // implicit sharing means caller-side wiping would not clear other copies.
-    // Real protection belongs at the crypto-service process boundary.
-
-    // Concurrent sends share one CryptoServiceClient. SingleShotConnection
-    // pairs one callback per call, but overlapping operations can still
-    // interleave; request IDs or per-call task objects are needed for isolation.
-
     connect(
         m_crypto,
         &CryptoServiceClient::encryptCompleted,
         this,
-        [this](const QJsonObject& envelope) {
-            m_store->storeOutgoingMessage(envelope);
-            m_api->sendMessage(envelope);
-            emit messageSent();
-        },
-        Qt::SingleShotConnection
-        );
+        &MessageController
+        ::handleEncryptCompleted);
 
     connect(
         m_crypto,
         &CryptoServiceClient::encryptFailed,
         this,
-        [this](const QString&) {
-            emit messageSendFailed("Message send failed.");
-        },
-        Qt::SingleShotConnection
-        );
+        &MessageController
+        ::handleEncryptFailed);
 
-    m_crypto->encryptMessageAsync(
-        plaintext,
-        recipientDeviceId,
-        conversationId
-        );
-}
-
-void MessageController::receiveEnvelope(
-    QJsonObject envelope
-    )
-{
     connect(
         m_crypto,
         &CryptoServiceClient::decryptCompleted,
         this,
-        [this, envelope](const QString& plaintext) {
-            const auto senderTimestamp = QDateTime::fromString(
-                envelope.value("created_at").toString(),
-                Qt::ISODateWithMs
-                );
-
-            DecryptedMessage message;
-            message.id = envelope.value("id").toString();
-            message.conversationId =
-                envelope.value("conversation_id").toString();
-            message.senderDeviceId =
-                envelope.value("sender_device_id").toString();
-            message.timestamp = senderTimestamp.isValid()
-                ? senderTimestamp
-                : QDateTime::currentDateTimeUtc();
-            message.plaintext = plaintext;
-
-            m_store->storeDecryptedMessage(message);
-            m_model->addMessage(message);
-            m_api->acknowledgeMessage(
-                message.id,
-                envelope.value("recipient_device_id").toString()
-                );
-            emit messageReceived();
-        },
-        Qt::SingleShotConnection
-        );
+        &MessageController
+        ::handleDecryptCompleted);
 
     connect(
         m_crypto,
         &CryptoServiceClient::decryptFailed,
         this,
-        [this](const QString&) {
-            emit messageReceiveFailed("Message receive failed.");
-        },
-        Qt::SingleShotConnection
-        );
+        &MessageController
+        ::handleDecryptFailed);
+}
 
-    m_crypto->decryptMessageAsync(envelope);
+void MessageController::sendMessage(
+    QString conversationId,
+    QString recipientDeviceId,
+    QByteArray plaintext)
+{
+    if (conversationId.isEmpty()) {
+
+        emit messageSendFailed(
+            "Conversation ID missing.");
+
+        return;
+    }
+
+    if (recipientDeviceId.isEmpty()) {
+
+        emit messageSendFailed(
+            "Recipient device missing.");
+
+        return;
+    }
+
+    if (plaintext.isEmpty()) {
+
+        emit messageSendFailed(
+            "Message payload empty.");
+
+        return;
+    }
+
+    const QString requestId =
+        QUuid::createUuid().toString();
+
+    PendingMessage pending;
+
+    pending.requestId =
+        requestId;
+
+    pending.conversationId =
+        conversationId;
+
+    pending.recipientDeviceId =
+        recipientDeviceId;
+
+    pending.plaintext =
+        plaintext;
+
+    m_pendingMessages.insert(
+        requestId,
+        pending);
+
+    m_crypto->encryptMessageAsync(
+        requestId,
+        plaintext,
+        recipientDeviceId,
+        conversationId);
+}
+
+void MessageController::handleEncryptCompleted(
+    QString requestId,
+    QJsonObject envelope)
+{
+    if (!m_pendingMessages.contains(
+            requestId)) {
+
+        return;
+    }
+
+    const PendingMessage pending =
+        m_pendingMessages.take(
+            requestId);
+
+    m_store->storeOutgoingMessage(
+        envelope);
+
+    m_api->sendMessage(envelope);
+
+    // Optimistic UI update.
+    DecryptedMessage message;
+
+    message.id =
+        envelope.value("id").toString(
+            QUuid::createUuid()
+                .toString());
+
+    message.conversationId =
+        pending.conversationId;
+
+    message.senderDeviceId =
+        "self";
+
+    message.timestamp =
+        QDateTime::currentDateTimeUtc();
+
+    message.plaintext =
+        QString::fromUtf8(
+            pending.plaintext);
+
+    message.verificationState =
+        VerificationState::Verified;
+
+    m_conversations
+        ->appendLocalMessage(message);
+
+    emit messageSent();
+}
+
+void MessageController::handleEncryptFailed(
+    QString requestId,
+    QString reason)
+{
+    m_pendingMessages.remove(
+        requestId);
+
+    emit messageSendFailed(
+        reason.isEmpty()
+            ? "Encryption failed."
+            : reason);
+}
+
+void MessageController::receiveEnvelope(
+    QJsonObject envelope)
+{
+    const QString requestId =
+        QUuid::createUuid().toString();
+
+    m_pendingDecryptions.insert(
+        requestId,
+        envelope);
+
+    m_crypto->decryptMessageAsync(
+        requestId,
+        envelope);
+}
+
+void MessageController::handleDecryptCompleted(
+    QString requestId,
+    QString plaintext)
+{
+    if (!m_pendingDecryptions.contains(
+            requestId)) {
+
+        return;
+    }
+
+    const QJsonObject envelope =
+        m_pendingDecryptions.take(
+            requestId);
+
+    const auto senderTimestamp =
+        QDateTime::fromString(
+            envelope.value(
+                        "created_at")
+                .toString(),
+            Qt::ISODateWithMs);
+
+    DecryptedMessage message;
+
+    message.id =
+        envelope.value("id")
+            .toString();
+
+    message.conversationId =
+        envelope.value(
+                    "conversation_id")
+            .toString();
+
+    message.senderDeviceId =
+        envelope.value(
+                    "sender_device_id")
+            .toString();
+
+    message.timestamp =
+        senderTimestamp.isValid()
+            ? senderTimestamp
+            : QDateTime
+            ::currentDateTimeUtc();
+
+    message.plaintext =
+        plaintext;
+
+    message.verificationState =
+        VerificationState::Verified;
+
+    m_store->storeDecryptedMessage(
+        message);
+
+    m_model->addMessage(message);
+
+    m_conversations
+        ->appendLocalMessage(message);
+
+    m_api->acknowledgeMessage(
+        message.id,
+        envelope.value(
+                    "recipient_device_id")
+            .toString());
+
+    emit messageReceived();
+}
+
+void MessageController::handleDecryptFailed(
+    QString requestId,
+    QString reason)
+{
+    m_pendingDecryptions.remove(
+        requestId);
+
+    emit messageReceiveFailed(
+        reason.isEmpty()
+            ? "Decryption failed."
+            : reason);
 }
 
 void MessageController::pullAndProcessMessages(
-    QString deviceId
-    )
+    QString deviceId)
 {
     connect(
         m_api,
         &ApiClient::pullMessagesSucceeded,
         this,
         [this](const QJsonArray& envelopes) {
-            for (const auto& envelopeValue : envelopes) {
-                const auto envelope = envelopeValue.toObject();
+
+            for (const auto& value :
+                 envelopes) {
+
+                const auto envelope =
+                    value.toObject();
+
                 if (!envelope.isEmpty()) {
-                    receiveEnvelope(envelope);
+                    receiveEnvelope(
+                        envelope);
                 }
             }
         },
-        Qt::SingleShotConnection
-        );
+        Qt::SingleShotConnection);
 
     connect(
         m_api,
         &ApiClient::pullMessagesFailed,
         this,
         [this]() {
-            emit messageReceiveFailed("Message receive failed.");
+
+            emit messageReceiveFailed(
+                "Failed to pull messages.");
         },
-        Qt::SingleShotConnection
-        );
+        Qt::SingleShotConnection);
 
     m_api->pullMessages(deviceId);
 }

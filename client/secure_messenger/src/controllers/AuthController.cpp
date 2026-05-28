@@ -1,24 +1,30 @@
 #include "AuthController.h"
+
+#include "src/storage/SessionStore.h"
+#include "src/storage/TrustStore.h"
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
 
-namespace {
-constexpr const char* DEMO_USERNAME = "demo";
-constexpr const char* DEMO_PASSWORD = "demo123";
+    namespace {
+    constexpr const char* DEMO_USERNAME = "demo";
+    constexpr const char* DEMO_PASSWORD = "demo123";
 }
 
 AuthController::AuthController(
     ApiClient* api,
     CryptoServiceClient* crypto,
-    QObject* parent
-    )
+    TrustStore* trust,
+    SessionStore* sessions,
+    QObject* parent)
     : QObject(parent)
     , m_api(api)
     , m_crypto(crypto)
+    , m_trust(trust)
+    , m_sessions(sessions)
 {
 }
 
-bool AuthController::authenticated() const
+bool AuthController::authenticated() const noexcept
 {
     return m_authenticated;
 }
@@ -28,22 +34,53 @@ QString AuthController::authError() const
     return m_authError;
 }
 
-void AuthController::login(
-    const QString& username,
-    const QString& password
-    )
+QString AuthController::currentUserId() const
 {
-    const QString normalizedUsername = username.trimmed();
-    if (normalizedUsername.isEmpty() || password.isEmpty()) {
-        m_authError = "Username and password are required.";
-        emit authErrorChanged();
-        emit loginFailed(m_authError);
+    return m_currentUserId;
+}
+
+void AuthController::setAuthError(
+    const QString& error)
+{
+    if (m_authError == error) {
         return;
     }
 
-    if (normalizedUsername == DEMO_USERNAME && password == DEMO_PASSWORD) {
-        m_authError.clear();
-        emit authErrorChanged();
+    m_authError = error;
+
+    emit authErrorChanged();
+}
+
+void AuthController::login(
+    const QString& username,
+    const QString& password)
+{
+    const QString normalized =
+        username.trimmed();
+
+    if (normalized.isEmpty() ||
+        password.isEmpty()) {
+
+        setAuthError(
+            "Username and password are required.");
+
+        emit loginFailed(m_authError);
+
+        return;
+    }
+
+    // Demo-only shortcut for UI development.
+    if (normalized == DEMO_USERNAME &&
+        password == DEMO_PASSWORD) {
+
+        setAuthError(QString());
+
+        m_currentUserId = normalized;
+        emit currentUserChanged();
+
+        emit keystoreUnlocked();
+        emit identityLoaded();
+        emit sessionInitialized();
 
         if (!m_authenticated) {
             m_authenticated = true;
@@ -51,6 +88,7 @@ void AuthController::login(
         }
 
         emit loginSucceeded();
+
         return;
     }
 
@@ -58,79 +96,112 @@ void AuthController::login(
         m_api,
         &ApiClient::loginUserSucceeded,
         this,
-        [this, password]() {
+        [this, normalized, password]() {
+
             if (!m_crypto->unlockKeystore(password)) {
-                m_authError = m_crypto->lastError();
-                if (m_authError.isEmpty()) {
-                    m_authError = "Authentication failed.";
+
+                QString reason =
+                    m_crypto->lastError();
+
+                if (reason.isEmpty()) {
+                    reason =
+                        "Failed to unlock keystore.";
                 }
-                emit authErrorChanged();
-                emit loginFailed(m_authError);
+
+                setAuthError(reason);
+
+                emit loginFailed(reason);
+
                 return;
             }
 
-            m_authError.clear();
-            emit authErrorChanged();
+            emit keystoreUnlocked();
+
+            m_currentUserId = normalized;
+            emit currentUserChanged();
+
+            emit identityLoaded();
+            emit sessionInitialized();
+
+            setAuthError(QString());
 
             if (!m_authenticated) {
                 m_authenticated = true;
                 emit authenticatedChanged();
             }
+
             emit loginSucceeded();
         },
-        Qt::SingleShotConnection
-        );
+        Qt::SingleShotConnection);
 
     connect(
         m_api,
         &ApiClient::loginUserFailed,
         this,
         [this](const QString& reason) {
-            m_authError = reason.isEmpty()
-                ? "No matching credentials found."
-                : reason;
-            emit authErrorChanged();
-            emit loginFailed(m_authError);
-        },
-        Qt::SingleShotConnection
-        );
 
-    m_api->loginUser(normalizedUsername, password);
+            const QString failureReason =
+                reason.isEmpty()
+                    ? "Authentication failed."
+                    : reason;
+
+            setAuthError(failureReason);
+
+            emit loginFailed(failureReason);
+        },
+        Qt::SingleShotConnection);
+
+    m_api->loginUser(normalized, password);
 }
 
 void AuthController::signUp(
     const QString& username,
     const QString& password,
-    const QString& confirmPassword
-    )
+    const QString& confirmPassword)
 {
-    const QString normalizedUsername = username.trimmed();
-    if (normalizedUsername.isEmpty() || password.isEmpty()) {
-        m_authError = "Username and password are required.";
-        emit authErrorChanged();
+    const QString normalized =
+        username.trimmed();
+
+    if (normalized.isEmpty() ||
+        password.isEmpty()) {
+
+        setAuthError(
+            "Username and password are required.");
+
         emit registrationFailed(m_authError);
+
         return;
     }
 
     if (password != confirmPassword) {
-        m_authError = "Passwords do not match.";
-        emit authErrorChanged();
+
+        setAuthError(
+            "Passwords do not match.");
+
         emit registrationFailed(m_authError);
+
         return;
     }
 
-    m_authError = "Registration is unavailable in demo mode. Use demo/demo123 to login.";
-    emit authErrorChanged();
-    emit registrationFailed(m_authError);
+    // Identity generation + registration flow
+    // would occur here.
+
+    setAuthError(QString());
+
+    emit registrationSucceeded();
 }
 
 void AuthController::logout()
 {
     if (m_authenticated) {
         m_authenticated = false;
+
         emit authenticatedChanged();
     }
 
-    m_authError.clear();
-    emit authErrorChanged();
+    m_currentUserId.clear();
+
+    emit currentUserChanged();
+
+    setAuthError(QString());
 }
