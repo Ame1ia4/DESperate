@@ -192,20 +192,20 @@ class TestMLKEMRatchet:
         kem_instance.decap_secret.return_value = b"\xee" * 32
         mock_oqs.KeyEncapsulation.return_value = kem_instance
 
-        monkeypatch.setattr("core.dh_ratchet.oqs", mock_oqs)
+        monkeypatch.setattr("core.dh_ratchet.dh_ratchet.oqs", mock_oqs)
         self._mock_kem = kem_instance
         return mock_oqs
 
     @pytest.fixture(autouse=True)
     def reset_pending_ct(self):
         """Reset class-level pending ciphertext before each test."""
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         MLKEMRatchet._pending_ciphertext = None
         yield
         MLKEMRatchet._pending_ciphertext = None
 
     def test_generate_key_pair_returns_correct_sizes(self):
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         pub, sec = MLKEMRatchet._generate_key_pair()
         assert len(pub) == 1568
         assert len(sec) == 3168
@@ -215,7 +215,7 @@ class TestMLKEMRatchet:
         When own_priv is None (sender), _perform_diffie_hellman must
         encapsulate and store the ciphertext in _pending_ciphertext.
         """
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         ss = MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
         assert MLKEMRatchet._pending_ciphertext is not None
         assert len(MLKEMRatchet._pending_ciphertext) == 1568
@@ -226,30 +226,30 @@ class TestMLKEMRatchet:
         When own_priv is set (receiver), no ciphertext is produced.
         _pending_ciphertext must remain None.
         """
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xcc" * 1568)
         assert MLKEMRatchet._pending_ciphertext is None
         assert ss == b"\xee" * 32
 
     def test_pop_pending_ciphertext_clears_after_read(self):
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
         ct = MLKEMRatchet.pop_pending_ciphertext()
         assert ct is not None
         assert MLKEMRatchet._pending_ciphertext is None
 
     def test_pop_pending_ciphertext_raises_when_empty(self):
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         with pytest.raises(RuntimeError, match="pending"):
             MLKEMRatchet.pop_pending_ciphertext()
 
     def test_sender_path_wrong_key_size_raises(self):
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         with pytest.raises(ValueError, match="1568"):
             MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 32)
 
     def test_receiver_path_wrong_ciphertext_size_raises(self):
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         with pytest.raises(ValueError, match="1568"):
             MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 32)
 
@@ -258,7 +258,7 @@ class TestMLKEMRatchet:
         Encapsulation (sender) and decapsulation (receiver) are mocked to
         return different values — verifies the paths are distinct.
         """
-        from core.dh_ratchet import MLKEMRatchet
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         sender_ss   = MLKEMRatchet._perform_diffie_hellman(None,        b"\xaa" * 1568)
         MLKEMRatchet._pending_ciphertext = None
         receiver_ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xcc" * 1568)
@@ -284,7 +284,7 @@ class TestWireFormat:
         This is a known tradeoff vs classical X25519 (68 bytes).
         Document in design doc.
         """
-        from core.session import _WIRE_HEADER_LEN, _MSG_INDEX_LEN
+        from core.dh_ratchet.session import _WIRE_HEADER_LEN, _MSG_INDEX_LEN
         from core.constants import KEM_PUBLIC_KEY_LEN, KEM_CIPHERTEXT_LEN
         assert _WIRE_HEADER_LEN == _MSG_INDEX_LEN + KEM_PUBLIC_KEY_LEN + KEM_CIPHERTEXT_LEN
         assert _WIRE_HEADER_LEN == 3140
@@ -319,7 +319,7 @@ class TestRatchetSessionPersistence:
     @pytest.fixture
     def mock_store(self, tmp_path):
         """A real StateStore backed by tmp_path — no encryption mock needed."""
-        from core.state_store import StateStore
+        from storage.state_store import StateStore
         return StateStore.create(tmp_path / "state", passphrase="test")
 
     @pytest.fixture
@@ -333,8 +333,8 @@ class TestRatchetSessionPersistence:
 
     @pytest.fixture
     def session(self, mock_store, mock_ratchet):
-        from core.session import RatchetSession
-        from core.header_counter import HeaderCounter
+        from core.dh_ratchet.session import RatchetSession
+        from core.dh_ratchet.header_counter import HeaderCounter
         counter = HeaderCounter(session_id="test-session")
         s = RatchetSession(mock_ratchet, mock_store, "test-session", counter)
         return s
@@ -369,8 +369,8 @@ class TestRatchetSessionPersistence:
         encrypted.ciphertext = b"\xbb" * 32
         mock_ratchet.encrypt_message.return_value = encrypted
 
-        with patch("core.dh_ratchet.MLKEMRatchet._pending_ciphertext", b"\xcc" * 1568):
-            with patch("core.dh_ratchet.MLKEMRatchet.pop_pending_ciphertext",
+        with patch("core.dh_ratchet.dh_ratchet.MLKEMRatchet._pending_ciphertext", b"\xcc" * 1568):
+            with patch("core.dh_ratchet.dh_ratchet.MLKEMRatchet.pop_pending_ciphertext",
                        return_value=b"\xcc" * 1568):
                 assert session._msg_index == 0
                 await session.encrypt(b"hello", b"ad")
@@ -396,13 +396,13 @@ class TestRatchetSessionPersistence:
 class TestMessageChainConstant:
 
     def test_constant_is_nonempty_bytes(self):
-        from core.session import _MESSAGE_CHAIN_CONSTANT
+        from core.dh_ratchet.session import _MESSAGE_CHAIN_CONSTANT
         assert isinstance(_MESSAGE_CHAIN_CONSTANT, bytes)
         assert len(_MESSAGE_CHAIN_CONSTANT) > 0
 
     def test_constant_is_domain_separated(self):
         """Chain constant must not equal any INFO_* string from kdf.py."""
-        from core.session import _MESSAGE_CHAIN_CONSTANT
+        from core.dh_ratchet.session import _MESSAGE_CHAIN_CONSTANT
         from core.kdf import (
             INFO_ROOT_KDF, INFO_CHAIN_KDF, INFO_HEADER_KEY,
             INFO_LOCAL_KEY_ENC, INFO_PQXDH_SK
