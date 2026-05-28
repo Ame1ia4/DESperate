@@ -111,7 +111,7 @@ export async function register(req, res) {
     })
 
   } catch (err) {
-    if (err.cause?.code === '23505') {
+    if (err.cause?.code === '23505') { //Postgres unique constraint error
       return res.status(409).json({ error: 'Registration failed' })
     }
     throw err
