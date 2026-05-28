@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
 import { register } from './handlers/auth/index.js'
+import { authInit } from './middleware/auth_init.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -82,6 +83,7 @@ app.get('/api/blockchain/verify', async (req, res) => {
 
 // ── Auth stubs (unprotected until WebAuthn/JWT is implemented) ──
 app.post('/auth/register', authLimiter, register)
+app.post('/auth/init',      authLimiter, authInit)
 
 
 // ── Message / key / device stubs ──
