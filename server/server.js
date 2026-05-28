@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
+import { register } from './handlers/auth/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -80,9 +81,8 @@ app.get('/api/blockchain/verify', async (req, res) => {
 })
 
 // ── Auth stubs (unprotected until WebAuthn/JWT is implemented) ──
-app.post('/auth/register',  authLimiter, (_, res) => res.json({ message: 'register stub' }))
-app.post('/auth/challenge', authLimiter, (_, res) => res.json({ message: 'challenge stub' }))
-app.post('/auth/verify',    authLimiter, (_, res) => res.json({ message: 'verify stub' }))
+app.post('/auth/register', authLimiter, register)
+
 
 // ── Message / key / device stubs ──
 app.post('/messages',        (_, res) => res.json({ message: 'send stub' }))
