@@ -35,9 +35,10 @@ CREATE TABLE users (
         UNIQUE
         NOT NULL,
 
-    -- Argon2id hash ONLY
-    password_hash VARCHAR(255)
-        NOT NULL,
+    -- SRP-6a credentials (RFC 5054). The server stores salt + verifier
+    -- only — it never sees the plaintext password.
+    srp_salt     VARCHAR(64)  NOT NULL,
+    srp_verifier VARCHAR(512) NOT NULL,
 
     created_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -59,6 +60,32 @@ CREATE TABLE users (
 
 CREATE INDEX idx_users_username
     ON users(username);
+
+-- =========================================================
+-- SRP CHALLENGES
+--
+-- Transient per-user handshake state for SRP round 1→2.
+-- One row per user (PK enforces this, preventing accumulation).
+-- auth_init DELETEs any existing row then INSERTs a fresh one.
+-- auth_verify DELETEs the row immediately after use — challenges
+-- are single-use regardless of whether verification succeeds.
+-- =========================================================
+
+CREATE TABLE srp_challenges (
+    user_id UUID PRIMARY KEY
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    -- Server's secret ephemeral b (hex). Never sent to the client.
+    srp_server_secret TEXT NOT NULL,
+
+    created_at TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- 5-minute window; auth_verify rejects rows past this.
+    expires_at TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+);
 
 -- =========================================================
 -- DEVICES

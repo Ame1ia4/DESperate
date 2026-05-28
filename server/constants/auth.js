@@ -20,11 +20,12 @@ export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES
 // Salt: RFC 5054 §2.8.2 allows 1–255 bytes; 64 hex chars (32 bytes) is the
 // secure-remote-password library default, not RFC-mandated.
 
-export const SRP_SALT_HEX      = 64   // library default (32 bytes)
-export const SRP_VERIFIER_HEX  = 512  // RFC 5054 Appendix A §3 — 2048-bit group
+export const SRP_SALT_HEX          = 64   // library default (32 bytes)
+export const SRP_VERIFIER_HEX      = 512  // RFC 5054 Appendix A §3 — 2048-bit group
 export const SRP_EPHEMERAL_HEX     = 512  // 2048-bit group: A,B = g^x mod N < 2^2048 → ≤256 bytes = 512 hex chars
 export const SRP_EPHEMERAL_HEX_MIN = 256  // lower bound: real 2048-bit group values are always close to 512 chars;
                                           // 256 tolerates libraries that strip leading zeros without accepting garbage
+export const SRP_SESSION_PROOF_HEX = 64   // M1/M2 = SHA-256 output = 32 bytes = 64 hex chars
 
 // ── Input validation ────────────────────────────────────────────────────────
 
