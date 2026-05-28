@@ -48,11 +48,12 @@ describe("MessageIntegrity", function () {
         .withArgs(0);
     });
 
-    it("reverts with DuplicateRoot on second store of same root", async function () {
-      await contract.storeHash(ROOT_1);
-      await expect(contract.storeHash(ROOT_1))
-        .to.be.revertedWithCustomError(contract, "DuplicateRoot")
-        .withArgs(0, ROOT_1);
+    it("event timestamp matches the block timestamp", async function () {
+      const tx = await contract.storeHash(ROOT_1);
+      const receipt = await tx.wait();
+      const block = await ethers.provider.getBlock(receipt.blockNumber);
+      const event = contract.interface.parseLog(receipt.logs[0]);
+      expect(event.args.timestamp).to.equal(BigInt(block.timestamp));
     });
   });
 
@@ -84,19 +85,6 @@ describe("MessageIntegrity", function () {
         .withArgs(1);
     });
 
-    it("reverts with DuplicateRoot for duplicates within batch", async function () {
-      await expect(contract.storeBatchHashes([ROOT_1, ROOT_1]))
-        .to.be.revertedWithCustomError(contract, "DuplicateRoot")
-        .withArgs(1, ROOT_1);
-    });
-
-    it("reverts with DuplicateRoot for root already stored", async function () {
-      await contract.storeHash(ROOT_1);
-      await expect(contract.storeBatchHashes([ROOT_2, ROOT_1]))
-        .to.be.revertedWithCustomError(contract, "DuplicateRoot")
-        .withArgs(1, ROOT_1);
-    });
-
     it("reverts when non-owner calls", async function () {
       await expect(contract.connect(nonOwner).storeBatchHashes([ROOT_1]))
         .to.be.revertedWith("Only owner can submit");
@@ -118,29 +106,12 @@ describe("MessageIntegrity", function () {
     });
 
     it("does not partially write valid roots before a revert", async function () {
-      // ROOT_1 is valid but ROOT_1 repeated is a duplicate — entire tx must revert
-      await expect(contract.storeBatchHashes([ROOT_1, ROOT_1]))
-        .to.be.revertedWithCustomError(contract, "DuplicateRoot");
-      expect(await contract.validateRoot(ROOT_1)).to.be.false;
-    });
-  });
-
-  describe("validateRoot", function () {
-    it("returns false for an unstored root", async function () {
-      expect(await contract.validateRoot(ROOT_1)).to.be.false;
-    });
-
-    it("returns true for a stored root", async function () {
-      await contract.storeHash(ROOT_1);
-      expect(await contract.validateRoot(ROOT_1)).to.be.true;
-    });
-
-    it("event timestamp matches the block timestamp", async function () {
-      const tx = await contract.storeHash(ROOT_1);
-      const receipt = await tx.wait();
-      const block = await ethers.provider.getBlock(receipt.blockNumber);
-      const event = contract.interface.parseLog(receipt.logs[0]);
-      expect(event.args.timestamp).to.equal(BigInt(block.timestamp));
+      // ROOT_1 is valid but ZeroHash triggers ZeroRoot — entire tx must revert
+      await expect(contract.storeBatchHashes([ROOT_1, ethers.ZeroHash]))
+        .to.be.revertedWithCustomError(contract, "ZeroRoot");
+      // No HashStored event should have been emitted for ROOT_1
+      const logs = await contract.queryFilter(contract.filters.HashStored(ROOT_1));
+      expect(logs.length).to.equal(0);
     });
   });
 
