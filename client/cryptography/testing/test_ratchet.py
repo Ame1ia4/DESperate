@@ -33,7 +33,7 @@ class TestRootChainKDF:
 
     @pytest.fixture
     def kdf(self):
-        from core.ratchet_kdf import RootChainKDF
+        from core.dh_ratchet.ratchet_kdf import RootChainKDF
         return RootChainKDF
 
     def test_output_length_respected(self, kdf):
@@ -73,7 +73,7 @@ class TestRootChainKDF:
         a call with INFO_CHAIN_KDF. If info strings were swapped,
         root and chain keys would collide.
         """
-        from core.ratchet_kdf import MessageChainKDF
+        from core.dh_ratchet.ratchet_kdf import MessageChainKDF
         key  = b"k" * 32
         data = b"d" * 32
         root_out  = kdf.calculate(64, key, data)
@@ -118,7 +118,7 @@ class TestMessageChainKDF:
 
     @pytest.fixture
     def kdf(self):
-        from core.ratchet_kdf import MessageChainKDF
+        from core.dh_ratchet.ratchet_kdf import MessageChainKDF
         return MessageChainKDF
 
     def test_output_length_respected(self, kdf):
@@ -162,7 +162,7 @@ class TestMessageChainKDF:
         MessageChainKDF and RootChainKDF must produce different outputs
         for the same inputs — their INFO_* strings must differ.
         """
-        from core.ratchet_kdf import RootChainKDF
+        from core.dh_ratchet.ratchet_kdf import RootChainKDF
         key  = b"k" * 32
         data = b"d" * 32
         assert kdf.calculate(64, key, data) != RootChainKDF.calculate(64, key, data)
@@ -319,7 +319,7 @@ class TestRatchetSessionPersistence:
     @pytest.fixture
     def mock_store(self, tmp_path):
         """A real StateStore backed by tmp_path — no encryption mock needed."""
-        from storage.state_store import StateStore
+        from core.state_store import StateStore
         return StateStore.create(tmp_path / "state", passphrase="test")
 
     @pytest.fixture
@@ -334,7 +334,7 @@ class TestRatchetSessionPersistence:
     @pytest.fixture
     def session(self, mock_store, mock_ratchet):
         from core.dh_ratchet.session import RatchetSession
-        from core.dh_ratchet.header_counter import HeaderCounter
+        from core.header_counter import HeaderCounter
         counter = HeaderCounter(session_id="test-session")
         s = RatchetSession(mock_ratchet, mock_store, "test-session", counter)
         return s
