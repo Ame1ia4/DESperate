@@ -7,6 +7,7 @@ import {
   USERNAME_MAX,
   USERNAME_REGEX,
   SRP_EPHEMERAL_HEX,
+  SRP_EPHEMERAL_HEX_MIN,
   SRP_VERIFIER_HEX,
 } from '../constants/auth.js'
 
@@ -41,7 +42,7 @@ export async function authInit(req, res) {
     username.length < USERNAME_MIN ||
     username.length > USERNAME_MAX ||
     !USERNAME_REGEX.test(username) ||
-    clientPublicEphemeral.length === 0 ||
+    clientPublicEphemeral.length < SRP_EPHEMERAL_HEX_MIN ||
     clientPublicEphemeral.length > SRP_EPHEMERAL_HEX ||
     !HEX_RE.test(clientPublicEphemeral)
   ) {

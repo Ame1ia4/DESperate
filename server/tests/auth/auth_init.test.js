@@ -8,6 +8,7 @@ import {
   USERNAME_MAX,
   SRP_SALT_HEX,
   SRP_EPHEMERAL_HEX,
+  SRP_EPHEMERAL_HEX_MIN,
 } from '../../constants/auth.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -210,8 +211,13 @@ describe('POST /auth/init', () => {
       assert.strictEqual(res.status, 200)
     })
 
-    it('rejects empty clientPublicEphemeral', async () => {
-      const res = await post({ ...validBody(), clientPublicEphemeral: '' })
+    it('accepts clientPublicEphemeral at minimum length (SRP_EPHEMERAL_HEX_MIN)', async () => {
+      const res = await post({ ...validBody(), clientPublicEphemeral: 'a'.repeat(SRP_EPHEMERAL_HEX_MIN) })
+      assert.strictEqual(res.status, 200)
+    })
+
+    it('rejects clientPublicEphemeral below minimum length', async () => {
+      const res = await post({ ...validBody(), clientPublicEphemeral: 'a'.repeat(SRP_EPHEMERAL_HEX_MIN - 1) })
       assert.strictEqual(res.status, 400)
     })
 
