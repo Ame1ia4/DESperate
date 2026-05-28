@@ -31,6 +31,9 @@ public:
     Q_INVOKABLE void receiveEnvelope(
         QJsonObject envelope
         );
+    Q_INVOKABLE void pullAndProcessMessages(
+        QString deviceId
+        );
 
 signals:
     void messageSendFailed(QString reason);

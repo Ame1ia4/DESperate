@@ -52,10 +52,28 @@ void AuthController::registerDevice(
         return;
     }
 
+    connect(
+        m_api,
+        &ApiClient::registerUserSucceeded,
+        this,
+        [this]() {
+            emit registrationSucceeded();
+        },
+        Qt::SingleShotConnection
+        );
+
+    connect(
+        m_api,
+        &ApiClient::registerUserFailed,
+        this,
+        [this]() {
+            emit registrationFailed("Registration failed.");
+        },
+        Qt::SingleShotConnection
+        );
+
     m_api->registerUser(
         username,
         bundle
         );
-
-    emit registrationSucceeded();
 }

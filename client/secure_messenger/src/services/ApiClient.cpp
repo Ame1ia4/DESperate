@@ -3,6 +3,7 @@
 #include <QNetworkRequest>
 #include <QJsonDocument>
 #include <QSslConfiguration>
+#include <QNetworkReply>
 
 ApiClient::ApiClient(QObject* parent)
     : QObject(parent)
@@ -21,7 +22,21 @@ void ApiClient::registerUser(
     bodyObject["bundle"] = bundle;
 
     QByteArray body = QJsonDocument(bodyObject).toJson();
-    m_network.post(request, body);
+    auto* reply = m_network.post(request, body);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error = reply->error();
+        const auto status = reply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute
+            ).toInt();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            emit registerUserFailed();
+            return;
+        }
+
+        emit registerUserSucceeded();
+    });
 }
 
 QNetworkRequest ApiClient::makeRequest(
@@ -54,7 +69,8 @@ void ApiClient::sendMessage(
     QByteArray body =
         QJsonDocument(encryptedEnvelope).toJson();
 
-    m_network.post(request, body);
+    auto* reply = m_network.post(request, body);
+    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }
 
 void ApiClient::pullMessages(
@@ -67,5 +83,51 @@ void ApiClient::pullMessages(
     bodyObject["device_id"] = deviceId;
 
     QByteArray body = QJsonDocument(bodyObject).toJson();
-    m_network.post(request, body);
+    auto* reply = m_network.post(request, body);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error = reply->error();
+        const auto status = reply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute
+            ).toInt();
+        const auto payload = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            emit pullMessagesFailed();
+            return;
+        }
+
+        const auto response = QJsonDocument::fromJson(payload).object();
+        const auto envelopes = response.value("envelopes").toArray();
+        emit pullMessagesSucceeded(envelopes);
+    });
+}
+
+void ApiClient::acknowledgeMessage(
+    const QString& messageId,
+    const QString& deviceId
+    )
+{
+    auto request = makeRequest("/messages/ack");
+
+    QJsonObject bodyObject;
+    bodyObject["message_id"] = messageId;
+    bodyObject["device_id"] = deviceId;
+
+    QByteArray body = QJsonDocument(bodyObject).toJson();
+    auto* reply = m_network.post(request, body);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
+        const auto error = reply->error();
+        const auto status = reply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute
+            ).toInt();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            emit acknowledgeMessageFailed(messageId);
+            return;
+        }
+
+        emit acknowledgeMessageSucceeded(messageId);
+    });
 }

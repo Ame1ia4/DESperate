@@ -43,3 +43,15 @@ std::vector<MessageEnvelope> LocalMessageStore::envelopes() const
 {
     return m_envelopes;
 }
+
+void LocalMessageStore::storeDecryptedMessage(
+    const DecryptedMessage& message
+    )
+{
+    m_decryptedMessages.push_back(message);
+}
+
+std::vector<DecryptedMessage> LocalMessageStore::decryptedMessages() const
+{
+    return m_decryptedMessages;
+}

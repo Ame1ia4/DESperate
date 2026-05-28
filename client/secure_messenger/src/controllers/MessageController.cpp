@@ -6,6 +6,7 @@
 #include "models/MessageModel.h"
 #include "types/Types.h"
 
+#include <QJsonArray>
 #include <QDateTime>
 
 MessageController::MessageController(
@@ -77,17 +78,28 @@ void MessageController::receiveEnvelope(
         &CryptoServiceClient::decryptCompleted,
         this,
         [this, envelope](const QString& plaintext) {
+            const auto senderTimestamp = QDateTime::fromString(
+                envelope.value("created_at").toString(),
+                Qt::ISODateWithMs
+                );
+
             DecryptedMessage message;
             message.id = envelope.value("id").toString();
             message.conversationId =
                 envelope.value("conversation_id").toString();
             message.senderDeviceId =
                 envelope.value("sender_device_id").toString();
-            message.timestamp = QDateTime::currentDateTimeUtc();
+            message.timestamp = senderTimestamp.isValid()
+                ? senderTimestamp
+                : QDateTime::currentDateTimeUtc();
             message.plaintext = plaintext;
 
+            m_store->storeDecryptedMessage(message);
             m_model->addMessage(message);
-            // ACK path to purge server queue will be added with pull/queue API.
+            m_api->acknowledgeMessage(
+                message.id,
+                envelope.value("recipient_device_id").toString()
+                );
             emit messageReceived();
         },
         Qt::SingleShotConnection
@@ -104,4 +116,36 @@ void MessageController::receiveEnvelope(
         );
 
     m_crypto->decryptMessageAsync(envelope);
+}
+
+void MessageController::pullAndProcessMessages(
+    QString deviceId
+    )
+{
+    connect(
+        m_api,
+        &ApiClient::pullMessagesSucceeded,
+        this,
+        [this](const QJsonArray& envelopes) {
+            for (const auto& envelopeValue : envelopes) {
+                const auto envelope = envelopeValue.toObject();
+                if (!envelope.isEmpty()) {
+                    receiveEnvelope(envelope);
+                }
+            }
+        },
+        Qt::SingleShotConnection
+        );
+
+    connect(
+        m_api,
+        &ApiClient::pullMessagesFailed,
+        this,
+        [this]() {
+            emit messageReceiveFailed("Message receive failed.");
+        },
+        Qt::SingleShotConnection
+        );
+
+    m_api->pullMessages(deviceId);
 }
