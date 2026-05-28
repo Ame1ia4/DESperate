@@ -36,11 +36,10 @@ before(() => new Promise(resolve => {
 
 after(() => new Promise(resolve => server.close(resolve)))
 
-// Happy-path client query results: INSERT user → INSERT device → INSERT opks
+// Happy-path client query results: INSERT user → INSERT device
 const happyClientResults = () => [
   { rows: [{ id: 'user-uuid' }] },
   { rows: [{ id: 'device-uuid' }] },
-  { rows: [] },
 ]
 
 beforeEach(() => {
@@ -76,17 +75,9 @@ describe('POST /auth/register', () => {
       assert.strictEqual(res.body.deviceId, 'device-uuid')
     })
 
-    it('accepts registration without optional fields (no idk_pq_pub, no last-resort OPK, empty opks)', async () => {
+    it('accepts registration without optional idk_pq_pub', async () => {
       const body = validBody()
       delete body.device.idk_pq_pub
-      delete body.device.last_resort_opk_pub
-      delete body.device.last_resort_opk_signature
-      body.device.opks = []
-      // Empty opks means no OPK insert — only 2 client queries needed
-      globalThis.__db.clientQueryResults = [
-        { rows: [{ id: 'user-uuid' }] },
-        { rows: [{ id: 'device-uuid' }] },
-      ]
       const res = await post(body)
       assert.strictEqual(res.status, 201)
     })
@@ -254,36 +245,6 @@ describe('POST /auth/register', () => {
       assert.match(res.body.error, /idk_pq_pub/)
     })
 
-    it('rejects when last_resort_opk_pub is provided but last_resort_opk_signature is null', async () => {
-      const body = validBody()
-      body.device.last_resort_opk_pub       = randomHex(X25519_PUB_BYTES)
-      body.device.last_resort_opk_signature = null
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-    })
-
-    it('rejects opks array with 101 entries', async () => {
-      const body = validBody()
-      body.device.opks = Array.from({ length: 101 }, () => randomHex(X25519_PUB_BYTES))
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid opks')
-    })
-
-    it('rejects an opk entry with invalid hex', async () => {
-      const body = validBody()
-      body.device.opks = ['z'.repeat(X25519_PUB_BYTES * 2)]
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-    })
-
-    it('rejects opks when not an array', async () => {
-      const body = validBody()
-      body.device.opks = 'notanarray'
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid opks')
-    })
   })
 
   describe('signature verification attacks', () => {
@@ -349,28 +310,6 @@ describe('POST /auth/register', () => {
       assert.strictEqual(res.body.error, 'Invalid key bundle')
     })
 
-    it('rejects last-resort OPK sig when tampered (all zeros)', async () => {
-      const body     = validBody()
-      const lrOpkPub = randomBytes(32)
-      body.device.last_resort_opk_pub       = lrOpkPub.toString('hex')
-      body.device.last_resort_opk_signature = zeroHex(DUAL_SIG_BYTES)
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid key bundle')
-    })
-
-    it('rejects last-resort OPK sig signed over a different message', async () => {
-      const body       = validBody()
-      const lrOpkPub   = randomBytes(32)
-      const wrongMsg   = randomBytes(32)
-      const ed25519Sig = Buffer.from(ed25519.sign(wrongMsg, bundle.ed25519PrivKey))
-      const mlDsaSig   = Buffer.from(ml_dsa65.sign(wrongMsg, bundle.mlDsaSecKey))
-      body.device.last_resort_opk_pub       = lrOpkPub.toString('hex')
-      body.device.last_resort_opk_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid key bundle')
-    })
   })
 
   describe('username collision (timing-safe, oracle prevention)', () => {

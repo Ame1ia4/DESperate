@@ -5,7 +5,7 @@ import { parseHex } from '../../utils/parseHex.js'
 import {
   ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM,
   USERNAME_REGEX, USERNAME_MIN, USERNAME_MAX,
-  PASSWORD_MIN, DEVICE_NAME_MAX, OPK_MAX,
+  PASSWORD_MIN, DEVICE_NAME_MAX,
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
 } from '../../constants/auth.js'
@@ -41,8 +41,7 @@ export async function register(req, res) {
 
   // Parse and validate all binary key bundle fields
   let idkClassicalPub, signingPub, signedPrekeyPub, signedPrekeySig
-  let idkPqPub = null, lastResortOpkPub = null, lastResortOpkSig = null
-  let opks
+  let idkPqPub = null
 
   try {
     idkClassicalPub = parseHex(device.idk_classical_pub,       X25519_PUB_BYTES,  'idk_classical_pub')
@@ -53,16 +52,6 @@ export async function register(req, res) {
     if (device.idk_pq_pub != null) {
       idkPqPub = parseHex(device.idk_pq_pub, MLKEM_PUB_BYTES, 'idk_pq_pub')
     }
-
-    if (device.last_resort_opk_pub != null) {
-      lastResortOpkPub = parseHex(device.last_resort_opk_pub,       X25519_PUB_BYTES, 'last_resort_opk_pub')
-      lastResortOpkSig = parseHex(device.last_resort_opk_signature, DUAL_SIG_BYTES,   'last_resort_opk_signature')
-    }
-
-    if (!Array.isArray(device.opks) || device.opks.length > OPK_MAX) {
-      return res.status(400).json({ error: 'Invalid opks' })
-    }
-    opks = device.opks.map((hex, i) => parseHex(hex, X25519_PUB_BYTES, `opks[${i}]`))
 
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message })
@@ -76,17 +65,6 @@ export async function register(req, res) {
     signedPrekeySig.subarray(ED25519_SIG_BYTES)
   )) {
     return res.status(400).json({ error: 'Invalid key bundle' })
-  }
-
-  // Verify last-resort OPK if provided — same signing key, different message
-  if (lastResortOpkPub && lastResortOpkSig) {
-    if (!await verifyDualSignature(
-      signingPub, lastResortOpkPub,
-      lastResortOpkSig.subarray(0, ED25519_SIG_BYTES),
-      lastResortOpkSig.subarray(ED25519_SIG_BYTES)
-    )) {
-      return res.status(400).json({ error: 'Invalid key bundle' })
-    }
   }
 
   // Run in parallel — always hash so timing is identical whether username exists or not
@@ -116,9 +94,8 @@ export async function register(req, res) {
           user_id, device_name,
           idk_classical_pub, idk_pq_pub,
           identity_signing_pub,
-          signed_prekey_pub, signed_prekey_signature,
-          last_resort_opk_pub, last_resort_opk_signature
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+          signed_prekey_pub, signed_prekey_signature
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           user.id,
           device.device_name ?? null,
@@ -127,19 +104,8 @@ export async function register(req, res) {
           signingPub,
           signedPrekeyPub,
           signedPrekeySig,
-          lastResortOpkPub,
-          lastResortOpkSig,
         ]
       )
-
-      if (opks.length > 0) {
-        // Build multi-row insert: ($1, $2), ($1, $3), ... — device_id is always $1
-        const placeholders = opks.map((_, i) => `($1, $${i + 2})`).join(', ')
-        await client.query(
-          `INSERT INTO one_time_prekeys (device_id, opk_pub) VALUES ${placeholders}`,
-          [deviceRow.id, ...opks]
-        )
-      }
 
       return deviceRow.id
     })
@@ -156,9 +122,6 @@ export async function register(req, res) {
     signedPrekeyPub.fill(0)
     signedPrekeySig.fill(0)
     idkPqPub?.fill(0)
-    lastResortOpkPub?.fill(0)
-    lastResortOpkSig?.fill(0)
-    for (const opk of opks) opk.fill(0)
   }
 
   return res.status(201).json({ deviceId })

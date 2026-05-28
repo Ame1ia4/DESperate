@@ -27,9 +27,6 @@ export function generateKeyBundle() {
   const signedPrekeySig    = Buffer.concat([Buffer.from(spkEd25519Sig), Buffer.from(spkMlDsaSig)])
   const signedPrekeySigHex = signedPrekeySig.toString('hex')
 
-  const opkPub = randomBytes(32)
-  const opkHex = opkPub.toString('hex')
-
   return {
     ed25519PrivKey,
     ed25519PubKey: Buffer.from(ed25519PubKey),
@@ -40,7 +37,6 @@ export function generateKeyBundle() {
     signedPrekeyPub,
     signedPrekeyPubHex,
     signedPrekeySigHex,
-    opkHex,
   }
 }
 
@@ -51,7 +47,6 @@ export function validDeviceBody(bundle) {
     identity_signing_pub:    bundle.signingPubHex,
     signed_prekey_pub:       bundle.signedPrekeyPubHex,
     signed_prekey_signature: bundle.signedPrekeySigHex,
-    opks:                    [bundle.opkHex],
   }
 }
 
