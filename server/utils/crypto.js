@@ -1,4 +1,4 @@
-import { ed25519 } from '@noble/curves/ed25519'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
 import { ED25519_PUB_BYTES } from '../constants/auth.js'
 
@@ -19,7 +19,7 @@ export function verifyDualSignature(signingPub, message, ed25519Sig, mlDsaSig) {
   }
 
   try {
-    mlDsaOk = ml_dsa65.verify(mlDsaPub, message, mlDsaSig)
+    mlDsaOk = ml_dsa65.verify(mlDsaSig, message, mlDsaPub)
   } catch {
     mlDsaOk = false
   }

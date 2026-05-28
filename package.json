@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "setup": "git config --local core.hooksPath .githooks",
+    "test": "vitest run",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "migrate:create": "node-pg-migrate create"
@@ -19,6 +20,10 @@
     "url": "https://github.com/Ame1ia4/DESperate/issues"
   },
   "homepage": "https://github.com/Ame1ia4/DESperate#readme",
+  "devDependencies": {
+    "supertest": "7.1.0",
+    "vitest": "3.2.2"
+  },
   "dependencies": {
     "@noble/ed25519": "3.1.0",
     "@noble/hashes": "2.2.0",

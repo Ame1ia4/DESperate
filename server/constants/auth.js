@@ -6,9 +6,9 @@ import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 export const ED25519_PUB_BYTES  = 32
 export const ED25519_SIG_BYTES  = 64
 export const X25519_PUB_BYTES   = 32
-export const MLDSA_PUB_BYTES    = ml_dsa65.publicKeyLen
-export const MLDSA_SIG_BYTES    = ml_dsa65.signatureLen
-export const MLKEM_PUB_BYTES    = ml_kem768.publicKeyLen
+export const MLDSA_PUB_BYTES    = ml_dsa65.lengths.publicKey
+export const MLDSA_SIG_BYTES    = ml_dsa65.lengths.signature
+export const MLKEM_PUB_BYTES    = ml_kem768.lengths.publicKey
 export const SIGNING_PUB_BYTES  = ED25519_PUB_BYTES + MLDSA_PUB_BYTES
 export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES
 
