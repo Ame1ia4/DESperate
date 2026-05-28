@@ -5,31 +5,33 @@
 #include <QHash>
 #include <QVector>
 
-    class ApiClient;
+#include "src/models/ConversationModel.h"
+#include "src/models/MessageModel.h"
+#include "src/types/Types.h"
+
+class ApiClient;
 class CryptoServiceClient;
 class LocalMessageStore;
 class TrustStore;
-
-class ConversationModel;
-class MessageModel;
-
-struct DecryptedMessage;
 
 class ConversationController : public QObject
 {
     Q_OBJECT
 
-    Q_PROPERTY(ConversationModel* conversations
-                   READ conversations
-                       CONSTANT)
+    Q_PROPERTY(
+        ConversationModel* conversations
+            READ conversations
+                CONSTANT)
 
-    Q_PROPERTY(MessageModel* messages
-                   READ messages
-                       CONSTANT)
+    Q_PROPERTY(
+        MessageModel* messages
+            READ messages
+                CONSTANT)
 
-    Q_PROPERTY(QString currentConversationId
-                   READ currentConversationId
-                       NOTIFY currentConversationIdChanged)
+    Q_PROPERTY(
+        QString currentConversationId
+            READ currentConversationId
+                NOTIFY currentConversationIdChanged)
 
 public:
     explicit ConversationController(
@@ -61,11 +63,12 @@ public slots:
 signals:
     void currentConversationIdChanged();
 
-    void errorOccurred(QString reason);
+    void errorOccurred(
+        QString reason);
 
     void fingerprintMismatch(
-        QString expected,
-        QString received);
+        QString expectedFingerprint,
+        QString receivedFingerprint);
 
 private:
     bool validateMessage(
@@ -73,21 +76,17 @@ private:
 
 private:
     ApiClient* m_apiClient = nullptr;
-
     CryptoServiceClient* m_cryptoClient = nullptr;
-
     LocalMessageStore* m_store = nullptr;
-
     TrustStore* m_trust = nullptr;
 
     ConversationModel* m_conversationModel = nullptr;
-
     MessageModel* m_messageModel = nullptr;
 
     QString m_currentConversationId;
 
-    QHash<QString,
-          QVector<DecryptedMessage>>
+    QHash<
+        QString,
+        QVector<DecryptedMessage>>
         m_messagesByConversation;
 };
-

@@ -5,11 +5,13 @@
 
 #include "src/models/ConversationModel.h"
 #include "src/models/MessageModel.h"
+
 #include "src/storage/TrustStore.h"
+
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
+
 #include "src/storage/LocalMessageStore.h"
-#include "src/types/Types.h"
 
 namespace {
 constexpr int MAX_MESSAGE_LENGTH = 4096;
@@ -91,7 +93,7 @@ void ConversationController::loadConversations()
     m_conversationModel
         ->setConversations(items);
 
-    // Initial local cache seed.
+    // Seed local cache once.
     if (!m_messagesByConversation.isEmpty()) {
         return;
     }
@@ -143,7 +145,7 @@ void ConversationController::openConversation(
 
     m_messageModel->clear();
 
-    // Cached messages first for instant UI.
+    // Cached messages first.
     const auto cachedMessages =
         m_messagesByConversation.value(
             conversationId);
@@ -152,6 +154,7 @@ void ConversationController::openConversation(
          cachedMessages) {
 
         if (!message.isDeleted) {
+
             m_messageModel
                 ->addMessage(message);
         }
@@ -181,7 +184,8 @@ void ConversationController::openConversation(
 void ConversationController::appendLocalMessage(
     const DecryptedMessage& message)
 {
-    if (!validateMessage(message.plaintext)) {
+    if (!validateMessage(
+            message.plaintext)) {
 
         emit errorOccurred(
             "Invalid message.");

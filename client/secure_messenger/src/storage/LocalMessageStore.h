@@ -1,26 +1,65 @@
+
 #pragma once
 
 #include <QObject>
+#include <QHash>
 #include <QJsonObject>
-#include <vector>
+#include <QString>
+#include <QVector>
 
-#include "../types/Types.h"
+#include "src/types/Types.h"
 
-class LocalMessageStore : public QObject
+    class LocalMessageStore : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit LocalMessageStore(QObject* parent = nullptr);
+    explicit LocalMessageStore(
+        QObject* parent = nullptr);
 
-    void storeOutgoingMessage(const QJsonObject& envelope);
-    void storeOutgoingEnvelope(const MessageEnvelope& envelope);
-    void storeDecryptedMessage(const DecryptedMessage& message);
+    // Encrypted envelope persistence
+    void storeOutgoingMessage(
+        const QJsonObject& envelope);
 
-    std::vector<MessageEnvelope> envelopes() const;
-    std::vector<DecryptedMessage> decryptedMessages() const;
+    void storeOutgoingEnvelope(
+        const MessageEnvelope& envelope);
+
+    QVector<MessageEnvelope> envelopes()
+        const;
+
+    QVector<MessageEnvelope>
+    envelopesForConversation(
+        const QString& conversationId)
+        const;
+
+    // Local decrypted cache
+    void storeDecryptedMessage(
+        const DecryptedMessage& message);
+
+    QVector<DecryptedMessage>
+    decryptedMessages() const;
+
+    QVector<DecryptedMessage>
+    messagesForConversation(
+        const QString& conversationId)
+        const;
+
+    bool containsMessage(
+        const QString& messageId)
+        const;
+
+    void clearConversation(
+        const QString& conversationId);
+
+    void clearAll();
 
 private:
-    std::vector<MessageEnvelope> m_envelopes;
-    std::vector<DecryptedMessage> m_decryptedMessages;
+    QVector<MessageEnvelope>
+        m_envelopes;
+
+    QVector<DecryptedMessage>
+        m_decryptedMessages;
+
+    QHash<QString, int>
+        m_messageIndex;
 };
