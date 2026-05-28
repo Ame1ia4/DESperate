@@ -20,12 +20,10 @@
     "url": "https://github.com/Ame1ia4/DESperate/issues"
   },
   "homepage": "https://github.com/Ame1ia4/DESperate#readme",
-  "devDependencies": {},
   "dependencies": {
     "@noble/ed25519": "3.1.0",
     "@noble/hashes": "2.2.0",
     "@noble/post-quantum": "0.6.1",
-    "argon2": "0.44.0",
     "cors": "2.8.6",
     "dotenv": "17.4.2",
     "ethers": "6.16.0",
@@ -34,6 +32,7 @@
     "helmet": "8.1.0",
     "node-pg-migrate": "8.0.4",
     "pg": "8.21.0",
+    "secure-remote-password": "0.3.1",
     "ws": "8.20.1"
   },
   "type": "module"

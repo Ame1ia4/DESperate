@@ -2,14 +2,14 @@ import { describe, it, before, after, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { randomBytes } from 'node:crypto'
-import argon2 from 'argon2'
+import srpClient from 'secure-remote-password/client.js'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
 import { generateKeyBundle, validDeviceBody, zeroHex, randomHex } from '../helpers/keyFixtures.js'
 import {
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
-  ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM,
+  SRP_SALT_HEX, SRP_VERIFIER_HEX,
 } from '../../constants/auth.js'
 import { register } from '../../handlers/auth/register.js'
 
@@ -24,7 +24,12 @@ function createApp() {
 let server
 let baseUrl
 let bundle
-let argon2HashSpy
+
+// Generate a valid SRP salt + verifier once for the test suite
+const testSalt     = srpClient.generateSalt()
+const testVerifier = srpClient.deriveVerifier(
+  srpClient.derivePrivateKey(testSalt, 'testuser', 'securePassword123')
+)
 
 before(() => new Promise(resolve => {
   bundle = generateKeyBundle()
@@ -44,10 +49,6 @@ const happyClientResults = () => [
 
 beforeEach(() => {
   mock.restoreAll()
-  argon2HashSpy = mock.method(
-    argon2, 'hash',
-    async () => '$argon2id$v=19$m=65536,t=3,p=4$fakesalt$fakehash'
-  )
   globalThis.__db.queryImpl          = async () => ({ rows: [] }) // username not taken
   globalThis.__db.clientQueryResults = happyClientResults()
 })
@@ -63,7 +64,8 @@ async function post(body) {
 
 const validBody = () => ({
   username: 'testuser',
-  password: 'securePassword123',
+  salt:     testSalt,
+  verifier: testVerifier,
   device:   validDeviceBody(bundle),
 })
 
@@ -87,18 +89,6 @@ describe('POST /auth/register', () => {
       body.device.device_name = 'My Device'
       const res = await post(body)
       assert.strictEqual(res.status, 201)
-    })
-
-    it('calls argon2.hash with correct OWASP parameters', async () => {
-      await post(validBody())
-      assert.strictEqual(argon2HashSpy.mock.calls.length, 1)
-      assert.strictEqual(argon2HashSpy.mock.calls[0].arguments[0], 'securePassword123')
-      assert.deepStrictEqual(argon2HashSpy.mock.calls[0].arguments[1], {
-        type:        argon2.argon2id,
-        memoryCost:  ARGON2_MEMORY_COST,
-        timeCost:    ARGON2_TIME_COST,
-        parallelism: ARGON2_PARALLELISM,
-      })
     })
   })
 
@@ -137,26 +127,57 @@ describe('POST /auth/register', () => {
     })
   })
 
-  describe('password validation', () => {
-    const cases = [
-      [undefined,    'missing'],
-      [null,         'null'],
-      [42,           'number type'],
-      ['tooshort11', 'too short (11 chars)'],
-      ['',           'empty string'],
-    ]
+  describe('SRP credential validation', () => {
+    it('rejects missing salt', async () => {
+      const body = validBody()
+      delete body.salt
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid salt')
+    })
 
-    for (const [password, desc] of cases) {
-      it(`rejects password: ${desc}`, async () => {
-        const res = await post({ ...validBody(), password })
-        assert.strictEqual(res.status, 400)
-        assert.strictEqual(res.body.error, 'Invalid password')
-      })
-    }
+    it('rejects salt that is too short', async () => {
+      const res = await post({ ...validBody(), salt: 'a'.repeat(SRP_SALT_HEX - 1) })
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid salt')
+    })
 
-    it('accepts password at minimum length (15 chars)', async () => {
-      const res = await post({ ...validBody(), password: 'a'.repeat(15) })
-      assert.strictEqual(res.status, 201)
+    it('rejects salt that is too long', async () => {
+      const res = await post({ ...validBody(), salt: 'a'.repeat(SRP_SALT_HEX + 1) })
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid salt')
+    })
+
+    it('rejects salt with non-hex characters', async () => {
+      const res = await post({ ...validBody(), salt: 'g'.repeat(SRP_SALT_HEX) })
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid salt')
+    })
+
+    it('rejects missing verifier', async () => {
+      const body = validBody()
+      delete body.verifier
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid verifier')
+    })
+
+    it('rejects verifier that is too short', async () => {
+      const res = await post({ ...validBody(), verifier: 'a'.repeat(SRP_VERIFIER_HEX - 1) })
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid verifier')
+    })
+
+    it('rejects verifier that is too long', async () => {
+      const res = await post({ ...validBody(), verifier: 'a'.repeat(SRP_VERIFIER_HEX + 1) })
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid verifier')
+    })
+
+    it('rejects verifier with non-hex characters', async () => {
+      const res = await post({ ...validBody(), verifier: 'z'.repeat(SRP_VERIFIER_HEX) })
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid verifier')
     })
   })
 
@@ -244,7 +265,6 @@ describe('POST /auth/register', () => {
       assert.strictEqual(res.status, 400)
       assert.match(res.body.error, /idk_pq_pub/)
     })
-
   })
 
   describe('signature verification attacks', () => {
@@ -309,21 +329,14 @@ describe('POST /auth/register', () => {
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
     })
-
   })
 
-  describe('username collision (timing-safe, oracle prevention)', () => {
+  describe('username collision (oracle prevention)', () => {
     it('returns 409 when username is already taken', async () => {
       globalThis.__db.queryImpl = async () => ({ rows: [{ 1: 1 }] })
       const res = await post(validBody())
       assert.strictEqual(res.status, 409)
       assert.strictEqual(res.body.error, 'Registration failed')
-    })
-
-    it('still calls argon2.hash even when username is taken (timing-safe)', async () => {
-      globalThis.__db.queryImpl = async () => ({ rows: [{ 1: 1 }] })
-      await post(validBody())
-      assert.strictEqual(argon2HashSpy.mock.calls.length, 1)
     })
 
     it('returns 409 on DB unique constraint violation (code 23505)', async () => {

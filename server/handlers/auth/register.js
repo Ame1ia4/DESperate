@@ -1,18 +1,18 @@
-import argon2 from 'argon2'
 import { query, withTransaction } from '../../database/db.js'
 import { verifyDualSignature } from '../../utils/crypto.js'
 import { parseHex } from '../../utils/parseHex.js'
 import {
-  ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM,
+  SRP_SALT_HEX, SRP_VERIFIER_HEX,
   USERNAME_REGEX, USERNAME_MIN, USERNAME_MAX,
-  PASSWORD_MIN, DEVICE_NAME_MAX,
+  DEVICE_NAME_MAX,
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
 } from '../../constants/auth.js'
 
-// Registers a new user with their first device and key bundle.
+const HEX_RE = /^[0-9a-f]+$/i
+
 export async function register(req, res) {
-  const { username, password, device } = req.body
+  const { username, salt, verifier, device } = req.body
 
   if (
     typeof username !== 'string' ||
@@ -23,8 +23,20 @@ export async function register(req, res) {
     return res.status(400).json({ error: 'Invalid username' })
   }
 
-  if (typeof password !== 'string' || password.length < PASSWORD_MIN) {
-    return res.status(400).json({ error: 'Invalid password' })
+  if (
+    typeof salt !== 'string' ||
+    salt.length !== SRP_SALT_HEX ||
+    !HEX_RE.test(salt)
+  ) {
+    return res.status(400).json({ error: 'Invalid salt' })
+  }
+
+  if (
+    typeof verifier !== 'string' ||
+    verifier.length !== SRP_VERIFIER_HEX ||
+    !HEX_RE.test(verifier)
+  ) {
+    return res.status(400).json({ error: 'Invalid verifier' })
   }
 
   if (!device || typeof device !== 'object' || Array.isArray(device)) {
@@ -39,7 +51,6 @@ export async function register(req, res) {
     return res.status(400).json({ error: 'Invalid device_name' })
   }
 
-  // Parse and validate all binary key bundle fields
   let idkClassicalPub, signingPub, signedPrekeyPub, signedPrekeySig
   let idkPqPub = null
 
@@ -58,7 +69,6 @@ export async function register(req, res) {
     throw err
   }
 
-  // Verify signed prekey — dual Ed25519 + ML-DSA over signed_prekey_pub
   if (!await verifyDualSignature(
     signingPub, signedPrekeyPub,
     signedPrekeySig.subarray(0, ED25519_SIG_BYTES),
@@ -67,16 +77,7 @@ export async function register(req, res) {
     return res.status(400).json({ error: 'Invalid key bundle' })
   }
 
-  // Run in parallel — always hash so timing is identical whether username exists or not
-  const [{ rows: taken }, passwordHash] = await Promise.all([
-    query('SELECT 1 FROM users WHERE username = $1', [username]),
-    argon2.hash(password, {
-      type:        argon2.argon2id,
-      memoryCost:  ARGON2_MEMORY_COST,
-      timeCost:    ARGON2_TIME_COST,
-      parallelism: ARGON2_PARALLELISM,
-    }),
-  ])
+  const { rows: taken } = await query('SELECT 1 FROM users WHERE username = $1', [username])
   if (taken.length > 0) {
     return res.status(409).json({ error: 'Registration failed' })
   }
@@ -85,8 +86,8 @@ export async function register(req, res) {
   try {
     deviceId = await withTransaction(async (client) => {
       const { rows: [user] } = await client.query(
-        'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id',
-        [username, passwordHash]
+        'INSERT INTO users (username, srp_salt, srp_verifier) VALUES ($1, $2, $3) RETURNING id',
+        [username, salt, verifier]
       )
 
       const { rows: [deviceRow] } = await client.query(
@@ -111,12 +112,11 @@ export async function register(req, res) {
     })
 
   } catch (err) {
-    if (err.cause?.code === '23505') { //Postgres unique constraint error
+    if (err.cause?.code === '23505') {
       return res.status(409).json({ error: 'Registration failed' })
     }
     throw err
   } finally {
-    // Zero key material from memory — Buffers have fixed addresses so fill(0) is reliable
     idkClassicalPub.fill(0)
     signingPub.fill(0)
     signedPrekeyPub.fill(0)
