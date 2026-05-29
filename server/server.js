@@ -8,9 +8,10 @@ import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
-import { register } from './handlers/auth/index.js'
+import { register, authChallenge } from './handlers/auth/index.js'
 import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
+import { requireDeviceAuth } from './middleware/device_auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -82,21 +83,21 @@ app.get('/api/blockchain/verify', async (req, res) => {
   }
 })
 
-// ── Auth stubs (unprotected until WebAuthn/JWT is implemented) ──
+// ── Auth  ──
 app.post('/auth/register', authLimiter, register)
 app.post('/auth/init',     authLimiter, authInit)
 app.post('/auth/verify',   authLimiter, authVerify)
+app.get('/auth/challenge', authLimiter, authChallenge)
 
+// ── Protected routes (require device challenge-response auth) ──
+app.post('/messages',        requireDeviceAuth, (_, res) => res.json({ message: 'send stub' }))
+app.get('/messages/pending', requireDeviceAuth, (_, res) => res.json({ message: 'pull stub' }))
+app.post('/messages/:id/ack',requireDeviceAuth, (_, res) => res.json({ message: 'ack stub' }))
 
-// ── Message / key / device stubs ──
-app.post('/messages',        (_, res) => res.json({ message: 'send stub' }))
-app.get('/messages/pending', (_, res) => res.json({ message: 'pull stub' }))
-app.post('/messages/:id/ack',(_, res) => res.json({ message: 'ack stub' }))
+app.post('/keys/opks',      requireDeviceAuth, (_, res) => res.json({ message: 'opk upload stub' }))
+app.get('/keys/:username',  requireDeviceAuth, (_, res) => res.json({ message: 'key fetch stub' }))
 
-app.post('/keys/opks',      (_, res) => res.json({ message: 'opk upload stub' }))
-app.get('/keys/:username',  (_, res) => res.json({ message: 'key fetch stub' }))
-
-app.post('/devices/revoke', (_, res) => res.json({ message: 'revoke stub' }))
+app.post('/devices/revoke', requireDeviceAuth, (_, res) => res.json({ message: 'revoke stub' }))
 
 // ── 404 ──
 app.use((_, res) => res.status(404).json({ error: 'Not found' }))

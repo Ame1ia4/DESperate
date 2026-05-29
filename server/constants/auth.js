@@ -27,9 +27,15 @@ export const SRP_EPHEMERAL_HEX_MIN = 256  // lower bound: real 2048-bit group va
                                           // 256 tolerates libraries that strip leading zeros without accepting garbage
 export const SRP_SESSION_PROOF_HEX = 64   // M1/M2 = SHA-256 output = 32 bytes = 64 hex chars
 
+// ── Challenge-response auth ─────────────────────────────────────────────────
+
+export const CHALLENGE_NONCE_BYTES = 32
+export const CHALLENGE_NONCE_HEX   = CHALLENGE_NONCE_BYTES * 2
+
 // ── Input validation ────────────────────────────────────────────────────────
 
 export const HEX_RE           = /^[0-9a-f]+$/i
+export const UUID_RE          = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const USERNAME_REGEX   = /^[a-zA-Z0-9_]+$/
 export const USERNAME_MIN     = 3
 export const USERNAME_MAX     = 50
