@@ -15,16 +15,10 @@ ApiClient::ApiClient(QObject* parent)
         &m_network,
         &QNetworkAccessManager::sslErrors,
         this,
-        [](QNetworkReply* reply,
-           const QList<QSslError>& errors) {
-
-            Q_UNUSED(reply)
-
-            for (const auto& e : errors) {
-                qWarning()
-                    << "TLS error:"
-                    << e.errorString();
-            }
+        [](QNetworkReply* reply, const QList<QSslError>& errors) {
+            for (const auto& e : errors)
+                qWarning() << "TLS error:" << e.errorString();
+            reply->abort();  // never silently ignore SSL errors
         });
 }
 
@@ -71,6 +65,10 @@ void ApiClient::loginUser(
     const QString& password
     )
 {
+    // TODO: Replace with a proper SRP-6a exchange (RFC 5054, 2048-bit group).
+    // Sending a plaintext password violates the auth design — the password must
+    // never leave the client. SRP proves knowledge of the password without
+    // transmitting it. See CLAUDE.md § Authentication model.
     auto request = makeRequest("/auth/login");
 
     QJsonObject bodyObject;

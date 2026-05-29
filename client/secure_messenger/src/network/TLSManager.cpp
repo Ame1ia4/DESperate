@@ -1,50 +1,18 @@
 #include "TLSManager.h"
 #include "TrustStore.h"
+#include "SocketUtils.h"
 
 #include <QThread>
 #include <QMutex>
 #include <QMutexLocker>
-
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-   using sock_t = SOCKET;
-   static constexpr sock_t kInvalidSock = INVALID_SOCKET;
-   static void closeSock(sock_t s)   { ::closesocket(s); }
-   static bool sockInvalid(sock_t s) { return s == INVALID_SOCKET; }
-   static void setNonBlocking(sock_t s, bool on) {
-       u_long mode = on ? 1 : 0;
-       ::ioctlsocket(s, FIONBIO, &mode);
-   }
-   static bool connectInProgress() {
-       const int e = WSAGetLastError();
-       return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
-   }
-#else
-#  include <sys/socket.h>
-#  include <netdb.h>
-#  include <unistd.h>
-#  include <fcntl.h>
-#  include <errno.h>
-#  include <signal.h>
-   using sock_t = int;
-   static constexpr sock_t kInvalidSock = -1;
-   static void closeSock(sock_t s)   { ::close(s); }
-   static bool sockInvalid(sock_t s) { return s < 0; }
-   static void setNonBlocking(sock_t s, bool on) {
-       int flags = ::fcntl(s, F_GETFL, 0);
-       ::fcntl(s, F_SETFL, on ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
-   }
-   static bool connectInProgress() { return errno == EINPROGRESS; }
-#endif
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 #include <openssl/sha.h>
 
-static constexpr int kConnectTimeoutSecs = 10;
+#include <QSslConfiguration>
+#include <QSslSocket>
 
 // ── Worker ────────────────────────────────────────────────────────────────
 // Runs on its own QThread. All blocking network/TLS work happens here.
@@ -106,6 +74,12 @@ signals:
     void dataReceived(const QByteArray& data);
 
 private:
+    // Each helper emits connectionFailed + calls cleanup() on error and returns false.
+    bool buildSslContext();
+    bool tcpConnect(const QByteArray& hostBytes, quint16 port);
+    bool performHandshake(const QByteArray& hostBytes, const QByteArray& pinnedSha256);
+    void runIOLoop();
+
     void cleanup()
     {
         if (m_ssl) {
@@ -153,10 +127,13 @@ private:
 #endif
 };
 
+// ── Worker::run ───────────────────────────────────────────────────────────
+
 void TLSManager::Worker::run(const QString& hostname, quint16 port,
                               const QByteArray& pinnedSha256)
 {
     m_stopRequested.store(false, std::memory_order_relaxed);
+    m_bufferOverflow.store(false, std::memory_order_relaxed);
     ERR_clear_error();
 
 #ifdef _WIN32
@@ -166,12 +143,25 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
     }
 #endif
 
-    // ── 1. Build SSL context ─────────────────────────────────────────────
+    const QByteArray hostBytes = hostname.toUtf8();
+
+    if (!buildSslContext())                         return;
+    if (!tcpConnect(hostBytes, port))               return;
+    if (!performHandshake(hostBytes, pinnedSha256)) return;
+
+    emit connected();
+    runIOLoop();
+}
+
+// ── Worker::buildSslContext ───────────────────────────────────────────────
+
+bool TLSManager::Worker::buildSslContext()
+{
     m_ctx = SSL_CTX_new(TLS_client_method());
     if (!m_ctx) {
         emit connectionFailed(
             QStringLiteral("SSL context creation failed: ") + collectOpenSSLErrors());
-        return;
+        return false;
     }
 
     // TLS 1.3 only — TLS 1.2 and earlier have known weaknesses (CBC padding
@@ -180,96 +170,94 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
 
     // Belt-and-suspenders: also disable via options flags
     SSL_CTX_set_options(m_ctx,
-        SSL_OP_NO_SSLv2        |
-        SSL_OP_NO_SSLv3        |
-        SSL_OP_NO_TLSv1        |
-        SSL_OP_NO_TLSv1_1      |
-        SSL_OP_NO_TLSv1_2      |
-        SSL_OP_NO_COMPRESSION);  // prevents CRIME attack
+        SSL_OP_NO_SSLv2   | SSL_OP_NO_SSLv3   |
+        SSL_OP_NO_TLSv1   | SSL_OP_NO_TLSv1_1 |
+        SSL_OP_NO_TLSv1_2 | SSL_OP_NO_COMPRESSION);  // NO_COMPRESSION prevents CRIME
 
-    // TLS 1.3 — strong AEAD ciphersuites only (AES-128 excluded: ~64-bit post-quantum security)
+    // Strong AEAD ciphersuites only (AES-128 excluded: ~64-bit post-quantum security)
     if (SSL_CTX_set_ciphersuites(m_ctx,
             "TLS_AES_256_GCM_SHA384:"
             "TLS_CHACHA20_POLY1305_SHA256") != 1) {
         emit connectionFailed(
             QStringLiteral("Failed to set cipher suites: ") + collectOpenSSLErrors());
         cleanup();
-        return;
+        return false;
     }
 
     // Hybrid post-quantum key exchange: X25519 + ML-KEM-768, same as Chrome 131+.
-    // X25519MLKEM768 is negotiated when the server supports it (Node.js 22 / OpenSSL 3.5+);
-    // falls back to classical X25519 otherwise. Requires OpenSSL 3.5+.
+    // Falls back to classical X25519 if the server doesn't support the hybrid group.
+    // Requires OpenSSL 3.5+.
     if (SSL_CTX_set1_groups_list(m_ctx, "X25519MLKEM768:X25519") != 1) {
         emit connectionFailed(
             QStringLiteral("Failed to configure key exchange groups: ") + collectOpenSSLErrors());
         cleanup();
-        return;
+        return false;
     }
 
     // Require a valid peer certificate; fail if none is provided
     SSL_CTX_set_verify(m_ctx,
-        SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
-        nullptr);
+        SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
     SSL_CTX_set_verify_depth(m_ctx, 5);
 
-    // Load CA bundle (system store if no explicit path)
     if (!m_caBundlePath.isEmpty()) {
         const QByteArray path = m_caBundlePath.toUtf8();
         if (SSL_CTX_load_verify_locations(m_ctx, path.constData(), nullptr) != 1) {
             emit connectionFailed(
                 QStringLiteral("Failed to load CA bundle: ") + collectOpenSSLErrors());
             cleanup();
-            return;
+            return false;
         }
     } else {
         if (SSL_CTX_set_default_verify_paths(m_ctx) != 1) {
             emit connectionFailed(
                 QStringLiteral("Failed to load system CA store: ") + collectOpenSSLErrors());
             cleanup();
-            return;
+            return false;
         }
     }
 
-    // ── 2. DNS lookup ────────────────────────────────────────────────────
+    return true;
+}
+
+// ── Worker::tcpConnect ────────────────────────────────────────────────────
+
+bool TLSManager::Worker::tcpConnect(const QByteArray& hostBytes, quint16 port)
+{
     struct addrinfo hints{};
     hints.ai_family   = AF_UNSPEC;   // accept IPv4 or IPv6
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    const QByteArray hostBytes = hostname.toUtf8();
     const QByteArray portBytes = QByteArray::number(port);
+    struct addrinfo* addrList  = nullptr;
 
-    struct addrinfo* addrList = nullptr;
     const int gaErr = ::getaddrinfo(
         hostBytes.constData(), portBytes.constData(), &hints, &addrList);
     if (gaErr != 0) {
         emit connectionFailed(
             QString("DNS lookup failed for '%1': %2")
-                .arg(hostname, QString::fromLocal8Bit(gai_strerror(gaErr))));
+                .arg(QString::fromUtf8(hostBytes),
+                     QString::fromLocal8Bit(gai_strerror(gaErr))));
         cleanup();
-        return;
+        return false;
     }
 
-    // ── 3. TCP connect with timeout (non-blocking connect + select) ───────
     for (const struct addrinfo* ai = addrList; ai != nullptr; ai = ai->ai_next) {
         sock_t s = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sockInvalid(s)) continue;
 
         setNonBlocking(s, true);
-        const int connRet = ::connect(s, ai->ai_addr,
-                                      static_cast<int>(ai->ai_addrlen));
+        const int connRet = ::connect(s, ai->ai_addr, static_cast<int>(ai->ai_addrlen));
         bool connOk = (connRet == 0);
 
         if (!connOk && connectInProgress()) {
+            // FD_SETSIZE is 64 on Windows — safe here (single socket per Worker).
+            // Do not use fd_set for multi-socket code on Windows without raising FD_SETSIZE.
             fd_set writefds;
             FD_ZERO(&writefds);
             FD_SET(s, &writefds);
             struct timeval tv{kConnectTimeoutSecs, 0};
-            // FD_SETSIZE is 64 on Windows — fine for a single-connection client.
-        // Do not use fd_set for multi-socket code on Windows without raising FD_SETSIZE.
-        if (::select(static_cast<int>(s) + 1,
-                         nullptr, &writefds, nullptr, &tv) > 0) {
+            if (::select(static_cast<int>(s) + 1, nullptr, &writefds, nullptr, &tv) > 0) {
                 int sockErr = 0;
                 socklen_t errLen = sizeof(sockErr);
                 ::getsockopt(s, SOL_SOCKET, SO_ERROR,
@@ -277,9 +265,8 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
                 connOk = (sockErr == 0);
             }
         }
-        setNonBlocking(s, false); // restore blocking for TLS I/O
-
         if (connOk) {
+            setNonBlocking(s, false); // restore blocking before handing off to TLS
             m_sock = s;
             break;
         }
@@ -289,18 +276,26 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
 
     if (sockInvalid(m_sock)) {
         emit connectionFailed(
-            QString("TCP connection to %1:%2 failed").arg(hostname).arg(port));
+            QString("TCP connection to %1:%2 failed")
+                .arg(QString::fromUtf8(hostBytes)).arg(port));
         cleanup();
-        return;
+        return false;
     }
 
-    // ── 4. TLS handshake ─────────────────────────────────────────────────
+    return true;
+}
+
+// ── Worker::performHandshake ──────────────────────────────────────────────
+
+bool TLSManager::Worker::performHandshake(const QByteArray& hostBytes,
+                                           const QByteArray& pinnedSha256)
+{
     m_ssl = SSL_new(m_ctx);
     if (!m_ssl) {
         emit connectionFailed(
             QStringLiteral("Failed to create SSL object: ") + collectOpenSSLErrors());
         cleanup();
-        return;
+        return false;
     }
 
     // Cast is safe: OpenSSL on Windows uses BIO_new_socket internally
@@ -308,7 +303,7 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
         emit connectionFailed(
             QStringLiteral("Failed to bind socket to SSL object: ") + collectOpenSSLErrors());
         cleanup();
-        return;
+        return false;
     }
 
     // SNI extension — tells the server which virtual host we want
@@ -316,7 +311,7 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
         emit connectionFailed(
             QStringLiteral("Failed to set SNI hostname: ") + collectOpenSSLErrors());
         cleanup();
-        return;
+        return false;
     }
 
     // Hostname verification: OpenSSL checks SAN then CN against this (RFC 6125)
@@ -325,7 +320,7 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
             QStringLiteral("Failed to configure hostname verification: ")
             + collectOpenSSLErrors());
         cleanup();
-        return;
+        return false;
     }
 
     if (SSL_connect(m_ssl) != 1) {
@@ -336,56 +331,59 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
             : QStringLiteral("TLS handshake failed: ") + collectOpenSSLErrors();
         emit connectionFailed(reason);
         cleanup();
-        return;
+        return false;
     }
 
-    // ── 5. Explicit certificate verification check (defence in depth) ────
+    // Explicit certificate verification check (defence in depth):
     // SSL_VERIFY_PEER already causes SSL_connect to abort on failure;
     // we verify the result code again to be explicit about the requirement.
     const long verifyResult = SSL_get_verify_result(m_ssl);
     if (verifyResult != X509_V_OK) {
         emit connectionFailed(
             QString("Certificate verification failed: %1")
-                .arg(QString::fromLatin1(
-                    X509_verify_cert_error_string(verifyResult))));
+                .arg(QString::fromLatin1(X509_verify_cert_error_string(verifyResult))));
         cleanup();
-        return;
+        return false;
     }
 
-    // ── 6. Certificate pinning (optional TOFU at transport level) ────────
+    // Certificate pinning (optional TOFU at transport level)
     if (!pinnedSha256.isEmpty()) {
         X509* cert = SSL_get_peer_certificate(m_ssl);
         if (!cert) {
             emit connectionFailed(QStringLiteral("No server certificate presented"));
             cleanup();
-            return;
+            return false;
         }
         unsigned char* spkiDer = nullptr;
         const int spkiLen = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(cert), &spkiDer);
         X509_free(cert);
         if (spkiLen <= 0) {
+            OPENSSL_free(spkiDer); // may be non-null even on failure; free(nullptr) is safe
             emit connectionFailed(
                 QStringLiteral("Failed to extract server public key for pinning"));
             cleanup();
-            return;
+            return false;
         }
         unsigned char hash[SHA256_DIGEST_LENGTH];
         SHA256(spkiDer, static_cast<size_t>(spkiLen), hash);
         OPENSSL_free(spkiDer);
 
-        const QByteArray actual(reinterpret_cast<const char*>(hash),
-                                SHA256_DIGEST_LENGTH);
+        const QByteArray actual(reinterpret_cast<const char*>(hash), SHA256_DIGEST_LENGTH);
         if (actual != pinnedSha256) {
             emit connectionFailed(
                 QStringLiteral("Certificate pinning failed: server public key mismatch"));
             cleanup();
-            return;
+            return false;
         }
     }
 
-    emit connected();
+    return true;
+}
 
-    // ── 7. I/O loop ──────────────────────────────────────────────────────
+// ── Worker::runIOLoop ─────────────────────────────────────────────────────
+
+void TLSManager::Worker::runIOLoop()
+{
     char readBuf[16384];
     bool ioError = false;
 
@@ -415,6 +413,9 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
         if (ioError) break;
 
         // 100 ms poll so the stop flag is checked regularly.
+        // Note: only readfds is watched. If SSL_write returned WANT_WRITE the retry
+        // will wait up to 100 ms rather than waking immediately when the socket
+        // becomes writable — acceptable for a messaging app without sustained back-pressure.
         // FD_SETSIZE is 64 on Windows — safe here (single socket per Worker).
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -423,8 +424,8 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
         const int sel = ::select(
             static_cast<int>(m_sock) + 1, &readfds, nullptr, nullptr, &tv);
 
-        if (sel < 0) break;   // socket error
-        if (sel == 0) continue; // timeout
+        if (sel < 0) break;     // socket error
+        if (sel == 0) continue; // timeout — recheck stop flag
 
         const int n = SSL_read(m_ssl, readBuf, static_cast<int>(sizeof(readBuf)));
         if (n > 0) {
@@ -440,7 +441,7 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
     }
 
     // Collect error string before cleanup() so it isn't lost
-    const QString writeErrMsg = ioError
+    const QString errMsg = ioError
         ? (m_bufferOverflow.load()
                ? QStringLiteral("Write buffer exceeded 4 MB — connection dropped")
                : QStringLiteral("SSL write error: ") + collectOpenSSLErrors())
@@ -449,7 +450,7 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
     cleanup();
 
     if (ioError)
-        emit connectionFailed(writeErrMsg);
+        emit connectionFailed(errMsg);
     else
         emit disconnected();
 }
@@ -537,6 +538,17 @@ bool TLSManager::isConnected() const
 void TLSManager::setPinnedPublicKeyHash(const QByteArray& sha256)
 {
     m_pinnedSha256 = sha256;
+}
+
+QSslConfiguration TLSManager::defaultConfig()
+{
+    QSslConfiguration cfg = QSslConfiguration::defaultConfiguration();
+    cfg.setProtocol(QSsl::TlsV1_3OrLater);
+    cfg.setPeerVerifyMode(QSslSocket::VerifyPeer);
+    // TLS 1.3 cipher suites (AES-256-GCM, ChaCha20-Poly1305, AES-128-GCM) are
+    // always AEAD and cannot be weakened via Qt's cipher API — the protocol
+    // version guarantee is sufficient here.
+    return cfg;
 }
 
 // Required so Qt's moc processes the Worker class defined in this .cpp file

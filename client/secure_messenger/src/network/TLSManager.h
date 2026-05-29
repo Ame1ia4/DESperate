@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QSslConfiguration>
 #include <atomic>
 
 class TrustStore;
@@ -22,6 +23,10 @@ public:
     // Set a SHA-256 hash of the server's SubjectPublicKeyInfo (SPKI) to pin.
     // Must be called before connectToHost(). Empty array disables pinning.
     void setPinnedPublicKeyHash(const QByteArray& sha256);
+
+    // Returns a QSslConfiguration for use with QNetworkAccessManager.
+    // Enforces TLS 1.3+, VerifyPeer, and strong AEAD ciphers.
+    static QSslConfiguration defaultConfig();
 
 signals:
     void connected();
