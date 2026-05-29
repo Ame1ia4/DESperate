@@ -4,7 +4,12 @@ project(secure_messenger VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+<<<<<<< Updated upstream
 find_package(Qt6 REQUIRED COMPONENTS Quick Network QuickControls2)
+=======
+find_package(Qt6 REQUIRED COMPONENTS Quick Network)
+find_package(OpenSSL REQUIRED)
+>>>>>>> Stashed changes
 
 qt_standard_project_setup(REQUIRES 6.10)
 
@@ -37,6 +42,7 @@ qt_add_qml_module(appsecure_messenger
         qml/views/UserSearchSheet.qml
         qml/views/VerifyDialog.qml
 
+<<<<<<< Updated upstream
     SOURCES
         src/types/Types.h
         src/services/ApiClient.h
@@ -53,6 +59,43 @@ qt_add_qml_module(appsecure_messenger
         SOURCES src/models/SessionModel.h src/models/SessionModel.cpp
         SOURCES src/storage/TrustStore.h src/storage/TrustStore.cpp
         SOURCES src/storage/SessionStore.h src/storage/SessionStore.cpp
+=======
+        SOURCES src/types/Types.h
+        SOURCES src/services/ApiClient.h
+        SOURCES src/services/ApiClient.cpp
+        SOURCES src/services/CryptoServiceClient.h src/services/CryptoServiceClient.cpp
+        SOURCES src/models/MessageModel.h src/models/MessageModel.cpp
+        QML_FILES qml/views/MessageView.qml
+        QML_FILES qml/views/LoginView.qml
+        SOURCES src/controllers/AuthController.h src/controllers/AuthController.cpp
+        SOURCES src/controllers/MessageController.h src/controllers/MessageController.cpp
+        SOURCES
+        SOURCES
+        SOURCES src/models/ConversationModel.h src/models/ConversationModel.cpp
+        SOURCES
+        SOURCES
+        SOURCES
+        SOURCES
+        SOURCES src/network/TLSManager.h src/network/TLSManager.cpp
+        SOURCES src/network/TrustStore.h src/network/TrustStore.cpp
+        SOURCES src/storage/LocalMessageStore.h src/storage/LocalMessageStore.cpp
+        SOURCES
+        QML_FILES qml/views/ConversationList.qml
+        QML_FILES qml/views/MessageDelegate.qml
+        QML_FILES qml/views/VerifyDialog.qml
+        QML_FILES qml/views/SettingsView.qml
+        QML_FILES qml/views/UserSearchSheet.qml
+        QML_FILES
+        RESOURCES
+        RESOURCES
+        RESOURCES
+        RESOURCES
+        QML_FILES qml/main.qml
+        RESOURCES qml/qmldir
+        SOURCES main.cpp
+        SOURCES src/controllers/ConversationController.h src/controllers/ConversationController.cpp
+        SOURCES src/models/UserModel.h src/models/UserModel.cpp
+>>>>>>> Stashed changes
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
@@ -67,7 +110,13 @@ set_target_properties(appsecure_messenger PROPERTIES
 )
 
 target_link_libraries(appsecure_messenger
+<<<<<<< Updated upstream
     PRIVATE Qt6::Quick Qt6::Network Qt6::QuickControls2
+=======
+    PRIVATE Qt6::Quick Qt6::Network
+            OpenSSL::SSL OpenSSL::Crypto
+            $<$<PLATFORM_ID:Windows>:ws2_32>
+>>>>>>> Stashed changes
 )
 
 install(TARGETS appsecure_messenger
