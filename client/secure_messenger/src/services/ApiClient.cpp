@@ -1,16 +1,36 @@
 #include "ApiClient.h"
 
+#include "src/network/TLSManager.h"
+
 #include <QNetworkRequest>
 #include <QJsonDocument>
-#include <QSslConfiguration>
 #include <QNetworkReply>
 #include <QUrl>
 #include <QString>
-#include <QProcessEnvironment>
 
 ApiClient::ApiClient(QObject* parent)
     : QObject(parent)
 {
+    connect(
+        &m_network,
+        &QNetworkAccessManager::sslErrors,
+        this,
+        [](QNetworkReply* reply,
+           const QList<QSslError>& errors) {
+
+            Q_UNUSED(reply)
+
+            for (const auto& e : errors) {
+                qWarning()
+                    << "TLS error:"
+                    << e.errorString();
+            }
+        });
+}
+
+void ApiClient::setAuthToken(const QString& token)
+{
+    m_authToken = token;
 }
 
 void ApiClient::registerUser(
@@ -79,6 +99,17 @@ void ApiClient::loginUser(
             return;
         }
 
+        // Store session token if the server returns one.
+        if (!payload.isEmpty()) {
+            const auto parsed =
+                QJsonDocument::fromJson(payload).object();
+            const QString token =
+                parsed.value("token").toString();
+            if (!token.isEmpty()) {
+                m_authToken = token;
+            }
+        }
+
         emit loginUserSucceeded();
     });
 }
@@ -89,9 +120,9 @@ QNetworkRequest ApiClient::makeRequest(
 {
     QString apiHost = qEnvironmentVariable("DESPERATE_API_HOST");
     if (apiHost.trimmed().isEmpty()) {
-        apiHost = QStringLiteral("http://127.0.0.1");
+        apiHost = QStringLiteral("https://des-perate.theburkenator.com");
     } else if (!apiHost.contains(QStringLiteral("://"))) {
-        apiHost.prepend(QStringLiteral("http://"));
+        apiHost.prepend(QStringLiteral("https://"));
     }
 
     QNetworkRequest request(
@@ -103,10 +134,14 @@ QNetworkRequest ApiClient::makeRequest(
         "application/json"
         );
 
-    if (request.url().scheme() == QLatin1String("https")) {
-        QSslConfiguration ssl;
-        ssl.setProtocol(QSsl::TlsV1_3);
-        request.setSslConfiguration(ssl);
+    // Always enforce TLS 1.3 with peer certificate verification.
+    request.setSslConfiguration(
+        TLSManager::defaultConfig());
+
+    if (!m_authToken.isEmpty()) {
+        request.setRawHeader(
+            "Authorization",
+            ("Bearer " + m_authToken).toUtf8());
     }
 
     return request;
@@ -181,5 +216,34 @@ void ApiClient::acknowledgeMessage(
         }
 
         emit acknowledgeMessageSucceeded(messageId);
+    });
+}
+
+void ApiClient::fetchConversations()
+{
+    auto request = makeRequest("/conversations");
+
+    auto* reply = m_network.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error = reply->error();
+        const auto status = reply->attribute(
+            QNetworkRequest::HttpStatusCodeAttribute
+            ).toInt();
+        const auto payload = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = payload.isEmpty()
+                ? QStringLiteral("Failed to load conversations.")
+                : QString::fromUtf8(payload);
+            emit fetchConversationsFailed(reason);
+            return;
+        }
+
+        const auto response =
+            QJsonDocument::fromJson(payload).object();
+        const auto conversations =
+            response.value("conversations").toArray();
+        emit fetchConversationsSucceeded(conversations);
     });
 }

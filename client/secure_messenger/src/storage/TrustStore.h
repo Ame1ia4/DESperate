@@ -1,8 +1,8 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QString>
-#include <QHash>
 
 class TrustStore : public QObject
 {
@@ -31,6 +31,10 @@ signals:
         QString received);
 
 private:
+    void loadFromDisk();
+    void saveToDisk() const;
+
+    QString m_storagePath;
     QHash<QString, QString> m_fingerprints;
     QHash<QString, bool> m_verified;
 };

@@ -5,11 +5,6 @@
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
 
-    namespace {
-    constexpr const char* DEMO_USERNAME = "demo";
-    constexpr const char* DEMO_PASSWORD = "demo123";
-}
-
 AuthController::AuthController(
     ApiClient* api,
     CryptoServiceClient* crypto,
@@ -65,29 +60,6 @@ void AuthController::login(
             "Username and password are required.");
 
         emit loginFailed(m_authError);
-
-        return;
-    }
-
-    // Demo-only shortcut for UI development.
-    if (normalized == DEMO_USERNAME &&
-        password == DEMO_PASSWORD) {
-
-        setAuthError(QString());
-
-        m_currentUserId = normalized;
-        emit currentUserChanged();
-
-        emit keystoreUnlocked();
-        emit identityLoaded();
-        emit sessionInitialized();
-
-        if (!m_authenticated) {
-            m_authenticated = true;
-            emit authenticatedChanged();
-        }
-
-        emit loginSucceeded();
 
         return;
     }
@@ -183,12 +155,55 @@ void AuthController::signUp(
         return;
     }
 
-    // Identity generation + registration flow
-    // would occur here.
+    const QJsonObject bundle =
+        m_crypto->generateIdentityBundle(
+            password);
 
-    setAuthError(QString());
+    if (bundle.isEmpty()) {
 
-    emit registrationSucceeded();
+        const QString reason =
+            m_crypto->lastError().isEmpty()
+                ? "Key generation failed."
+                : m_crypto->lastError();
+
+        setAuthError(reason);
+
+        emit registrationFailed(reason);
+
+        return;
+    }
+
+    connect(
+        m_api,
+        &ApiClient::registerUserSucceeded,
+        this,
+        [this]() {
+
+            setAuthError(QString());
+
+            emit registrationSucceeded();
+        },
+        Qt::SingleShotConnection);
+
+    connect(
+        m_api,
+        &ApiClient::registerUserFailed,
+        this,
+        [this](const QString& reason) {
+
+            const QString failureReason =
+                reason.isEmpty()
+                    ? "Registration failed."
+                    : reason;
+
+            setAuthError(failureReason);
+
+            emit registrationFailed(
+                failureReason);
+        },
+        Qt::SingleShotConnection);
+
+    m_api->registerUser(normalized, bundle);
 }
 
 void AuthController::logout()

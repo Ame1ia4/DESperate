@@ -89,7 +89,6 @@ ApplicationWindow {
         function onAuthenticatedChanged() {
             if (authController.authenticated) {
                 conversationController.loadConversations()
-                conversationController.openConversation("conv-alice")
                 root.authScreenIndex = 0
             }
         }

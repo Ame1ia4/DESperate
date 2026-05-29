@@ -23,13 +23,6 @@ Page {
                 font.bold: true
             }
 
-            Text {
-                text: "Demo mode does not persist sign ups. Use demo/demo123 instead."
-                color: "#D9E2C7"
-                font.pixelSize: 12
-                wrapMode: Text.Wrap
-            }
-
             TextField {
                 id: usernameField
                 placeholderText: "Username"

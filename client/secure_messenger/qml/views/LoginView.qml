@@ -23,13 +23,6 @@ Page {
                 font.bold: true
             }
 
-            Text {
-                text: "Use demo/demo123 to view the app."
-                color: "#D9E2C7"
-                font.pixelSize: 12
-                wrapMode: Text.Wrap
-            }
-
             TextField {
                 id: usernameField
                 placeholderText: "Username"

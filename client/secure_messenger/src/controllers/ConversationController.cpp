@@ -1,6 +1,8 @@
 #include "ConversationController.h"
 
 #include <QDateTime>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QUuid>
 
 #include "src/models/ConversationModel.h"
@@ -57,70 +59,70 @@ ConversationController::currentConversationId()
 
 void ConversationController::loadConversations()
 {
-    QVector<ConversationItem> items;
+    connect(
+        m_apiClient,
+        &ApiClient::fetchConversationsSucceeded,
+        this,
+        [this](const QJsonArray& data) {
 
-    ConversationItem alice;
+            QVector<ConversationItem> items;
+            items.reserve(data.size());
 
-    alice.conversationId = "conv-alice";
-    alice.participant = "alice";
-    alice.lastMessage =
-        "Secure session established";
-    alice.fingerprint =
-        "7A:22:91:BC:11:90:EF";
-    alice.updatedAt =
-        QDateTime::currentDateTimeUtc();
-    alice.unreadCount = 0;
-    alice.verified = true;
+            for (const auto& value : data) {
 
-    items.push_back(alice);
+                const QJsonObject obj =
+                    value.toObject();
 
-    ConversationItem bob;
+                ConversationItem item;
 
-    bob.conversationId = "conv-bob";
-    bob.participant = "bob";
-    bob.lastMessage =
-        "Verify my fingerprint";
-    bob.fingerprint =
-        "90:11:0A:BC:2F:45:A1";
-    bob.updatedAt =
-        QDateTime::currentDateTimeUtc()
-            .addSecs(-120);
-    bob.unreadCount = 1;
-    bob.verified = false;
+                item.conversationId =
+                    obj.value("id").toString();
 
-    items.push_back(bob);
+                item.participant =
+                    obj.value("participant")
+                        .toString();
 
-    m_conversationModel
-        ->setConversations(items);
+                item.lastMessage =
+                    obj.value("last_message")
+                        .toString();
 
-    // Seed local cache once.
-    if (!m_messagesByConversation.isEmpty()) {
-        return;
-    }
+                item.fingerprint =
+                    obj.value("fingerprint")
+                        .toString();
 
-    DecryptedMessage message;
+                item.updatedAt =
+                    QDateTime::fromString(
+                        obj.value("updated_at")
+                            .toString(),
+                        Qt::ISODateWithMs);
 
-    message.id =
-        QUuid::createUuid().toString();
+                item.unreadCount =
+                    obj.value("unread_count")
+                        .toInt(0);
 
-    message.conversationId =
-        "conv-alice";
+                item.verified =
+                    m_trust->isVerified(
+                        item.participant);
 
-    message.senderDeviceId =
-        "alice-phone";
+                items.push_back(item);
+            }
 
-    message.plaintext =
-        "PQXDH secure session ready";
+            m_conversationModel
+                ->setConversations(items);
+        },
+        Qt::SingleShotConnection);
 
-    message.timestamp =
-        QDateTime::currentDateTimeUtc()
-            .addSecs(-300);
+    connect(
+        m_apiClient,
+        &ApiClient::fetchConversationsFailed,
+        this,
+        [this](const QString& reason) {
 
-    message.verificationState =
-        VerificationState::Verified;
+            emit errorOccurred(reason);
+        },
+        Qt::SingleShotConnection);
 
-    m_messagesByConversation["conv-alice"]
-        .push_back(message);
+    m_apiClient->fetchConversations();
 }
 
 void ConversationController::openConversation(

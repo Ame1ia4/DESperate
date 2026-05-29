@@ -23,6 +23,9 @@
 {
     QGuiApplication app(argc, argv);
 
+    app.setOrganizationName("DESperate");
+    app.setApplicationName("secure_messenger");
+
     QQmlApplicationEngine engine;
 
     // Core services
