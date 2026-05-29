@@ -99,14 +99,6 @@ CREATE TABLE devices (
         NOT NULL,
 
     -- =====================================================
-    -- USER-VERIFIABLE FINGERPRINT
-    -- Derived from identity bundle hash
-    -- =====================================================
-
-    identity_fingerprint VARCHAR(128)
-        NOT NULL,
-
-    -- =====================================================
     -- SIGNED PREKEY
     -- =====================================================
 
@@ -151,9 +143,6 @@ CREATE INDEX idx_devices_user
 CREATE INDEX idx_devices_active
     ON devices(id)
     WHERE revoked = FALSE;
-
-CREATE UNIQUE INDEX idx_device_fingerprint
-    ON devices(identity_fingerprint);
 
 -- =========================================================
 -- ONE-TIME PREKEYS
@@ -530,8 +519,6 @@ SELECT
     d.user_id,
 
     d.identity_signing_pub,
-
-    d.identity_fingerprint,
 
     d.idk_classical_pub,
 
