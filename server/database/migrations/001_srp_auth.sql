@@ -22,17 +22,12 @@
 
 ALTER TABLE users
     DROP COLUMN password_hash,
-    ADD  COLUMN srp_salt     BYTEA NOT NULL DEFAULT '',
-    ADD  COLUMN srp_verifier BYTEA NOT NULL DEFAULT '';
+    ADD  COLUMN srp_salt     BYTEA NOT NULL DEFAULT,
+    ADD  COLUMN srp_verifier BYTEA NOT NULL DEFAULT;
 
-COMMENT ON COLUMN users.srp_salt IS
-    'Hex-encoded 32-byte random salt (from srp.generateSalt()). '
-    'Sent to client in round 1 so it can derive x via Argon2id.';
+COMMENT ON COLUMN users.srp_salt IS '32-byte random salt stored as binary. Sent to client in round 1 so it can derive x via Argon2id.';
 
-COMMENT ON COLUMN users.srp_verifier IS
-    'Hex-encoded SRP-6a verifier v = g^x mod N '
-    '(RFC 5054, 2048-bit group, SHA-256, x derived via Argon2id RFC 9106). '
-    'Never transmit to the client.';
+COMMENT ON COLUMN users.srp_verifier IS 'Binary SRP-6a verifier v = g^x mod N (RFC 5054, 2048-bit group, SHA-256, x derived via Argon2id RFC 9106). Never transmit to the client.';
 
 -- DOWN:
 ALTER TABLE users
