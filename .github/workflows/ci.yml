@@ -45,15 +45,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: server/package-lock.json
 
       - name: Install dependencies (no install scripts)
-        working-directory: server
         run: npm ci --ignore-scripts
 
       - name: Rebuild packages that legitimately need scripts
-        working-directory: server
         run: npm rebuild --if-present
 
       - name: Check .env not committed
@@ -66,12 +62,10 @@ jobs:
             server/ && echo "HARDCODED SECRET FOUND" && exit 1 || echo "OK"
 
       - name: Security audit
-        working-directory: server
         run: npm audit --audit-level=high
 
       - name: Run tests (with database)
         if: vars.HAS_DATABASE == 'true'
-        working-directory: server
         env:
           DATABASE_URL: postgresql://epic:epic_test@localhost:5432/epic_test
           NODE_ENV: test
@@ -79,13 +73,11 @@ jobs:
 
       - name: Run tests (no database yet)
         if: vars.HAS_DATABASE != 'true'
-        working-directory: server
         env:
           NODE_ENV: test
         run: npm test --if-present
 
       - name: Lint
-        working-directory: server
         run: npm run lint --if-present
 
 
