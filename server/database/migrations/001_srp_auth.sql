@@ -22,8 +22,8 @@
 
 ALTER TABLE users
     DROP COLUMN password_hash,
-    ADD  COLUMN srp_salt     BYTEA NOT NULL DEFAULT,
-    ADD  COLUMN srp_verifier BYTEA NOT NULL DEFAULT;
+    ADD  COLUMN srp_salt     BYTEA NOT NULL DEFAULT '\x',
+    ADD  COLUMN srp_verifier BYTEA NOT NULL DEFAULT '\x';
 
 COMMENT ON COLUMN users.srp_salt IS '32-byte random salt stored as binary. Sent to client in round 1 so it can derive x via Argon2id.';
 
