@@ -1,44 +1,6 @@
 #include "TLSManager.h"
 #include "TrustStore.h"
 
-<<<<<<< Updated upstream
-#include <QFile>
-#include <QSslCertificate>
-#include <QSslSocket>
-
-QSslConfiguration TLSManager::defaultConfig()
-{
-    QSslConfiguration ssl =
-        QSslConfiguration::defaultConfiguration();
-
-    ssl.setProtocol(QSsl::TlsV1_3);
-    ssl.setPeerVerifyMode(QSslSocket::VerifyPeer);
-
-    return ssl;
-}
-
-QSslConfiguration TLSManager::pinnedConfig(
-    const QString& pemPath)
-{
-    QSslConfiguration ssl = defaultConfig();
-
-    QFile file(pemPath);
-
-    if (!file.open(QIODevice::ReadOnly)) {
-        return ssl;
-    }
-
-    const QList<QSslCertificate> certs =
-        QSslCertificate::fromDevice(
-            &file, QSsl::Pem);
-
-    if (!certs.isEmpty()) {
-        ssl.setCaCertificates(certs);
-    }
-
-    return ssl;
-}
-=======
 #include <QThread>
 #include <QMutex>
 #include <QMutexLocker>
@@ -49,21 +11,39 @@ QSslConfiguration TLSManager::pinnedConfig(
 #  include <ws2tcpip.h>
    using sock_t = SOCKET;
    static constexpr sock_t kInvalidSock = INVALID_SOCKET;
-   static void closeSock(sock_t s)  { ::closesocket(s); }
-   static bool sockInvalid(sock_t s){ return s == INVALID_SOCKET; }
+   static void closeSock(sock_t s)   { ::closesocket(s); }
+   static bool sockInvalid(sock_t s) { return s == INVALID_SOCKET; }
+   static void setNonBlocking(sock_t s, bool on) {
+       u_long mode = on ? 1 : 0;
+       ::ioctlsocket(s, FIONBIO, &mode);
+   }
+   static bool connectInProgress() {
+       const int e = WSAGetLastError();
+       return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
+   }
 #else
 #  include <sys/socket.h>
 #  include <netdb.h>
 #  include <unistd.h>
+#  include <fcntl.h>
+#  include <errno.h>
    using sock_t = int;
    static constexpr sock_t kInvalidSock = -1;
-   static void closeSock(sock_t s)  { ::close(s); }
-   static bool sockInvalid(sock_t s){ return s < 0; }
+   static void closeSock(sock_t s)   { ::close(s); }
+   static bool sockInvalid(sock_t s) { return s < 0; }
+   static void setNonBlocking(sock_t s, bool on) {
+       int flags = ::fcntl(s, F_GETFL, 0);
+       ::fcntl(s, F_SETFL, on ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
+   }
+   static bool connectInProgress() { return errno == EINPROGRESS; }
 #endif
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
+#include <openssl/sha.h>
+
+static constexpr int kConnectTimeoutSecs = 10;
 
 // ── Worker ────────────────────────────────────────────────────────────────
 // Runs on its own QThread. All blocking network/TLS work happens here.
@@ -80,7 +60,8 @@ public:
     {
 #ifdef _WIN32
         WSADATA wsa{};
-        WSAStartup(MAKEWORD(2, 2), &wsa);
+        if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+            m_wsaInitFailed = true;
 #endif
     }
 
@@ -88,7 +69,8 @@ public:
     {
         cleanup();
 #ifdef _WIN32
-        WSACleanup();
+        if (!m_wsaInitFailed)
+            ::WSACleanup();
 #endif
     }
 
@@ -105,9 +87,8 @@ public:
     }
 
 public slots:
-    // Invoked via QMetaObject::invokeMethod(Qt::QueuedConnection).
-    // Blocks until the connection closes; emits signals back to main thread.
-    void run(const QString& hostname, quint16 port);
+    // pinnedSha256: SHA-256 of the server's SPKI DER, or empty to skip pinning.
+    void run(const QString& hostname, quint16 port, const QByteArray& pinnedSha256);
 
 signals:
     void connected();
@@ -119,7 +100,9 @@ private:
     void cleanup()
     {
         if (m_ssl) {
-            SSL_shutdown(m_ssl);
+            // Two-phase shutdown: send our close_notify, then await peer's.
+            if (SSL_shutdown(m_ssl) == 0)
+                SSL_shutdown(m_ssl);
             SSL_free(m_ssl);
             m_ssl = nullptr;
         }
@@ -153,12 +136,23 @@ private:
     std::atomic<bool> m_stopRequested{false};
     QMutex            m_writeMutex;
     QByteArray        m_writeBuffer;
+#ifdef _WIN32
+    bool              m_wsaInitFailed = false;
+#endif
 };
 
-void TLSManager::Worker::run(const QString& hostname, quint16 port)
+void TLSManager::Worker::run(const QString& hostname, quint16 port,
+                              const QByteArray& pinnedSha256)
 {
     m_stopRequested.store(false, std::memory_order_relaxed);
     ERR_clear_error();
+
+#ifdef _WIN32
+    if (m_wsaInitFailed) {
+        emit connectionFailed(QStringLiteral("WSAStartup failed"));
+        return;
+    }
+#endif
 
     // ── 1. Build SSL context ─────────────────────────────────────────────
     m_ctx = SSL_CTX_new(TLS_client_method());
@@ -168,8 +162,9 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port)
         return;
     }
 
-    // TLS 1.2 minimum — TLS 1.0/1.1 deprecated by RFC 8996
-    SSL_CTX_set_min_proto_version(m_ctx, TLS1_2_VERSION);
+    // TLS 1.3 only — TLS 1.2 and earlier have known weaknesses (CBC padding
+    // oracles, malleable MACs, no mandatory forward secrecy).
+    SSL_CTX_set_min_proto_version(m_ctx, TLS1_3_VERSION);
 
     // Belt-and-suspenders: also disable via options flags
     SSL_CTX_set_options(m_ctx,
@@ -177,23 +172,13 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port)
         SSL_OP_NO_SSLv3        |
         SSL_OP_NO_TLSv1        |
         SSL_OP_NO_TLSv1_1      |
+        SSL_OP_NO_TLSv1_2      |
         SSL_OP_NO_COMPRESSION);  // prevents CRIME attack
 
     // TLS 1.3 — strong AEAD ciphersuites only
     SSL_CTX_set_ciphersuites(m_ctx,
         "TLS_AES_256_GCM_SHA384:"
-        "TLS_AES_128_GCM_SHA256:"
         "TLS_CHACHA20_POLY1305_SHA256");
-
-    // TLS 1.2 — ECDHE + AEAD only; exclude null/anon/export/weak
-    SSL_CTX_set_cipher_list(m_ctx,
-        "ECDHE-ECDSA-AES256-GCM-SHA384:"
-        "ECDHE-RSA-AES256-GCM-SHA384:"
-        "ECDHE-ECDSA-AES128-GCM-SHA256:"
-        "ECDHE-RSA-AES128-GCM-SHA256:"
-        "ECDHE-ECDSA-CHACHA20-POLY1305:"
-        "ECDHE-RSA-CHACHA20-POLY1305:"
-        "!aNULL:!eNULL:!EXPORT:!RC4:!3DES:!MD5:!DSS");
 
     // Require a valid peer certificate; fail if none is provided
     SSL_CTX_set_verify(m_ctx,
@@ -234,11 +219,33 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port)
         return;
     }
 
-    // ── 3. TCP connect (iterate resolved addresses, use first that works) ─
+    // ── 3. TCP connect with timeout (non-blocking connect + select) ───────
     for (const struct addrinfo* ai = addrList; ai != nullptr; ai = ai->ai_next) {
         sock_t s = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sockInvalid(s)) continue;
-        if (::connect(s, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0) {
+
+        setNonBlocking(s, true);
+        const int connRet = ::connect(s, ai->ai_addr,
+                                      static_cast<int>(ai->ai_addrlen));
+        bool connOk = (connRet == 0);
+
+        if (!connOk && connectInProgress()) {
+            fd_set writefds;
+            FD_ZERO(&writefds);
+            FD_SET(s, &writefds);
+            struct timeval tv{kConnectTimeoutSecs, 0};
+            if (::select(static_cast<int>(s) + 1,
+                         nullptr, &writefds, nullptr, &tv) > 0) {
+                int sockErr = 0;
+                socklen_t errLen = sizeof(sockErr);
+                ::getsockopt(s, SOL_SOCKET, SO_ERROR,
+                             reinterpret_cast<char*>(&sockErr), &errLen);
+                connOk = (sockErr == 0);
+            }
+        }
+        setNonBlocking(s, false); // restore blocking for TLS I/O
+
+        if (connOk) {
             m_sock = s;
             break;
         }
@@ -266,10 +273,21 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port)
     SSL_set_fd(m_ssl, static_cast<int>(m_sock));
 
     // SNI extension — tells the server which virtual host we want
-    SSL_set_tlsext_host_name(m_ssl, hostBytes.constData());
+    if (SSL_set_tlsext_host_name(m_ssl, hostBytes.constData()) != 1) {
+        emit connectionFailed(
+            QStringLiteral("Failed to set SNI hostname: ") + collectOpenSSLErrors());
+        cleanup();
+        return;
+    }
 
     // Hostname verification: OpenSSL checks SAN then CN against this (RFC 6125)
-    SSL_set1_host(m_ssl, hostBytes.constData());
+    if (SSL_set1_host(m_ssl, hostBytes.constData()) != 1) {
+        emit connectionFailed(
+            QStringLiteral("Failed to configure hostname verification: ")
+            + collectOpenSSLErrors());
+        cleanup();
+        return;
+    }
 
     if (SSL_connect(m_ssl) != 1) {
         const long ve = SSL_get_verify_result(m_ssl);
@@ -295,22 +313,62 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port)
         return;
     }
 
+    // ── 6. Certificate pinning (optional TOFU at transport level) ────────
+    if (!pinnedSha256.isEmpty()) {
+        X509* cert = SSL_get_peer_certificate(m_ssl);
+        if (!cert) {
+            emit connectionFailed(QStringLiteral("No server certificate presented"));
+            cleanup();
+            return;
+        }
+        unsigned char* spkiDer = nullptr;
+        const int spkiLen = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(cert), &spkiDer);
+        X509_free(cert);
+        if (spkiLen <= 0) {
+            emit connectionFailed(
+                QStringLiteral("Failed to extract server public key for pinning"));
+            cleanup();
+            return;
+        }
+        unsigned char hash[SHA256_DIGEST_LENGTH];
+        SHA256(spkiDer, static_cast<size_t>(spkiLen), hash);
+        OPENSSL_free(spkiDer);
+
+        const QByteArray actual(reinterpret_cast<const char*>(hash),
+                                SHA256_DIGEST_LENGTH);
+        if (actual != pinnedSha256) {
+            emit connectionFailed(
+                QStringLiteral("Certificate pinning failed: server public key mismatch"));
+            cleanup();
+            return;
+        }
+    }
+
     emit connected();
 
-    // ── 6. I/O loop ──────────────────────────────────────────────────────
+    // ── 7. I/O loop ──────────────────────────────────────────────────────
     char readBuf[16384];
+    bool ioError = false;
 
     while (!m_stopRequested.load(std::memory_order_relaxed)) {
         // Flush any pending outgoing data
         {
             QMutexLocker lock(&m_writeMutex);
             if (!m_writeBuffer.isEmpty()) {
-                SSL_write(m_ssl,
+                const int n = SSL_write(m_ssl,
                     m_writeBuffer.constData(),
                     static_cast<int>(m_writeBuffer.size()));
-                m_writeBuffer.clear();
+                if (n > 0) {
+                    m_writeBuffer.remove(0, n);
+                } else {
+                    const int sslErr = SSL_get_error(m_ssl, n);
+                    if (sslErr != SSL_ERROR_WANT_READ && sslErr != SSL_ERROR_WANT_WRITE)
+                        ioError = true;
+                    // WANT_READ/WANT_WRITE: leave data in buffer and retry next iteration
+                }
             }
         }
+        if (ioError) break;
 
         // 100 ms poll so the stop flag is checked regularly
         fd_set readfds;
@@ -336,8 +394,17 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port)
         }
     }
 
+    // Collect error string before cleanup() so it isn't lost
+    const QString writeErrMsg = ioError
+        ? QStringLiteral("SSL write error: ") + collectOpenSSLErrors()
+        : QString{};
+
     cleanup();
-    emit disconnected();
+
+    if (ioError)
+        emit connectionFailed(writeErrMsg);
+    else
+        emit disconnected();
 }
 
 // ── TLSManager ────────────────────────────────────────────────────────────
@@ -379,13 +446,19 @@ TLSManager::~TLSManager()
 {
     disconnectFromHost();
     m_thread->quit();
-    m_thread->wait(3000);
+    if (!m_thread->wait(3000)) {
+        // Thread did not stop gracefully; force-terminate to avoid a dangling Worker
+        m_thread->terminate();
+        m_thread->wait();
+    }
 }
 
 void TLSManager::connectToHost(const QString& hostname, quint16 port)
 {
-    QMetaObject::invokeMethod(m_worker, [w = m_worker, hostname, port] {
-        w->run(hostname, port);
+    // Capture the pinned hash at call time so it can't change mid-handshake
+    const QByteArray pinned = m_pinnedSha256;
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, hostname, port, pinned] {
+        w->run(hostname, port, pinned);
     }, Qt::QueuedConnection);
 }
 
@@ -406,6 +479,10 @@ bool TLSManager::isConnected() const
     return m_connected.load();
 }
 
+void TLSManager::setPinnedPublicKeyHash(const QByteArray& sha256)
+{
+    m_pinnedSha256 = sha256;
+}
+
 // Required so Qt's moc processes the Worker class defined in this .cpp file
 #include "TLSManager.moc"
->>>>>>> Stashed changes
