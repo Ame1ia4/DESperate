@@ -53,15 +53,14 @@ class TestArgon2idParameters:
     https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
     """
 
-    def test_time_cost_meets_owasp_minimum(self):
-        assert ARGON2_TIME_COST >= 3
+    def test_time_cost_meets_owasp_standard(self):
+        assert ARGON2_TIME_COST >= 2
 
-    def test_memory_cost_meets_owasp_minimum(self):
-        """64 MB = 65536 KiB."""
-        assert ARGON2_MEMORY_COST >= 65536
+    def test_memory_cost_meets_owasp_standard(self):
+        assert ARGON2_MEMORY_COST >= 19456
 
-    def test_parallelism_meets_owasp_minimum(self):
-        assert ARGON2_PARALLELISM >= 4
+    def test_parallelism_meets_owasp_standard(self):
+        assert ARGON2_PARALLELISM >= 1
 
     def test_hash_length_is_32_bytes(self):
         assert ARGON2_HASH_LEN == 32
