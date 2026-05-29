@@ -1,8 +1,9 @@
 #pragma once
 
-#include <QObject>
-#include <QString>
 #include <QHash>
+#include <QObject>
+#include <QSet>
+#include <QString>
 #include <QVector>
 
 #include "src/models/ConversationModel.h"

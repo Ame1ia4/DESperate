@@ -99,17 +99,9 @@ void ApiClient::loginUser(
             return;
         }
 
-        // Store session token if the server returns one.
-        if (!payload.isEmpty()) {
-            const auto parsed =
-                QJsonDocument::fromJson(payload).object();
-            const QString token =
-                parsed.value("token").toString();
-            if (!token.isEmpty()) {
-                m_authToken = token;
-            }
-        }
-
+        // Server authenticates via SRP with a server-side expiry window.
+        // No session token is issued; subsequent requests are authenticated
+        // by the SRP session state held server-side.
         emit loginUserSucceeded();
     });
 }

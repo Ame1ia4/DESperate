@@ -161,35 +161,37 @@ void ConversationController::openConversation(
 
     m_messageModel->clear();
 
-    // Cached messages first.
+    // Build the set of IDs already held in the in-memory cache so the
+    // store-replay loop below can skip duplicates.  Without this check
+    // any message added via appendLocalMessage() would appear twice:
+    // once from the cache and once from the persistent store.
+    QSet<QString> cachedIds;
+
     const auto cachedMessages =
         m_messagesByConversation.value(
             conversationId);
 
-    for (const auto& message :
-         cachedMessages) {
+    for (const auto& message : cachedMessages) {
 
         if (!message.isDeleted) {
-
-            m_messageModel
-                ->addMessage(message);
+            m_messageModel->addMessage(message);
+            cachedIds.insert(message.id);
         }
     }
 
-    // Persistent store replay.
+    // Replay from the persistent store, skipping anything already shown.
     const auto storedMessages =
         m_store->messagesForConversation(
             conversationId);
 
-    for (const auto& message :
-         storedMessages) {
+    for (const auto& message : storedMessages) {
 
-        if (message.isDeleted) {
+        if (message.isDeleted ||
+            cachedIds.contains(message.id)) {
             continue;
         }
 
-        m_messageModel
-            ->addMessage(message);
+        m_messageModel->addMessage(message);
 
         m_messagesByConversation
             [conversationId]

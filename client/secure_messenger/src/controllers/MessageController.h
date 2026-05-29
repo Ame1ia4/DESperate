@@ -6,7 +6,7 @@
 #include <QHash>
 #include <QJsonObject>
 
-    class ApiClient;
+class ApiClient;
 class CryptoServiceClient;
 class LocalMessageStore;
 class MessageModel;

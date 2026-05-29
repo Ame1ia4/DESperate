@@ -5,6 +5,8 @@
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
 
+#include <memory>
+
 AuthController::AuthController(
     ApiClient* api,
     CryptoServiceClient* crypto,
@@ -64,11 +66,20 @@ void AuthController::login(
         return;
     }
 
-    connect(
+    // Use shared connection handles so each lambda can disconnect the
+    // other.  Qt::SingleShotConnection only disconnects the connection
+    // whose signal fired; without this, the unused handler would leak
+    // and accumulate on repeated login attempts.
+    auto successConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn    = std::make_shared<QMetaObject::Connection>();
+
+    *successConn = connect(
         m_api,
         &ApiClient::loginUserSucceeded,
         this,
-        [this, normalized, password]() {
+        [this, normalized, password, failConn]() {
+
+            QObject::disconnect(*failConn);
 
             if (!m_crypto->unlockKeystore(password)) {
 
@@ -106,11 +117,13 @@ void AuthController::login(
         },
         Qt::SingleShotConnection);
 
-    connect(
+    *failConn = connect(
         m_api,
         &ApiClient::loginUserFailed,
         this,
-        [this](const QString& reason) {
+        [this, successConn](const QString& reason) {
+
+            QObject::disconnect(*successConn);
 
             const QString failureReason =
                 reason.isEmpty()
@@ -173,11 +186,16 @@ void AuthController::signUp(
         return;
     }
 
-    connect(
+    auto regSuccessConn = std::make_shared<QMetaObject::Connection>();
+    auto regFailConn    = std::make_shared<QMetaObject::Connection>();
+
+    *regSuccessConn = connect(
         m_api,
         &ApiClient::registerUserSucceeded,
         this,
-        [this]() {
+        [this, regFailConn]() {
+
+            QObject::disconnect(*regFailConn);
 
             setAuthError(QString());
 
@@ -185,11 +203,13 @@ void AuthController::signUp(
         },
         Qt::SingleShotConnection);
 
-    connect(
+    *regFailConn = connect(
         m_api,
         &ApiClient::registerUserFailed,
         this,
-        [this](const QString& reason) {
+        [this, regSuccessConn](const QString& reason) {
+
+            QObject::disconnect(*regSuccessConn);
 
             const QString failureReason =
                 reason.isEmpty()
@@ -198,8 +218,7 @@ void AuthController::signUp(
 
             setAuthError(failureReason);
 
-            emit registrationFailed(
-                failureReason);
+            emit registrationFailed(failureReason);
         },
         Qt::SingleShotConnection);
 
