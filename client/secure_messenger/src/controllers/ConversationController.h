@@ -60,6 +60,9 @@ public slots:
         const QString& conversationId,
         const QString& fingerprint);
 
+    Q_INVOKABLE QString deviceIdForConversation(
+        const QString& conversationId) const;
+
 signals:
     void currentConversationIdChanged();
 
@@ -89,4 +92,7 @@ private:
         QString,
         QVector<DecryptedMessage>>
         m_messagesByConversation;
+
+    QHash<QString, QString>
+        m_deviceIds;
 };

@@ -44,22 +44,35 @@ ApplicationWindow {
         currentIndex: authController.authenticated ? 1 : 0
 
         Item {
+            property string statusMessage: ""
+            property bool statusIsError: false
+
+            id: authItem
+
             StackLayout {
                 anchors.fill: parent
                 currentIndex: root.authScreenIndex
 
                 LoginView {
                     onLoginRequested: function(username, password) {
+                        authItem.statusMessage = ""
                         authController.login(username, password)
                     }
-                    onOpenSignUpRequested: root.authScreenIndex = 1
+                    onOpenSignUpRequested: {
+                        authItem.statusMessage = ""
+                        root.authScreenIndex = 1
+                    }
                 }
 
                 SignupView {
                     onSignUpRequested: function(username, password, confirmPassword) {
+                        authItem.statusMessage = ""
                         authController.signUp(username, password, confirmPassword)
                     }
-                    onBackRequested: root.authScreenIndex = 0
+                    onBackRequested: {
+                        authItem.statusMessage = ""
+                        root.authScreenIndex = 0
+                    }
                 }
             }
 
@@ -67,9 +80,37 @@ ApplicationWindow {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 30
-                text: authController.authError
-                color: "#FF6B6B"
+                text: authItem.statusMessage
+                color: authItem.statusIsError ? "#FF6B6B" : "#7EE8A2"
                 visible: text.length > 0
+                wrapMode: Text.Wrap
+            }
+
+            Connections {
+                target: authController
+
+                function onAuthErrorChanged() {
+                    if (authController.authError.length > 0) {
+                        authItem.statusIsError = true
+                        authItem.statusMessage = authController.authError
+                    }
+                }
+
+                function onRegistrationSucceeded() {
+                    authItem.statusIsError = false
+                    authItem.statusMessage = "Account created. Please log in."
+                    root.authScreenIndex = 0
+                }
+
+                function onRegistrationFailed(reason) {
+                    authItem.statusIsError = true
+                    authItem.statusMessage = reason
+                }
+
+                function onLoginFailed(reason) {
+                    authItem.statusIsError = true
+                    authItem.statusMessage = reason
+                }
             }
         }
 

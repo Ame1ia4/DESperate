@@ -59,6 +59,26 @@ MessageController::MessageController(
         ::handleDecryptFailed);
 }
 
+void MessageController::sendText(
+    const QString& conversationId,
+    const QString& text)
+{
+    const QString trimmed = text.trimmed();
+
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    const QString deviceId =
+        m_conversations->deviceIdForConversation(
+            conversationId);
+
+    sendMessage(
+        conversationId,
+        deviceId,
+        trimmed.toUtf8());
+}
+
 void MessageController::sendMessage(
     QString conversationId,
     QString recipientDeviceId,

@@ -44,6 +44,10 @@ public:
         QObject* parent = nullptr);
 
 public slots:
+    Q_INVOKABLE void sendText(
+        const QString& conversationId,
+        const QString& text);
+
     void sendMessage(
         QString conversationId,
         QString recipientDeviceId,

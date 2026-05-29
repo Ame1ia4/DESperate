@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickStyle>
 
 #include "src/controllers/AuthController.h"
 #include "src/controllers/ConversationController.h"
@@ -25,6 +26,10 @@
 
     app.setOrganizationName("DESperate");
     app.setApplicationName("secure_messenger");
+
+    // Must be set before the QML engine is created.
+    // Basic style supports background/contentItem customization.
+    QQuickStyle::setStyle("Basic");
 
     QQmlApplicationEngine engine;
 

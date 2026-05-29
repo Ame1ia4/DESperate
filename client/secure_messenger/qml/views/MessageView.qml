@@ -62,7 +62,7 @@ Rectangle {
                     radius: 10
                 }
                 onClicked: {
-                    conversationController.sendMessage(
+                    messageController.sendText(
                         conversationController.currentConversationId,
                         messageField.text)
 

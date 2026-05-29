@@ -4,7 +4,7 @@ project(secure_messenger VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Network)
+find_package(Qt6 REQUIRED COMPONENTS Quick Network QuickControls2)
 
 qt_standard_project_setup(REQUIRES 6.10)
 
@@ -67,7 +67,7 @@ set_target_properties(appsecure_messenger PROPERTIES
 )
 
 target_link_libraries(appsecure_messenger
-    PRIVATE Qt6::Quick Qt6::Network
+    PRIVATE Qt6::Quick Qt6::Network Qt6::QuickControls2
 )
 
 install(TARGETS appsecure_messenger

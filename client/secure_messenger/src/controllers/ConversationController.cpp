@@ -68,6 +68,8 @@ void ConversationController::loadConversations()
             QVector<ConversationItem> items;
             items.reserve(data.size());
 
+            m_deviceIds.clear();
+
             for (const auto& value : data) {
 
                 const QJsonObject obj =
@@ -80,6 +82,10 @@ void ConversationController::loadConversations()
 
                 item.participant =
                     obj.value("participant")
+                        .toString();
+
+                item.deviceId =
+                    obj.value("device_id")
                         .toString();
 
                 item.lastMessage =
@@ -103,6 +109,14 @@ void ConversationController::loadConversations()
                 item.verified =
                     m_trust->isVerified(
                         item.participant);
+
+                if (!item.conversationId.isEmpty() &&
+                    !item.deviceId.isEmpty()) {
+
+                    m_deviceIds.insert(
+                        item.conversationId,
+                        item.deviceId);
+                }
 
                 items.push_back(item);
             }
@@ -257,4 +271,11 @@ bool ConversationController::validateMessage(
 
     return plaintext.size() <=
            MAX_MESSAGE_LENGTH;
+}
+
+QString ConversationController::deviceIdForConversation(
+    const QString& conversationId) const
+{
+    return m_deviceIds.value(
+        conversationId, QString());
 }

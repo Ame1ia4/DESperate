@@ -10,6 +10,7 @@ struct ConversationItem
 {
     QString conversationId;
     QString participant;
+    QString deviceId;
     QString lastMessage;
     QString fingerprint;
     QDateTime updatedAt;

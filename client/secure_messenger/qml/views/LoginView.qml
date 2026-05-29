@@ -56,8 +56,12 @@ Page {
                 text: "Show password"
                 checked: false
                 contentItem: Text {
-                    text: control.text
+                    text: showPasswordToggle.text
                     color: "#F5EDD6"
+                    leftPadding: showPasswordToggle.indicator
+                                     ? showPasswordToggle.indicator.width + showPasswordToggle.spacing
+                                     : 0
+                    verticalAlignment: Text.AlignVCenter
                 }
                 onCheckedChanged: passwordField.echoMode = checked ? TextInput.Normal : TextInput.Password
             }
