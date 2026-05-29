@@ -47,10 +47,6 @@ from __future__ import annotations
 
 import os
 
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
-from argon2.low_level import hash_secret_raw, Type
-
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
@@ -94,26 +90,9 @@ INFO_LOCAL_KEY_ENC      = b"local-v1-key-encryption"
 INFO_LOCAL_KEY_MASTER   = b"local-v1-master-key"
 
 
-# ── Argon2id parameters ──────────────────────────────────────────────────────
-# Imported from constants — defined and justified there (OWASP Password
-# Storage Cheat Sheet). Do not redefine or override them here.
-from .constants import (
-    ARGON2_TIME_COST,
-    ARGON2_MEMORY_COST,
-    ARGON2_PARALLELISM,
-    ARGON2_HASH_LEN,
-    ARGON2_SALT_LEN,
-)
-
-# Pre-configured PasswordHasher for server-side password verification.
-# Uses the constants above so parameters are defined in one place.
-_password_hasher = PasswordHasher(
-    time_cost    = ARGON2_TIME_COST,
-    memory_cost  = ARGON2_MEMORY_COST,
-    parallelism  = ARGON2_PARALLELISM,
-    hash_len     = ARGON2_HASH_LEN,
-    salt_len     = ARGON2_SALT_LEN,
-)
+# Argon2id functions have moved to core/password.py.
+# Re-exported here so existing callers importing from core.kdf continue to work.
+from .password import argon2id_hash, argon2id_verify, argon2id_derive_key
 
 
 # ── HKDF ────────────────────────────────────────────────────────────────────
@@ -218,108 +197,3 @@ def hkdf_derive_many(
         offset += l
     return keys
 
-
-# ── Argon2id — server-side password hashing ──────────────────────────────────
-
-def argon2id_hash(password: str) -> str:
-    """
-    Hash a password for server-side storage using Argon2id.
-
-    Returns an encoded hash string that includes the salt, parameters, and
-    hash — everything needed for future verification. Store this string
-    directly in the database. Never store the password itself.
-
-    Parameters are set at module level (ARGON2_* constants) and justified
-    against the OWASP Password Storage Cheat Sheet.
-
-    Parameters
-    ----------
-    password : plaintext password string (Unicode)
-
-    Returns
-    -------
-    str : Argon2id encoded hash string, e.g.:
-          "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>"
-    """
-    return _password_hasher.hash(password)
-
-
-def argon2id_verify(stored_hash: str, password: str) -> bool:
-    """
-    Verify a password against a stored Argon2id hash.
-
-    Returns True if the password matches, False otherwise.
-    Never raises on a mismatch — always returns bool so callers don't
-    need to catch exceptions for normal authentication failures.
-
-    Parameters
-    ----------
-    stored_hash : the encoded hash string returned by argon2id_hash()
-    password    : the plaintext password to verify
-    """
-    try:
-        return _password_hasher.verify(stored_hash, password)
-    except (VerifyMismatchError, VerificationError):
-        return False
-
-
-# ── Argon2id — local key derivation ──────────────────────────────────────────
-#
-# This is separate from server-side password hashing. When a user's long-term
-# private key bundle is stored encrypted on their device, the encryption key
-# is derived from their passphrase using Argon2id with a LOCAL salt — distinct
-# from the server-side salt. This means:
-#
-#   - A server database breach does not expose the local key encryption key.
-#   - The server cannot derive the local encryption key even if it knows the
-#     server-side hash, because the salts are different.
-#
-# The local salt is stored alongside the encrypted key bundle (it is not
-# secret — it just prevents precomputation attacks).
-
-def argon2id_derive_key(
-    passphrase: str,
-    salt:       bytes | None = None,
-) -> tuple[bytes, bytes]:
-    """
-    Derive a 32-byte key from a passphrase using Argon2id.
-
-    Use this for local key encryption — NOT for server-side password storage.
-    For server-side storage, use argon2id_hash() / argon2id_verify() instead.
-
-    The returned key should be fed into hkdf_derive() with INFO_LOCAL_KEY_ENC
-    before use, to provide an additional domain separation layer:
-
-        raw_key, salt = argon2id_derive_key(passphrase)
-        enc_key = hkdf_derive(raw_key, salt, INFO_LOCAL_KEY_ENC)
-
-    Parameters
-    ----------
-    passphrase : the user's local passphrase (may differ from server password)
-    salt       : 16-byte random salt. Generated freshly if not provided.
-                 Store the returned salt alongside the encrypted key bundle.
-
-    Returns
-    -------
-    (key: bytes, salt: bytes)
-        key  : 32-byte derived key
-        salt : the salt used (generated or as provided)
-    """
-    if salt is None:
-        salt = os.urandom(ARGON2_SALT_LEN)
-
-    if len(salt) != ARGON2_SALT_LEN:
-        raise ValueError(
-            f"salt must be {ARGON2_SALT_LEN} bytes, got {len(salt)}"
-        )
-
-    key = hash_secret_raw(
-        secret      = passphrase.encode("utf-8"),
-        salt        = salt,
-        time_cost   = ARGON2_TIME_COST,
-        memory_cost = ARGON2_MEMORY_COST,
-        parallelism = ARGON2_PARALLELISM,
-        hash_len    = ARGON2_HASH_LEN,
-        type        = Type.ID,
-    )
-    return key, salt
