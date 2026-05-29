@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <atomic>
 
 class TrustStore;
@@ -36,4 +37,5 @@ private:
     Worker*              m_worker       = nullptr;
     std::atomic<bool>    m_connected{false};
     QByteArray           m_pinnedSha256;
+    QString              m_initError;    // set in constructor if TrustStore is invalid
 };

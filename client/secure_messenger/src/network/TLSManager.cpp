@@ -88,6 +88,10 @@ public:
     void enqueueWrite(const QByteArray& data)
     {
         QMutexLocker lock(&m_writeMutex);
+        if (m_writeBuffer.size() >= kMaxWriteBufferBytes) {
+            m_bufferOverflow.store(true, std::memory_order_relaxed);
+            return;
+        }
         m_writeBuffer.append(data);
     }
 
@@ -134,11 +138,14 @@ private:
         return out.isEmpty() ? QStringLiteral("unknown OpenSSL error") : out;
     }
 
+    static constexpr qsizetype kMaxWriteBufferBytes = 4 * 1024 * 1024; // 4 MB
+
     QString           m_caBundlePath;
     SSL_CTX*          m_ctx  = nullptr;
     SSL*              m_ssl  = nullptr;
     sock_t            m_sock = kInvalidSock;
     std::atomic<bool> m_stopRequested{false};
+    std::atomic<bool> m_bufferOverflow{false};
     QMutex            m_writeMutex;
     QByteArray        m_writeBuffer;
 #ifdef _WIN32
@@ -259,7 +266,9 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
             FD_ZERO(&writefds);
             FD_SET(s, &writefds);
             struct timeval tv{kConnectTimeoutSecs, 0};
-            if (::select(static_cast<int>(s) + 1,
+            // FD_SETSIZE is 64 on Windows — fine for a single-connection client.
+        // Do not use fd_set for multi-socket code on Windows without raising FD_SETSIZE.
+        if (::select(static_cast<int>(s) + 1,
                          nullptr, &writefds, nullptr, &tv) > 0) {
                 int sockErr = 0;
                 socklen_t errLen = sizeof(sockErr);
@@ -381,6 +390,11 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
     bool ioError = false;
 
     while (!m_stopRequested.load(std::memory_order_relaxed)) {
+        if (m_bufferOverflow.load(std::memory_order_relaxed)) {
+            ioError = true;
+            break;
+        }
+
         // Flush any pending outgoing data
         {
             QMutexLocker lock(&m_writeMutex);
@@ -400,7 +414,8 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
         }
         if (ioError) break;
 
-        // 100 ms poll so the stop flag is checked regularly
+        // 100 ms poll so the stop flag is checked regularly.
+        // FD_SETSIZE is 64 on Windows — safe here (single socket per Worker).
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(m_sock, &readfds);
@@ -426,7 +441,9 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
 
     // Collect error string before cleanup() so it isn't lost
     const QString writeErrMsg = ioError
-        ? QStringLiteral("SSL write error: ") + collectOpenSSLErrors()
+        ? (m_bufferOverflow.load()
+               ? QStringLiteral("Write buffer exceeded 4 MB — connection dropped")
+               : QStringLiteral("SSL write error: ") + collectOpenSSLErrors())
         : QString{};
 
     cleanup();
@@ -443,6 +460,9 @@ TLSManager::TLSManager(TrustStore* trust, QObject* parent)
     : QObject(parent)
     , m_trust(trust)
 {
+    if (trust && !trust->isValid())
+        m_initError = QString("CA bundle not found at path: %1").arg(trust->caBundlePath());
+
     const QString caPath = trust ? trust->caBundlePath() : QString{};
     m_worker = new Worker(caPath);
     m_thread = new QThread(this);
@@ -485,6 +505,11 @@ TLSManager::~TLSManager()
 
 void TLSManager::connectToHost(const QString& hostname, quint16 port)
 {
+    if (!m_initError.isEmpty()) {
+        emit connectionFailed(m_initError);
+        return;
+    }
+
     // Capture the pinned hash at call time so it can't change mid-handshake
     const QByteArray pinned = m_pinnedSha256;
     QMetaObject::invokeMethod(m_worker, [w = m_worker, hostname, port, pinned] {
