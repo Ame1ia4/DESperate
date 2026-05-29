@@ -1,79 +1,241 @@
 #include "AuthController.h"
-#include "services/ApiClient.h"
-#include "services/CryptoServiceClient.h"
+
+#include "src/storage/SessionStore.h"
+#include "src/storage/TrustStore.h"
+#include "src/services/ApiClient.h"
+#include "src/services/CryptoServiceClient.h"
+
+#include <memory>
 
 AuthController::AuthController(
     ApiClient* api,
     CryptoServiceClient* crypto,
     TrustStore* trust,
-    QObject* parent
-    )
+    SessionStore* sessions,
+    QObject* parent)
     : QObject(parent)
     , m_api(api)
     , m_crypto(crypto)
     , m_trust(trust)
+    , m_sessions(sessions)
 {
 }
 
-bool AuthController::authenticated() const
+bool AuthController::authenticated() const noexcept
 {
     return m_authenticated;
 }
 
-void AuthController::unlock(
-    const QString& username,
-    const QString& password
-    )
+QString AuthController::authError() const
 {
-    Q_UNUSED(username)
-    bool unlocked = m_crypto->unlockKeystore(password);
-
-    if (!unlocked)
-    {
-        emit loginFailed("Authentication failed.");
-        return;
-    }
-
-    m_authenticated = true;
-
-    emit authenticatedChanged();
-    emit loginSucceeded();
+    return m_authError;
 }
 
-void AuthController::registerDevice(
-    const QString& username,
-    const QString& password
-    )
+QString AuthController::currentUserId() const
 {
-    auto bundle = m_crypto->generateIdentityBundle(password);
-    if (bundle.isEmpty())
-    {
-        emit registrationFailed("Registration failed.");
+    return m_currentUserId;
+}
+
+void AuthController::setAuthError(
+    const QString& error)
+{
+    if (m_authError == error) {
         return;
     }
 
-    connect(
+    m_authError = error;
+
+    emit authErrorChanged();
+}
+
+void AuthController::login(
+    const QString& username,
+    const QString& password)
+{
+    const QString normalized =
+        username.trimmed();
+
+    if (normalized.isEmpty() ||
+        password.isEmpty()) {
+
+        setAuthError(
+            "Username and password are required.");
+
+        emit loginFailed(m_authError);
+
+        return;
+    }
+
+    // Use shared connection handles so each lambda can disconnect the
+    // other.  Qt::SingleShotConnection only disconnects the connection
+    // whose signal fired; without this, the unused handler would leak
+    // and accumulate on repeated login attempts.
+    auto successConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn    = std::make_shared<QMetaObject::Connection>();
+
+    *successConn = connect(
+        m_api,
+        &ApiClient::loginUserSucceeded,
+        this,
+        [this, normalized, password, failConn]() {
+
+            QObject::disconnect(*failConn);
+
+            if (!m_crypto->unlockKeystore(password)) {
+
+                QString reason =
+                    m_crypto->lastError();
+
+                if (reason.isEmpty()) {
+                    reason =
+                        "Failed to unlock keystore.";
+                }
+
+                setAuthError(reason);
+
+                emit loginFailed(reason);
+
+                return;
+            }
+
+            emit keystoreUnlocked();
+
+            m_currentUserId = normalized;
+            emit currentUserChanged();
+
+            emit identityLoaded();
+            emit sessionInitialized();
+
+            setAuthError(QString());
+
+            if (!m_authenticated) {
+                m_authenticated = true;
+                emit authenticatedChanged();
+            }
+
+            emit loginSucceeded();
+        },
+        Qt::SingleShotConnection);
+
+    *failConn = connect(
+        m_api,
+        &ApiClient::loginUserFailed,
+        this,
+        [this, successConn](const QString& reason) {
+
+            QObject::disconnect(*successConn);
+
+            const QString failureReason =
+                reason.isEmpty()
+                    ? "Authentication failed."
+                    : reason;
+
+            setAuthError(failureReason);
+
+            emit loginFailed(failureReason);
+        },
+        Qt::SingleShotConnection);
+
+    m_api->loginUser(normalized, password);
+}
+
+void AuthController::signUp(
+    const QString& username,
+    const QString& password,
+    const QString& confirmPassword)
+{
+    const QString normalized =
+        username.trimmed();
+
+    if (normalized.isEmpty() ||
+        password.isEmpty()) {
+
+        setAuthError(
+            "Username and password are required.");
+
+        emit registrationFailed(m_authError);
+
+        return;
+    }
+
+    if (password != confirmPassword) {
+
+        setAuthError(
+            "Passwords do not match.");
+
+        emit registrationFailed(m_authError);
+
+        return;
+    }
+
+    const QJsonObject bundle =
+        m_crypto->generateIdentityBundle(
+            password);
+
+    if (bundle.isEmpty()) {
+
+        const QString reason =
+            m_crypto->lastError().isEmpty()
+                ? "Key generation failed."
+                : m_crypto->lastError();
+
+        setAuthError(reason);
+
+        emit registrationFailed(reason);
+
+        return;
+    }
+
+    auto regSuccessConn = std::make_shared<QMetaObject::Connection>();
+    auto regFailConn    = std::make_shared<QMetaObject::Connection>();
+
+    *regSuccessConn = connect(
         m_api,
         &ApiClient::registerUserSucceeded,
         this,
-        [this]() {
+        [this, regFailConn]() {
+
+            QObject::disconnect(*regFailConn);
+
+            setAuthError(QString());
+
             emit registrationSucceeded();
         },
-        Qt::SingleShotConnection
-        );
+        Qt::SingleShotConnection);
 
-    connect(
+    *regFailConn = connect(
         m_api,
         &ApiClient::registerUserFailed,
         this,
-        [this]() {
-            emit registrationFailed("Registration failed.");
-        },
-        Qt::SingleShotConnection
-        );
+        [this, regSuccessConn](const QString& reason) {
 
-    m_api->registerUser(
-        username,
-        bundle
-        );
+            QObject::disconnect(*regSuccessConn);
+
+            const QString failureReason =
+                reason.isEmpty()
+                    ? "Registration failed."
+                    : reason;
+
+            setAuthError(failureReason);
+
+            emit registrationFailed(failureReason);
+        },
+        Qt::SingleShotConnection);
+
+    m_api->registerUser(normalized, bundle);
+}
+
+void AuthController::logout()
+{
+    if (m_authenticated) {
+        m_authenticated = false;
+
+        emit authenticatedChanged();
+    }
+
+    m_currentUserId.clear();
+
+    emit currentUserChanged();
+
+    setAuthError(QString());
 }

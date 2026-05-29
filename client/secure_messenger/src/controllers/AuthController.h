@@ -1,10 +1,12 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 
-class ApiClient;
+    class ApiClient;
 class CryptoServiceClient;
 class TrustStore;
+class SessionStore;
 
 class AuthController : public QObject
 {
@@ -14,37 +16,76 @@ class AuthController : public QObject
                    READ authenticated
                        NOTIFY authenticatedChanged)
 
+    Q_PROPERTY(QString authError
+                   READ authError
+                       NOTIFY authErrorChanged)
+
+    Q_PROPERTY(QString currentUserId
+                   READ currentUserId
+                       NOTIFY currentUserChanged)
+
 public:
     explicit AuthController(
         ApiClient* api,
         CryptoServiceClient* crypto,
         TrustStore* trust,
-        QObject* parent = nullptr
-        );
+        SessionStore* sessions,
+        QObject* parent = nullptr);
 
-    Q_INVOKABLE void unlock(
+    bool authenticated() const noexcept;
+
+    QString authError() const;
+
+    QString currentUserId() const;
+
+public slots:
+    void login(
         const QString& username,
-        const QString& password
-        );
+        const QString& password);
 
-    Q_INVOKABLE void registerDevice(
+    void signUp(
         const QString& username,
-        const QString& password
-        );
+        const QString& password,
+        const QString& confirmPassword);
 
-    bool authenticated() const;
+    void logout();
 
 signals:
     void authenticatedChanged();
-    void loginFailed(QString reason);
+
+    void authErrorChanged();
+
+    void currentUserChanged();
+
     void loginSucceeded();
-    void registrationFailed(QString reason);
+
+    void loginFailed(QString reason);
+
     void registrationSucceeded();
 
+    void registrationFailed(QString reason);
+
+    void keystoreUnlocked();
+
+    void identityLoaded();
+
+    void sessionInitialized();
+
 private:
+    void setAuthError(const QString& error);
+
+private:
+    ApiClient* m_api = nullptr;
+
+    CryptoServiceClient* m_crypto = nullptr;
+
+    TrustStore* m_trust = nullptr;
+
+    SessionStore* m_sessions = nullptr;
+
     bool m_authenticated = false;
 
-    ApiClient* m_api;
-    CryptoServiceClient* m_crypto;
-    TrustStore* m_trust;
+    QString m_authError;
+
+    QString m_currentUserId;
 };

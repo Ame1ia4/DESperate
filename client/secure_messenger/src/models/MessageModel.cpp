@@ -40,6 +40,15 @@ QVariant MessageModel::data(
             msg.verificationState
             );
 
+    case PlaintextRole:
+        return msg.plaintext;
+
+    case OutgoingRole:
+        return msg.senderDeviceId == "self";
+
+    case VerifiedRole:
+        return msg.verificationState == VerificationState::Verified;
+
     default:
         return {};
     }
@@ -51,7 +60,10 @@ MessageModel::roleNames() const
     return {
         {ContentRole, "content"},
         {TimestampRole, "timestamp"},
-        {VerificationRole, "verificationState"}
+        {VerificationRole, "verificationState"},
+        {PlaintextRole, "plaintext"},
+        {OutgoingRole, "outgoing"},
+        {VerifiedRole, "verified"}
     };
 }
 
@@ -68,4 +80,11 @@ void MessageModel::addMessage(
     m_messages.push_back(message);
 
     endInsertRows();
+}
+
+void MessageModel::clear()
+{
+    beginResetModel();
+    m_messages.clear();
+    endResetModel();
 }

@@ -4,8 +4,8 @@ import QtQuick.Layouts
 
 Page {
     property bool showPassword: false
-    signal loginRequested(string username, string password)
-    signal openSignUpRequested()
+    signal signUpRequested(string username, string password, string confirmPassword)
+    signal backRequested()
 
     Rectangle {
         anchors.fill: parent
@@ -17,7 +17,7 @@ Page {
             spacing: 18
 
             Text {
-                text: "Secure Messenger Login"
+                text: "Create Account"
                 color: "#F5EDD6"
                 font.pixelSize: 28
                 font.bold: true
@@ -51,39 +51,49 @@ Page {
                 color: "#F5EDD6"
             }
 
+            TextField {
+                id: confirmPasswordField
+                placeholderText: "Confirm Password"
+                placeholderTextColor: "#C9D4C5"
+                maximumLength: 64
+                echoMode: showPassword ? TextInput.Normal : TextInput.Password
+                background: Rectangle {
+                    color: "#2E6D47"
+                    radius: 10
+                    border.color: "#4FAE7C"
+                    border.width: 1
+                }
+                color: "#F5EDD6"
+            }
+
             CheckBox {
                 id: showPasswordToggle
                 text: "Show password"
                 checked: false
-                contentItem: Text {
-                    text: showPasswordToggle.text
-                    color: "#F5EDD6"
-                    leftPadding: showPasswordToggle.indicator
-                                     ? showPasswordToggle.indicator.width + showPasswordToggle.spacing
-                                     : 0
-                    verticalAlignment: Text.AlignVCenter
+                onCheckedChanged: {
+                    passwordField.echoMode = checked ? TextInput.Normal : TextInput.Password
+                    confirmPasswordField.echoMode = checked ? TextInput.Normal : TextInput.Password
                 }
-                onCheckedChanged: passwordField.echoMode = checked ? TextInput.Normal : TextInput.Password
             }
 
             Button {
-                text: "Login"
+                text: "Sign Up"
                 background: Rectangle {
                     color: "#4FAE7C"
                     radius: 10
                 }
                 onClicked: {
-                    loginRequested(
+                    signUpRequested(
                         usernameField.text,
-                        passwordField.text)
+                        passwordField.text,
+                        confirmPasswordField.text)
                 }
             }
 
             Button {
-                text: "No account? Sign up"
+                text: "Back to Login"
                 flat: true
-                font.pixelSize: 14
-                onClicked: openSignUpRequested()
+                onClicked: backRequested()
             }
         }
     }

@@ -1,155 +1,162 @@
+
 #include "CryptoServiceClient.h"
 
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QEventLoop>
+#include <QFileInfo>
 #include <QJsonDocument>
-#include <QTimer>
+#include <QProcess>
+#include <QUuid>
 
-CryptoServiceClient::CryptoServiceClient(QObject* parent)
+    CryptoServiceClient::CryptoServiceClient(
+        QObject* parent)
     : QObject(parent)
 {
-    m_socket.connectToServer("pqmessenger_crypto");
-}
-
-QJsonObject CryptoServiceClient::rpc(
-    const QString& method,
-    const QJsonObject& params
-    )
-{
-    m_lastError.clear();
-
-    if (!ensureConnected()) {
-        return {};
-    }
-
-    QJsonObject request;
-
-    request["method"] = method;
-    request["params"] = params;
-
-    QByteArray payload =
-        QJsonDocument(request).toJson();
-
-    if (!writeRequest(payload)) {
-        return {};
-    }
-
-    return readResponse();
 }
 
 bool CryptoServiceClient::unlockKeystore(
-    const QString& password
-    )
+    const QString& password)
 {
-    QJsonObject params;
-    params["password"] = password;
+    if (password.isEmpty()) {
 
-    auto result = rpc("unlock_keystore", params);
+        m_lastError =
+            "Password required.";
 
-    if (result.isEmpty()) {
-        if (m_lastError.isEmpty()) {
-            m_lastError = "Authentication failed.";
-        }
         return false;
     }
 
-    if (!result["success"].toBool()) {
-        m_lastError = "Authentication failed.";
+    const QJsonObject response =
+        rpc(
+            "unlock_keystore",
+            {
+                {"password", password}
+            });
+
+    const bool success =
+        response.value("success")
+            .toBool(false);
+
+    if (!success) {
+
+        m_lastError =
+            response.value("error")
+                .toString(
+                    "Keystore unlock failed.");
+
         return false;
     }
 
-    return result["success"].toBool();
+    m_lastError.clear();
+
+    return true;
 }
 
-QJsonObject CryptoServiceClient::encryptMessage(
+QJsonObject
+CryptoServiceClient::generateIdentityBundle(
+    const QString& password)
+{
+    return rpc(
+        "generate_identity_bundle",
+        {
+            {"password", password}
+        });
+}
+
+QJsonObject
+CryptoServiceClient::encryptMessage(
     const QString& plaintext,
     const QString& recipientDeviceId,
-    const QString& conversationId
-    )
+    const QString& conversationId)
 {
-    QJsonObject params;
-
-    params["plaintext"] = plaintext;
-    params["recipient_device_id"] = recipientDeviceId;
-    params["conversation_id"] = conversationId;
-
-    auto result = rpc("encrypt_message", params);
-    if (result.isEmpty() || !result["success"].toBool()) {
-        m_lastError = "Encryption failed.";
-        return {};
-    }
-
-    return result["envelope"].toObject();
-}
-
-QJsonObject CryptoServiceClient::generateIdentityBundle(
-    const QString& password
-    )
-{
-    QJsonObject params;
-    params["password"] = password;
-
-    auto result = rpc("generate_identity_bundle", params);
-    if (result.isEmpty() || !result["success"].toBool()) {
-        m_lastError = "Bundle generation failed.";
-        return {};
-    }
-
-    return result["bundle"].toObject();
+    return rpc(
+        "encrypt_message",
+        {
+            {"plaintext", plaintext},
+            {"recipient_device_id",
+             recipientDeviceId},
+            {"conversation_id",
+             conversationId}
+        });
 }
 
 QString CryptoServiceClient::decryptMessage(
-    const QJsonObject& envelope
-    )
+    const QJsonObject& envelope)
 {
-    auto result = rpc("decrypt_message", {
-        {"envelope", envelope}
-    });
+    const QJsonObject response =
+        rpc(
+            "decrypt_message",
+            {
+                {"envelope", envelope}
+            });
 
-    if (result.isEmpty() || !result["success"].toBool()) {
-        m_lastError = "Decryption failed.";
-        return {};
-    }
-
-    return result["plaintext"].toString();
+    return response.value("plaintext")
+        .toString();
 }
 
 void CryptoServiceClient::encryptMessageAsync(
-    const QString& plaintext,
+    const QString& requestId,
+    const QByteArray& plaintext,
     const QString& recipientDeviceId,
-    const QString& conversationId
-    )
+    const QString& conversationId)
 {
-    QTimer::singleShot(0, this, [this,
-                                 plaintext,
-                                 recipientDeviceId,
-                                 conversationId]() {
-        const auto envelope = encryptMessage(
-            plaintext,
-            recipientDeviceId,
-            conversationId
-            );
+    QMetaObject::invokeMethod(
+        this,
+        [=]() {
 
-        if (!m_lastError.isEmpty()) {
-            emit encryptFailed(m_lastError);
-            return;
-        }
+            const QJsonObject response =
+                encryptMessage(
+                    QString::fromUtf8(
+                        plaintext),
+                    recipientDeviceId,
+                    conversationId);
 
-        emit encryptCompleted(envelope);
-    });
+            if (response.isEmpty()) {
+
+                emit encryptFailed(
+                    requestId,
+                    m_lastError.isEmpty()
+                        ? "Encryption failed."
+                        : m_lastError);
+
+                return;
+            }
+
+            emit encryptCompleted(
+                requestId,
+                response);
+        },
+        Qt::QueuedConnection);
 }
 
 void CryptoServiceClient::decryptMessageAsync(
-    const QJsonObject& envelope
-    )
+    const QString& requestId,
+    const QJsonObject& envelope)
 {
-    QTimer::singleShot(0, this, [this, envelope]() {
-        const auto plaintext = decryptMessage(envelope);
-        if (!m_lastError.isEmpty()) {
-            emit decryptFailed(m_lastError);
-            return;
-        }
+    QMetaObject::invokeMethod(
+        this,
+        [=]() {
 
-        emit decryptCompleted(plaintext);
-    });
+            const QString plaintext =
+                decryptMessage(
+                    envelope);
+
+            if (plaintext.isEmpty()) {
+
+                emit decryptFailed(
+                    requestId,
+                    m_lastError.isEmpty()
+                        ? "Decryption failed."
+                        : m_lastError);
+
+                return;
+            }
+
+            emit decryptCompleted(
+                requestId,
+                plaintext);
+        },
+        Qt::QueuedConnection);
 }
 
 QString CryptoServiceClient::lastError() const
@@ -157,7 +164,8 @@ QString CryptoServiceClient::lastError() const
     return m_lastError;
 }
 
-void CryptoServiceClient::setRpcTimeoutMs(int timeoutMs)
+void CryptoServiceClient::setRpcTimeoutMs(
+    int timeoutMs)
 {
     if (timeoutMs <= 0) {
         return;
@@ -166,55 +174,183 @@ void CryptoServiceClient::setRpcTimeoutMs(int timeoutMs)
     m_rpcTimeoutMs = timeoutMs;
 }
 
+QJsonObject CryptoServiceClient::rpc(
+    const QString& method,
+    const QJsonObject& params)
+{
+    if (!ensureConnected()) {
+        return {};
+    }
+
+    QJsonObject request;
+
+    request["id"] =
+        QUuid::createUuid().toString();
+
+    request["method"] =
+        method;
+
+    request["params"] =
+        params;
+
+    const QByteArray payload =
+        QJsonDocument(request)
+            .toJson(
+                QJsonDocument::Compact);
+
+    if (!writeRequest(payload)) {
+        return {};
+    }
+
+    return readResponse();
+}
+
 bool CryptoServiceClient::ensureConnected()
 {
-    if (m_socket.state() == QLocalSocket::ConnectedState) {
+    if (m_socket.state() ==
+        QAbstractSocket::ConnectedState) {
+
         return true;
     }
 
-    m_socket.abort();
-    m_socket.connectToServer("pqmessenger_crypto");
+    m_socket.connectToHost(
+        m_serviceHost,
+        m_servicePort);
 
-    if (!m_socket.waitForConnected(m_rpcTimeoutMs)) {
-        m_lastError = "Crypto service unavailable.";
+    if (m_socket.waitForConnected(
+            m_rpcTimeoutMs)) {
+
+        return true;
+    }
+
+    if (!m_serviceStarted) {
+
+        if (!startLocalCryptoService()) {
+
+            m_lastError =
+                "Unable to start crypto service.";
+
+            return false;
+        }
+
+        m_serviceStarted = true;
+
+        m_socket.connectToHost(
+            m_serviceHost,
+            m_servicePort);
+
+        if (m_socket.waitForConnected(
+                m_rpcTimeoutMs)) {
+
+            return true;
+        }
+    }
+
+    m_lastError =
+        m_socket.errorString();
+
+    return false;
+}
+
+bool CryptoServiceClient::startLocalCryptoService()
+{
+    const QString script =
+        locateServiceScript();
+
+    if (script.isEmpty()) {
+
+        m_lastError =
+            "Crypto service script missing.";
+
         return false;
     }
 
-    return true;
+    return QProcess::startDetached(
+        script);
+}
+
+QString CryptoServiceClient::locateServiceScript()
+    const
+{
+    const QString basePath =
+        QCoreApplication
+        ::applicationDirPath();
+
+    const QString candidate =
+        basePath +
+        "/crypto_service";
+
+    if (QFileInfo::exists(candidate)) {
+        return candidate;
+    }
+
+    return {};
 }
 
 bool CryptoServiceClient::writeRequest(
-    const QByteArray& payload
-    )
+    const QByteArray& payload)
 {
-    if (m_socket.write(payload) == -1) {
-        m_lastError = "Crypto request failed.";
+    const QByteArray framed =
+        payload + '\n';
+
+    if (m_socket.write(framed) == -1) {
+
+        m_lastError =
+            m_socket.errorString();
+
         return false;
     }
 
-    if (!m_socket.waitForBytesWritten(m_rpcTimeoutMs)) {
-        m_lastError = "Crypto request timeout.";
+    if (!m_socket.waitForBytesWritten(
+            m_rpcTimeoutMs)) {
+
+        m_lastError =
+            "Timed out writing request.";
+
         return false;
     }
 
-    m_socket.flush();
     return true;
 }
 
-QJsonObject CryptoServiceClient::readResponse()
+QJsonObject
+CryptoServiceClient::readResponse()
 {
-    if (!m_socket.waitForReadyRead(m_rpcTimeoutMs)) {
-        m_lastError = "Crypto response timeout.";
+    if (!m_socket.waitForReadyRead(
+            m_rpcTimeoutMs)) {
+
+        m_lastError =
+            "Timed out waiting for response.";
+
         return {};
     }
 
-    const QByteArray response = m_socket.readAll();
-    QJsonParseError parseError;
-    auto doc = QJsonDocument::fromJson(response, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        m_lastError = "Invalid crypto response.";
+    const QByteArray responseBytes =
+        m_socket.readLine();
+
+    const auto document =
+        QJsonDocument::fromJson(
+            responseBytes);
+
+    if (!document.isObject()) {
+
+        m_lastError =
+            "Invalid RPC response.";
+
         return {};
     }
 
-    return doc.object();
+    const QJsonObject response =
+        document.object();
+
+    if (response.contains("error")) {
+
+        m_lastError =
+            response.value("error")
+                .toString();
+
+        return {};
+    }
+
+    return response;
 }

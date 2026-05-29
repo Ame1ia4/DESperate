@@ -16,6 +16,10 @@ public:
         const QString& username,
         const QJsonObject& bundle
         );
+    void loginUser(
+        const QString& username,
+        const QString& password
+        );
 
     void sendMessage(
         const QJsonObject& encryptedEnvelope
@@ -30,9 +34,17 @@ public:
         const QString& deviceId
         );
 
+    void setAuthToken(const QString& token);
+
+    void fetchConversations();
+
 signals:
     void registerUserSucceeded();
-    void registerUserFailed();
+    void registerUserFailed(QString reason);
+    void loginUserSucceeded();
+    void loginUserFailed(QString reason);
+    void fetchConversationsSucceeded(QJsonArray conversations);
+    void fetchConversationsFailed(QString reason);
     void pullMessagesSucceeded(QJsonArray envelopes);
     void pullMessagesFailed();
     void acknowledgeMessageSucceeded(QString messageId);
@@ -40,6 +52,8 @@ signals:
 
 private:
     QNetworkAccessManager m_network;
+
+    QString m_authToken;
 
     QNetworkRequest makeRequest(
         const QString& path
