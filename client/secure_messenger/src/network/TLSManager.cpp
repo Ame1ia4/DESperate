@@ -27,6 +27,7 @@
 #  include <unistd.h>
 #  include <fcntl.h>
 #  include <errno.h>
+#  include <signal.h>
    using sock_t = int;
    static constexpr sock_t kInvalidSock = -1;
    static void closeSock(sock_t s)   { ::close(s); }
@@ -62,6 +63,10 @@ public:
         WSADATA wsa{};
         if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
             m_wsaInitFailed = true;
+#else
+        // SSL_write() uses write() internally; a broken socket raises SIGPIPE
+        // which kills the process before the return value can be checked.
+        ::signal(SIGPIPE, SIG_IGN);  // convert to EPIPE, handled via SSL_get_error()
 #endif
     }
 
@@ -175,10 +180,25 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
         SSL_OP_NO_TLSv1_2      |
         SSL_OP_NO_COMPRESSION);  // prevents CRIME attack
 
-    // TLS 1.3 — strong AEAD ciphersuites only
-    SSL_CTX_set_ciphersuites(m_ctx,
-        "TLS_AES_256_GCM_SHA384:"
-        "TLS_CHACHA20_POLY1305_SHA256");
+    // TLS 1.3 — strong AEAD ciphersuites only (AES-128 excluded: ~64-bit post-quantum security)
+    if (SSL_CTX_set_ciphersuites(m_ctx,
+            "TLS_AES_256_GCM_SHA384:"
+            "TLS_CHACHA20_POLY1305_SHA256") != 1) {
+        emit connectionFailed(
+            QStringLiteral("Failed to set cipher suites: ") + collectOpenSSLErrors());
+        cleanup();
+        return;
+    }
+
+    // Hybrid post-quantum key exchange: X25519 + ML-KEM-768, same as Chrome 131+.
+    // X25519MLKEM768 is negotiated when the server supports it (Node.js 22 / OpenSSL 3.5+);
+    // falls back to classical X25519 otherwise. Requires OpenSSL 3.5+.
+    if (SSL_CTX_set1_groups_list(m_ctx, "X25519MLKEM768:X25519") != 1) {
+        emit connectionFailed(
+            QStringLiteral("Failed to configure key exchange groups: ") + collectOpenSSLErrors());
+        cleanup();
+        return;
+    }
 
     // Require a valid peer certificate; fail if none is provided
     SSL_CTX_set_verify(m_ctx,
@@ -196,7 +216,12 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
             return;
         }
     } else {
-        SSL_CTX_set_default_verify_paths(m_ctx);
+        if (SSL_CTX_set_default_verify_paths(m_ctx) != 1) {
+            emit connectionFailed(
+                QStringLiteral("Failed to load system CA store: ") + collectOpenSSLErrors());
+            cleanup();
+            return;
+        }
     }
 
     // ── 2. DNS lookup ────────────────────────────────────────────────────
@@ -270,7 +295,12 @@ void TLSManager::Worker::run(const QString& hostname, quint16 port,
     }
 
     // Cast is safe: OpenSSL on Windows uses BIO_new_socket internally
-    SSL_set_fd(m_ssl, static_cast<int>(m_sock));
+    if (SSL_set_fd(m_ssl, static_cast<int>(m_sock)) != 1) {
+        emit connectionFailed(
+            QStringLiteral("Failed to bind socket to SSL object: ") + collectOpenSSLErrors());
+        cleanup();
+        return;
+    }
 
     // SNI extension — tells the server which virtual host we want
     if (SSL_set_tlsext_host_name(m_ssl, hostBytes.constData()) != 1) {
