@@ -99,14 +99,6 @@ CREATE TABLE devices (
         NOT NULL,
 
     -- =====================================================
-    -- USER-VERIFIABLE FINGERPRINT
-    -- Derived from identity bundle hash
-    -- =====================================================
-
-    identity_fingerprint VARCHAR(128)
-        NOT NULL,
-
-    -- =====================================================
     -- SIGNED PREKEY
     -- =====================================================
 
