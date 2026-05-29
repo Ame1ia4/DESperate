@@ -1,8 +1,8 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { ED25519_PUB_BYTES } from '../constants/auth.js'
 
-// Verifies Ed25519 + ML-DSA65 dual signatures over the same message.
+// Verifies Ed25519 + ML-DSA-87 dual signatures over the same message.
 // signingPub is the concatenation [ed25519_pub || ml_dsa_pub].
 // Both signatures are always evaluated — no short-circuit — to prevent timing oracles.
 export function verifyDualSignature(signingPub, message, ed25519Sig, mlDsaSig) {
@@ -19,7 +19,7 @@ export function verifyDualSignature(signingPub, message, ed25519Sig, mlDsaSig) {
   }
 
   try {
-    mlDsaOk = ml_dsa65.verify(mlDsaSig, message, mlDsaPub)
+    mlDsaOk = ml_dsa87.verify(mlDsaSig, message, mlDsaPub)
   } catch {
     mlDsaOk = false
   }

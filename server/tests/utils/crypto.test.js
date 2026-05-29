@@ -1,7 +1,7 @@
 import { describe, it, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { randomBytes } from 'node:crypto'
 import { verifyDualSignature } from '../../utils/crypto.js'
 import { ED25519_PUB_BYTES, ED25519_SIG_BYTES, MLDSA_SIG_BYTES } from '../../constants/auth.js'
@@ -14,7 +14,7 @@ before(() => {
   ed25519PubKey  = Buffer.from(ed25519.getPublicKey(ed25519PrivKey))
 
   const seed = randomBytes(32)
-  const keys = ml_dsa65.keygen(seed)
+  const keys = ml_dsa87.keygen(seed)
   mlDsaSecKey = keys.secretKey
   mlDsaPubKey = Buffer.from(keys.publicKey)
 
@@ -22,7 +22,7 @@ before(() => {
   message    = randomBytes(32)
 
   ed25519Sig = Buffer.from(ed25519.sign(message, ed25519PrivKey))
-  mlDsaSig   = Buffer.from(ml_dsa65.sign(message, mlDsaSecKey))
+  mlDsaSig   = Buffer.from(ml_dsa87.sign(message, mlDsaSecKey))
 })
 
 describe('verifyDualSignature', () => {
@@ -71,7 +71,7 @@ describe('verifyDualSignature', () => {
 
     it('returns false when message is empty', () => {
       const emptyEd = Buffer.from(ed25519.sign(Buffer.alloc(0), ed25519PrivKey))
-      const emptyMl = Buffer.from(ml_dsa65.sign(Buffer.alloc(0), mlDsaSecKey))
+      const emptyMl = Buffer.from(ml_dsa87.sign(Buffer.alloc(0), mlDsaSecKey))
       assert.strictEqual(verifyDualSignature(signingPub, message, emptyEd, emptyMl), false)
     })
   })
@@ -80,7 +80,7 @@ describe('verifyDualSignature', () => {
     it('returns false when signingPub is a different random key', () => {
       const otherPriv = randomBytes(32)
       const otherEd25519Pub = Buffer.from(ed25519.getPublicKey(otherPriv))
-      const { publicKey: otherMlDsaPub } = ml_dsa65.keygen(randomBytes(32))
+      const { publicKey: otherMlDsaPub } = ml_dsa87.keygen(randomBytes(32))
       const otherSigningPub = Buffer.concat([otherEd25519Pub, Buffer.from(otherMlDsaPub)])
       assert.strictEqual(verifyDualSignature(otherSigningPub, message, ed25519Sig, mlDsaSig), false)
     })

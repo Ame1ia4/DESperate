@@ -1,16 +1,19 @@
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
-import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js'
 
 // ── Key size constants ──────────────────────────────────────────────────────
 
+export const X25519_PUB_BYTES   = 32
 export const ED25519_PUB_BYTES  = 32
 export const ED25519_SIG_BYTES  = 64
-export const X25519_PUB_BYTES   = 32
-export const MLDSA_PUB_BYTES    = ml_dsa65.lengths.publicKey
-export const MLDSA_SIG_BYTES    = ml_dsa65.lengths.signature
-export const MLKEM_PUB_BYTES    = ml_kem768.lengths.publicKey
-export const SIGNING_PUB_BYTES  = ED25519_PUB_BYTES + MLDSA_PUB_BYTES
-export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES
+export const MLDSA_PUB_BYTES    = ml_dsa87.lengths.publicKey   // 2592 bytes (ML-DSA-87)
+export const MLDSA_SIG_BYTES    = ml_dsa87.lengths.signature   // 4627 bytes (ML-DSA-87)
+export const MLKEM_PUB_BYTES    = ml_kem1024.lengths.publicKey // 1568 bytes (ML-KEM-1024)
+// Hybrid signing public key: [ed25519_pub (32 B) || ml_dsa87_pub (2592 B)]
+export const SIGNING_PUB_BYTES  = ED25519_PUB_BYTES + MLDSA_PUB_BYTES  // 2624 bytes
+export const SIG_BYTES          = MLDSA_SIG_BYTES                       // ML-DSA-87 signature
+// Dual signature: [ed25519_sig (64 B) || ml_dsa87_sig (4627 B)]
+export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES   // 4691 bytes
 
 // ── SRP-6a parameters ───────────────────────────────────────────────────────
 // RFC 5054 Appendix A §3: 2048-bit group, prime N is exactly 2048 bits.

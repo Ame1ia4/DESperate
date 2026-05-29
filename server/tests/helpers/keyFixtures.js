@@ -1,5 +1,5 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { randomBytes } from 'node:crypto'
 
 /**
@@ -11,7 +11,7 @@ export function generateKeyBundle() {
   const ed25519PubKey  = ed25519.getPublicKey(ed25519PrivKey)
 
   const mlDsaSeed = randomBytes(32)
-  const { secretKey: mlDsaSecKey, publicKey: mlDsaPubKey } = ml_dsa65.keygen(mlDsaSeed)
+  const { secretKey: mlDsaSecKey, publicKey: mlDsaPubKey } = ml_dsa87.keygen(mlDsaSeed)
 
   const signingPub    = Buffer.concat([Buffer.from(ed25519PubKey), Buffer.from(mlDsaPubKey)])
   const signingPubHex = signingPub.toString('hex')
@@ -23,7 +23,7 @@ export function generateKeyBundle() {
   const signedPrekeyPubHex = signedPrekeyPub.toString('hex')
 
   const spkEd25519Sig = ed25519.sign(signedPrekeyPub, ed25519PrivKey)
-  const spkMlDsaSig   = ml_dsa65.sign(signedPrekeyPub, mlDsaSecKey)
+  const spkMlDsaSig   = ml_dsa87.sign(signedPrekeyPub, mlDsaSecKey)
   const signedPrekeySig    = Buffer.concat([Buffer.from(spkEd25519Sig), Buffer.from(spkMlDsaSig)])
   const signedPrekeySigHex = signedPrekeySig.toString('hex')
 

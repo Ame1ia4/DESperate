@@ -4,7 +4,7 @@ import express from 'express'
 import { randomBytes } from 'node:crypto'
 import srpClient from 'secure-remote-password/client.js'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { generateKeyBundle, validDeviceBody, zeroHex, randomHex } from '../helpers/keyFixtures.js'
 import { issueNonce } from '../../handlers/auth/nonce.js'
 import {
@@ -56,7 +56,7 @@ beforeEach(() => {
 function signNonce(nonce) {
   const nonceBytes = Buffer.from(nonce, 'hex')
   const ed25519Sig = Buffer.from(ed25519.sign(nonceBytes, bundle.ed25519PrivKey))
-  const mlDsaSig   = Buffer.from(ml_dsa65.sign(nonceBytes, bundle.mlDsaSecKey))
+  const mlDsaSig   = Buffer.from(ml_dsa87.sign(nonceBytes, bundle.mlDsaSecKey))
   return Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
 }
 
@@ -282,10 +282,10 @@ describe('POST /auth/register', () => {
     it('rejects nonce_signature signed with a different keypair', async () => {
       const body    = validBody()
       const otherPk = randomBytes(32)
-      const { secretKey: otherMlSec } = ml_dsa65.keygen(randomBytes(32))
+      const { secretKey: otherMlSec } = ml_dsa87.keygen(randomBytes(32))
       const nonceBytes  = Buffer.from(body.bundle.nonce, 'hex')
       const badEd = Buffer.from(ed25519.sign(nonceBytes, otherPk))
-      const badMl = Buffer.from(ml_dsa65.sign(nonceBytes, otherMlSec))
+      const badMl = Buffer.from(ml_dsa87.sign(nonceBytes, otherMlSec))
       body.bundle.nonce_signature = Buffer.concat([badEd, badMl]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
@@ -361,7 +361,7 @@ describe('POST /auth/register', () => {
       const body       = validBody()
       const wrongMsg   = randomBytes(32)
       const ed25519Sig = Buffer.from(ed25519.sign(wrongMsg, bundle.ed25519PrivKey))
-      const mlDsaSig   = Buffer.from(ml_dsa65.sign(wrongMsg, bundle.mlDsaSecKey))
+      const mlDsaSig   = Buffer.from(ml_dsa87.sign(wrongMsg, bundle.mlDsaSecKey))
       body.bundle.signed_prekey_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
@@ -371,10 +371,10 @@ describe('POST /auth/register', () => {
     it('rejects sig signed with a different (unrelated) keypair', async () => {
       const body                      = validBody()
       const otherPriv                 = randomBytes(32)
-      const { secretKey: otherMlSec } = ml_dsa65.keygen(randomBytes(32))
+      const { secretKey: otherMlSec } = ml_dsa87.keygen(randomBytes(32))
       const spkPub                    = Buffer.from(body.bundle.signed_prekey_pub, 'hex')
       const ed25519Sig                = Buffer.from(ed25519.sign(spkPub, otherPriv))
-      const mlDsaSig                  = Buffer.from(ml_dsa65.sign(spkPub, otherMlSec))
+      const mlDsaSig                  = Buffer.from(ml_dsa87.sign(spkPub, otherMlSec))
       body.bundle.signed_prekey_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
@@ -385,7 +385,7 @@ describe('POST /auth/register', () => {
       const body     = validBody()
       const spkPub   = Buffer.from(body.bundle.signed_prekey_pub, 'hex')
       const zeroEd   = Buffer.alloc(ED25519_SIG_BYTES)
-      const mlDsaSig = Buffer.from(ml_dsa65.sign(spkPub, bundle.mlDsaSecKey))
+      const mlDsaSig = Buffer.from(ml_dsa87.sign(spkPub, bundle.mlDsaSecKey))
       body.bundle.signed_prekey_signature = Buffer.concat([zeroEd, mlDsaSig]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
