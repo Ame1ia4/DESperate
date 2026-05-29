@@ -6,9 +6,9 @@
   "scripts": {
     "setup": "git config --local core.hooksPath .githooks",
     "test": "node --import ./server/tests/support/db-preload.mjs --test server/tests/**/*.test.js",
-    "migrate": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down",
-    "migrate:create": "node-pg-migrate create"
+    "migrate": "node-pg-migrate up --migrations-dir server/database/migrations/",
+    "migrate:down": "node-pg-migrate down --migrations-dir server/database/migrations/",
+    "migrate:create": "node-pg-migrate create --migrations-dir server/database/migrations/"
   },
   "repository": {
     "type": "git",

@@ -15,9 +15,6 @@
 -- Rows expire after 5 minutes and are hard-deleted on
 -- successful authentication by the application handler.
 -- =========================================================
-
--- UP:
-
 CREATE TABLE srp_challenges (
     id                UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
 
@@ -42,7 +39,4 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- DOWN:
 
-DROP FUNCTION IF EXISTS cleanup_srp_challenges();
-DROP TABLE    IF EXISTS srp_challenges;
