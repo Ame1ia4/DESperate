@@ -18,14 +18,8 @@
 -- accessing protected resources.
 -- =========================================================
 
--- UP:
-
 ALTER TABLE devices
     ADD COLUMN srp_verified_at TIMESTAMPTZ,
     ADD COLUMN srp_expires_at  TIMESTAMPTZ;
 
--- DOWN:
 
-ALTER TABLE devices
-    DROP COLUMN IF EXISTS srp_verified_at,
-    DROP COLUMN IF EXISTS srp_expires_at;
