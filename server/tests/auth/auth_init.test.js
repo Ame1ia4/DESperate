@@ -13,14 +13,19 @@ import {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// 512 random hex chars — valid length for a 2048-bit group ephemeral (RFC 5054 Appendix A §3)
 const validEphemeral = () => randomBytes(SRP_EPHEMERAL_HEX / 2).toString('hex')
 
-// Placeholder DB values — correct lengths, not real SRP group elements
 const FAKE_DB_SALT     = 'b'.repeat(SRP_SALT_HEX)
 const FAKE_DB_VERIFIER = 'a'.repeat(512)
+const VALID_DEVICE_ID  = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
 
-const knownUser = () => ({ id: 'user-uuid', srp_salt: FAKE_DB_SALT, srp_verifier: FAKE_DB_VERIFIER })
+// Shape returned by the JOIN query in auth_init
+const knownRow = () => ({
+  user_id:      'user-uuid',
+  srp_salt:     FAKE_DB_SALT,
+  srp_verifier: FAKE_DB_VERIFIER,
+  device_id:    VALID_DEVICE_ID,
+})
 
 function createApp() {
   const app = express()
@@ -41,9 +46,9 @@ before(() => new Promise(resolve => {
 
 after(() => new Promise(resolve => server.close(resolve)))
 
-// Default: known user, transaction succeeds (DELETE + INSERT = 2 client queries)
+// Default: known user+device, transaction succeeds (DELETE + INSERT = 2 client queries)
 beforeEach(() => {
-  globalThis.__db.queryImpl          = async () => ({ rows: [knownUser()] })
+  globalThis.__db.queryImpl          = async () => ({ rows: [knownRow()] })
   globalThis.__db.clientQueryResults = [{ rows: [] }, { rows: [] }]
 })
 
@@ -57,14 +62,15 @@ async function post(body) {
 }
 
 const validBody = () => ({
-  username: 'testuser',
+  username:             'testuser',
+  device_id:            VALID_DEVICE_ID,
   clientPublicEphemeral: validEphemeral(),
 })
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('POST /auth/init', () => {
-  describe('happy path — known user', () => {
+  describe('happy path — known user + device', () => {
     it('returns 200 with salt and serverPublicEphemeral', async () => {
       const res = await post(validBody())
       assert.strictEqual(res.status, 200)
@@ -98,12 +104,14 @@ describe('POST /auth/init', () => {
     })
   })
 
-  describe('unknown user — RFC 5054 §2.5.1.3', () => {
+  describe('unknown user / device — RFC 5054 §2.5.1.3', () => {
+    // All three cases (unknown user, device not belonging to user, revoked device)
+    // return the same fake response — no row from the JOIN covers all of them.
     beforeEach(() => {
       globalThis.__db.queryImpl = async () => ({ rows: [] })
     })
 
-    it('returns 200 (not 404) so callers cannot detect missing accounts', async () => {
+    it('returns 200 (not 404) so callers cannot detect missing accounts or devices', async () => {
       const res = await post(validBody())
       assert.strictEqual(res.status, 200)
     })
@@ -138,9 +146,7 @@ describe('POST /auth/init', () => {
       assert.notStrictEqual(res1.body.salt, res2.body.salt)
     })
 
-    it('does not write to srp_challenges for unknown users', async () => {
-      // If withTransaction were called, it would consume clientQueryResults.
-      // Providing none and expecting 200 proves no transaction was issued.
+    it('does not write to srp_challenges for unknown users/devices', async () => {
       globalThis.__db.clientQueryResults = []
       const res = await post(validBody())
       assert.strictEqual(res.status, 200)
@@ -148,7 +154,7 @@ describe('POST /auth/init', () => {
   })
 
   describe('enumeration prevention', () => {
-    it('known and unknown user return the same HTTP status', async () => {
+    it('known and unknown user/device return the same HTTP status', async () => {
       const res1 = await post(validBody())
 
       globalThis.__db.queryImpl = async () => ({ rows: [] })
@@ -157,7 +163,7 @@ describe('POST /auth/init', () => {
       assert.strictEqual(res1.status, res2.status)
     })
 
-    it('known and unknown user response bodies have identical keys', async () => {
+    it('known and unknown user/device response bodies have identical keys', async () => {
       const res1 = await post(validBody())
 
       globalThis.__db.queryImpl = async () => ({ rows: [] })
@@ -195,6 +201,29 @@ describe('POST /auth/init', () => {
 
     it(`accepts username at maximum length (${USERNAME_MAX} chars)`, async () => {
       const res = await post({ ...validBody(), username: 'a'.repeat(USERNAME_MAX) })
+      assert.strictEqual(res.status, 200)
+    })
+  })
+
+  describe('device_id validation', () => {
+    const invalidCases = [
+      [undefined,               'missing'],
+      [null,                    'null'],
+      [42,                      'number'],
+      ['',                      'empty string'],
+      ['not-a-uuid',            'non-UUID string'],
+      ['tooshort-uuid',         'wrong structure'],
+    ]
+
+    for (const [device_id, desc] of invalidCases) {
+      it(`rejects device_id: ${desc}`, async () => {
+        const res = await post({ ...validBody(), device_id })
+        assert.strictEqual(res.status, 400)
+      })
+    }
+
+    it('accepts a valid UUID v4', async () => {
+      const res = await post(validBody())
       assert.strictEqual(res.status, 200)
     })
   })

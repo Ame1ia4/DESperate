@@ -62,32 +62,6 @@ CREATE INDEX idx_users_username
     ON users(username);
 
 -- =========================================================
--- SRP CHALLENGES
---
--- Transient per-user handshake state for SRP round 1→2.
--- One row per user (PK enforces this, preventing accumulation).
--- auth_init DELETEs any existing row then INSERTs a fresh one.
--- auth_verify DELETEs the row immediately after use — challenges
--- are single-use regardless of whether verification succeeds.
--- =========================================================
-
-CREATE TABLE srp_challenges (
-    user_id UUID PRIMARY KEY
-        REFERENCES users(id)
-        ON DELETE CASCADE,
-
-    -- Server's secret ephemeral b (hex). Never sent to the client.
-    srp_server_secret TEXT NOT NULL,
-
-    created_at TIMESTAMP WITH TIME ZONE
-        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    -- 5-minute window; auth_verify rejects rows past this.
-    expires_at TIMESTAMP WITH TIME ZONE
-        NOT NULL DEFAULT CURRENT_TIMESTAMP + INTERVAL '5 minutes'
-);
-
--- =========================================================
 -- DEVICES
 -- =========================================================
 
@@ -160,7 +134,12 @@ CREATE TABLE devices (
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     revoked BOOLEAN
-        NOT NULL DEFAULT FALSE
+        NOT NULL DEFAULT FALSE,
+
+    -- Set by /auth/login on successful SRP handshake.
+    -- NULL means the device has never authenticated.
+    srp_verified_at TIMESTAMP WITH TIME ZONE,
+    srp_expires_at  TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX idx_devices_user
@@ -170,6 +149,32 @@ CREATE INDEX idx_devices_user
 CREATE INDEX idx_devices_active
     ON devices(id)
     WHERE revoked = FALSE;
+
+-- =========================================================
+-- SRP CHALLENGES
+--
+-- Transient per-device handshake state for SRP round 1→2.
+-- One row per device (PK enforces this, preventing accumulation).
+-- auth_init DELETEs any existing row then INSERTs a fresh one.
+-- auth_login DELETEs the row immediately after use — challenges
+-- are single-use regardless of whether verification succeeds.
+-- =========================================================
+
+CREATE TABLE srp_challenges (
+    device_id UUID PRIMARY KEY
+        REFERENCES devices(id)
+        ON DELETE CASCADE,
+
+    -- Server's secret ephemeral b (hex). Never sent to the client.
+    srp_server_secret TEXT NOT NULL,
+
+    created_at TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- 5-minute window; auth_login rejects rows past this.
+    expires_at TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+);
 
 -- =========================================================
 -- ONE-TIME PREKEYS
@@ -886,16 +891,29 @@ WHERE id = $1;
 -- AUTHENTICATION MODEL
 -- =========================================================
 
--- INITIAL AUTHENTICATION:
+-- LOGIN (SRP-6a, RFC 5054):
 --
--- username + password (Argon2id verified server-side)
+-- Round 1 — POST /auth/init:
+--   client sends username + device_id + A
+--   server verifies device belongs to user, not revoked
+--   server stores ephemeral b in srp_challenges (keyed on device_id, 5-min TTL)
+--   server returns srp_salt + B
 --
--- DEVICE AUTHENTICATION:
+-- Round 2 — POST /auth/login:
+--   client sends username + device_id + A + M1
+--   server loads+deletes challenge (single-use)
+--   server calls deriveSession — throws on wrong password
+--   server stamps devices.srp_verified_at + srp_expires_at (24 h)
+--   server returns M2 (mutual auth proof)
 --
--- challenge-response signatures using identity_signing_pub
+-- SUBSEQUENT REQUESTS:
+--
+--   client sends X-Device-ID header
+--   server checks devices WHERE srp_expires_at > NOW() AND revoked = FALSE
 --
 -- NO:
 --
 -- - JWTs
 -- - bearer tokens
 -- - server-side sessions
+-- - Argon2id (password is never sent to or stored by the server)

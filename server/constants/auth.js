@@ -27,10 +27,9 @@ export const SRP_EPHEMERAL_HEX_MIN = 256  // lower bound: real 2048-bit group va
                                           // 256 tolerates libraries that strip leading zeros without accepting garbage
 export const SRP_SESSION_PROOF_HEX = 64   // M1/M2 = SHA-256 output = 32 bytes = 64 hex chars
 
-// ── Challenge-response auth ─────────────────────────────────────────────────
+// ── SRP device session ──────────────────────────────────────────────────────
 
-export const CHALLENGE_NONCE_BYTES = 32
-export const CHALLENGE_NONCE_HEX   = CHALLENGE_NONCE_BYTES * 2
+export const SRP_SESSION_INTERVAL = '24 hours'  // stamped on devices.srp_expires_at after /auth/login
 
 // ── Input validation ────────────────────────────────────────────────────────
 
