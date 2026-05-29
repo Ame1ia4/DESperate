@@ -94,6 +94,17 @@ INFO_LOCAL_KEY_MASTER   = b"local-v1-master-key"
 # Re-exported here so existing callers importing from core.kdf continue to work.
 from .password import argon2id_hash, argon2id_verify, argon2id_derive_key
 
+# Argon2id parameter constants live in core/constants.py.
+# Re-exported here so existing callers importing from core.kdf continue to work
+# (e.g. core/state_store.py, testing/test_kdf.py).
+from .constants import (
+    ARGON2_TIME_COST,
+    ARGON2_MEMORY_COST,
+    ARGON2_PARALLELISM,
+    ARGON2_HASH_LEN,
+    ARGON2_SALT_LEN,
+)
+
 
 # ── HKDF ────────────────────────────────────────────────────────────────────
 
