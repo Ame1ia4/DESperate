@@ -22,8 +22,8 @@
 
 ALTER TABLE users
     DROP COLUMN password_hash,
-    ADD  COLUMN srp_salt     TEXT NOT NULL DEFAULT '',
-    ADD  COLUMN srp_verifier TEXT NOT NULL DEFAULT '';
+    ADD  COLUMN srp_salt     BYTEA NOT NULL DEFAULT '',
+    ADD  COLUMN srp_verifier BYTEA NOT NULL DEFAULT '';
 
 COMMENT ON COLUMN users.srp_salt IS
     'Hex-encoded 32-byte random salt (from srp.generateSalt()). '

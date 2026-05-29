@@ -25,8 +25,9 @@ CREATE TABLE srp_challenges (
 
     -- serverEphemeral.secret from srp.generateEphemeral(verifier).
     -- Never transmitted to the client.
-    srp_server_secret TEXT        NOT NULL,
+    srp_server_secret BYTEA        NOT NULL,
 
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at        TIMESTAMPTZ NOT NULL
                           DEFAULT (CURRENT_TIMESTAMP + INTERVAL '5 minutes')
 );
