@@ -18,7 +18,7 @@ from core.constants import ARGON2_TIME_COST, ARGON2_MEMORY_COST, ARGON2_PARALLEL
 
 #Minimum owasp params average ~20ms, recommended params average ~29.5ms
 
-RUNS       = 100
+RUNS       = 1000
 PASSWORD   = "test-password-for-benchmarking"
 
 print(f"Argon2id parameters: t={ARGON2_TIME_COST}, m={ARGON2_MEMORY_COST} KiB (~{ARGON2_MEMORY_COST // 1024} MiB), p={ARGON2_PARALLELISM}")

@@ -33,7 +33,9 @@ async def handle_unlock_keystore(params: dict) -> dict:
     if not password:
         return {"success": False, "error": "keystore_password required."}
     try:
-        store = StateStore.load(KEYSTORE_DIR, password)
+        # Argon2id (inside StateStore.load) is CPU-intensive and synchronous —
+        # run in a thread so the event loop stays free during key derivation.
+        store = await asyncio.to_thread(StateStore.load, KEYSTORE_DIR, password)
         store.load_state("identity")  # raises InvalidTag on wrong password
         return {"success": True}
     except FileNotFoundError:
@@ -56,13 +58,16 @@ async def handle_generate_identity_bundle(params: dict) -> dict:
             # wiping it — prevents any local process from destroying keys without
             # knowing the current password.
             try:
-                existing = StateStore.load(KEYSTORE_DIR, password)
+                # Same reason as handle_unlock_keystore — Argon2id must not block the event loop.
+                existing = await asyncio.to_thread(StateStore.load, KEYSTORE_DIR, password)
                 existing.load_state("identity")
             except InvalidTag:
                 return {"error": "Wrong password — cannot overwrite existing keystore."}
             shutil.rmtree(KEYSTORE_DIR)
-        bundle = _gen_bundle(user_id)
-        store = StateStore.create(KEYSTORE_DIR, password)
+        # ML-KEM-1024 / ML-DSA-87 key generation via liboqs is CPU-intensive — run in a thread.
+        bundle = await asyncio.to_thread(_gen_bundle, user_id)
+        # StateStore.create runs Argon2id to derive the encryption key — same reasoning.
+        store = await asyncio.to_thread(StateStore.create, KEYSTORE_DIR, password)
         store.save_state("identity", bundle.to_private_bundle())
         return bundle.to_public_bundle()
     except Exception as exc:
@@ -107,7 +112,7 @@ async def handle_client(
             else:
                 response = await handler(params)
 
-            response["id"] = req_id
+            response = {**response, "id": req_id}
             writer.write(
                 json.dumps(response, separators=(",", ":")).encode() + b"\n"
             )
