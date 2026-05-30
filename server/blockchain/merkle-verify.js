@@ -1,18 +1,13 @@
 import { ethers } from 'ethers';
+import { ABI, CONTRACT_ADDRESS } from './contract.js';
+
+if (!CONTRACT_ADDRESS) throw new Error('CONTRACT_ADDRESS not configured');
 
 const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
-
-const ABI = ['event HashStored(bytes32 indexed merkleRoot, uint256 timestamp)'];
-
-function getContract() {
-  const address = process.env.CONTRACT_ADDRESS;
-  if (!address) throw new Error('CONTRACT_ADDRESS not configured');
-  return new ethers.Contract(address, ABI, provider);
-}
+const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
 
 export async function verifyRoot(merkleRoot) {
   const norm = '0x' + merkleRoot.replace(/^0x/i, '').toLowerCase().padStart(64, '0');
-  const contract = getContract();
 
   const logs = await contract.queryFilter(contract.filters.HashStored(norm));
 
