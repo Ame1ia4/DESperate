@@ -67,13 +67,12 @@ before(() => new Promise(resolve => {
 
 after(() => new Promise(resolve => server.close(resolve)))
 
-// Default: valid device+user, valid challenge, successful DELETE
-// Query order: [1] device+user JOIN, [2] challenge SELECT, [3] challenge DELETE
+// Default: valid device+user, challenge consumed atomically
+// Query order: [1] device+user JOIN, [2] DELETE FROM srp_challenges ... RETURNING
 beforeEach(() => {
   globalThis.__db.queryImpl = seqQueryImpl(
     { rows: [knownCreds()] },      // SELECT device+user JOIN
-    { rows: [activeChallenge()] }, // SELECT srp_challenges
-    { rows: [] },                  // DELETE srp_challenges
+    { rows: [activeChallenge()] }, // DELETE FROM srp_challenges ... RETURNING
   )
 })
 
@@ -137,25 +136,25 @@ describe('POST /auth/login', () => {
   })
 
   describe('challenge lifecycle', () => {
-    it('challenge is deleted on successful verification', async () => {
+    it('challenge is consumed atomically (DELETE RETURNING) on successful verification', async () => {
       const queries = []
       globalThis.__db.queryImpl = async (sql) => {
         queries.push(sql)
-        if (sql.includes('srp_verifier'))            return { rows: [knownCreds()] }
-        if (/^\s*SELECT/i.test(sql) && sql.includes('srp_challenges')) return { rows: [activeChallenge()] }
+        if (sql.includes('srp_verifier'))      return { rows: [knownCreds()] }
+        if (sql.includes('srp_challenges'))    return { rows: [activeChallenge()] }
         return { rows: [] }
       }
       await post(validBody())
       assert.ok(queries.some(q => q.includes('DELETE') && q.includes('srp_challenges')))
     })
 
-    it('challenge is deleted even when M1 is wrong — K is NOT stored', async () => {
+    it('challenge is consumed even when M1 is wrong — K is NOT stored', async () => {
       consumeSessionKey(DEVICE_ID) // drain any K left from previous successful test
       const queries = []
       globalThis.__db.queryImpl = async (sql) => {
         queries.push(sql)
-        if (sql.includes('srp_verifier'))            return { rows: [knownCreds()] }
-        if (/^\s*SELECT/i.test(sql) && sql.includes('srp_challenges')) return { rows: [activeChallenge()] }
+        if (sql.includes('srp_verifier'))      return { rows: [knownCreds()] }
+        if (sql.includes('srp_challenges'))    return { rows: [activeChallenge()] }
         return { rows: [] }
       }
       const wrongM1 = randomBytes(SRP_SESSION_PROOF_HEX / 2).toString('hex')
@@ -198,7 +197,6 @@ describe('POST /auth/login', () => {
       globalThis.__db.queryImpl = seqQueryImpl(
         { rows: [knownCreds()] },
         { rows: [activeChallenge()] },
-        { rows: [] },
       )
       const wrongProofRes = await post({ ...validBody(), clientSessionProof: wrongM1 })
 
@@ -278,11 +276,10 @@ describe('POST /auth/login', () => {
       assert.strictEqual(res.status, 500)
     })
 
-    it('returns 500 when the challenge DELETE throws', async () => {
+    it('returns 500 when the challenge DELETE RETURNING throws', async () => {
       globalThis.__db.queryImpl = async (sql) => {
-        if (sql.includes('srp_verifier'))          return { rows: [knownCreds()] }
-        if (/^\s*SELECT/i.test(sql) && sql.includes('srp_challenges')) return { rows: [activeChallenge()] }
-        throw new Error('disk full')
+        if (sql.includes('srp_verifier')) return { rows: [knownCreds()] }
+        throw new Error('disk full')  // DELETE RETURNING throws
       }
       const res = await post(validBody())
       assert.strictEqual(res.status, 500)

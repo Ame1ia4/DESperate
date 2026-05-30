@@ -55,6 +55,14 @@ export async function authInit(req, res) {
     // RFC 5054 §2.5.1.3 — return fake salt + ephemeral so the response is
     // indistinguishable from a valid one. Round 2 will reject via proof mismatch.
     const ephemeral = srp.generateEphemeral(fakeVerifier(username))
+    // Equalise timing with real path — real path runs a DELETE+INSERT transaction;
+    // fake path runs a no-op DELETE so both paths pay similar DB round-trip cost.
+    await withTransaction(async (client) => {
+      await client.query(
+        'DELETE FROM srp_challenges WHERE device_id = $1',
+        ['00000000-0000-0000-0000-000000000000']
+      )
+    })
     console.info('auth_init: challenge issued (fake)', { username })
     return res.json({ salt: fakeSalt(username), serverPublicEphemeral: ephemeral.public })
   }

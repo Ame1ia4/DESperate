@@ -108,7 +108,8 @@ describe('POST /auth/init', () => {
     // All three cases (unknown user, device not belonging to user, revoked device)
     // return the same fake response — no row from the JOIN covers all of them.
     beforeEach(() => {
-      globalThis.__db.queryImpl = async () => ({ rows: [] })
+      globalThis.__db.queryImpl          = async () => ({ rows: [] })
+      globalThis.__db.clientQueryResults = [{ rows: [] }] // timing-equalisation DELETE
     })
 
     it('returns 200 (not 404) so callers cannot detect missing accounts or devices', async () => {
@@ -146,8 +147,10 @@ describe('POST /auth/init', () => {
       assert.notStrictEqual(res1.body.salt, res2.body.salt)
     })
 
-    it('does not write to srp_challenges for unknown users/devices', async () => {
-      globalThis.__db.clientQueryResults = []
+    it('does not INSERT a challenge for unknown users/devices (timing DELETE only, no INSERT)', async () => {
+      // Real path: DELETE + INSERT (2 client queries). Fake path: DELETE only (1 query).
+      // Providing exactly 1 clientQueryResult proves no INSERT was attempted.
+      globalThis.__db.clientQueryResults = [{ rows: [] }]
       const res = await post(validBody())
       assert.strictEqual(res.status, 200)
     })

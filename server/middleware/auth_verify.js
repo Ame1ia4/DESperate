@@ -34,8 +34,10 @@ export async function authVerify(req, res) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
+  // Atomic delete-and-read — single round trip, no race window between
+  // SELECT and DELETE where two concurrent requests could both read the challenge.
   const challengeResult = await query(
-    'SELECT srp_server_secret FROM srp_challenges WHERE device_id = $1 AND expires_at > NOW()',
+    'DELETE FROM srp_challenges WHERE device_id = $1 AND expires_at > NOW() RETURNING srp_server_secret',
     [device_id]
   )
   const challenge = challengeResult.rows[0]
@@ -43,11 +45,6 @@ export async function authVerify(req, res) {
   if (!challenge) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
-
-  // Consume the challenge before verifying — one-use regardless of outcome,
-  // so a wrong password forces the client back to /auth/init rather than
-  // allowing repeated guesses against the same server ephemeral.
-  await query('DELETE FROM srp_challenges WHERE device_id = $1', [device_id])
 
   let serverSession
   try {
