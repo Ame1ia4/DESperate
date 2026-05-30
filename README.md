@@ -204,6 +204,58 @@ Set `HAS_BLOCKCHAIN` to `true` in GitHub → Settings → Actions → Variables 
 
 ---
 
+## Qt Client (`client/secure_messenger`)
+
+### Prerequisites
+
+- Qt 6.11.1 (install via Qt Maintenance Tool, select the MinGW 64-bit kit)
+- OpenSSL dev libraries — required because `TLSManager` uses raw OpenSSL APIs directly
+
+**Windows (MinGW):** OpenSSL must be installed via MSYS2 — the standard Shining Light installer only ships MSVC libs which MinGW can't link against.
+
+```bash
+# 1. Install MSYS2 (skip if already installed)
+winget install MSYS2.MSYS2
+
+# 2. Open the MSYS2 MinGW64 terminal (not the plain MSYS2 terminal) and run:
+pacman -S mingw-w64-x86_64-openssl
+```
+
+Then in Qt Creator: **Projects → Build → CMake → Add**
+- Name: `OPENSSL_ROOT_DIR`
+- Type: `PATH`
+- Value: `C:\msys64\mingw64`
+
+**Linux/macOS:**
+```bash
+sudo apt install libssl-dev   # Ubuntu/Debian
+brew install openssl          # macOS
+```
+
+### Build
+
+Open `client/secure_messenger/CMakeLists.txt` in Qt Creator and build normally, or from the terminal:
+
+```bash
+cmake -B build -S client/secure_messenger -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --parallel
+```
+
+### Run tests
+
+In Qt Creator: **View → Views → Tests**, then right-click any test to run it.
+
+Or from the terminal:
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+### CI
+
+Set `HAS_QT` to `true` in GitHub → Settings → Actions → Variables to enable the Qt client job in CI.
+
+---
+
 ## Cryptography Microservice
 
 ### Install

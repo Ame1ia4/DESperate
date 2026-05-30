@@ -237,7 +237,11 @@ bool TLSManager::Worker::tcpConnect(const QByteArray& hostBytes, quint16 port)
         emit connectionFailed(
             QString("DNS lookup failed for '%1': %2")
                 .arg(QString::fromUtf8(hostBytes),
+#ifdef _WIN32
+                     QString::fromWCharArray(gai_strerror(gaErr))));
+#else
                      QString::fromLocal8Bit(gai_strerror(gaErr))));
+#endif
         cleanup();
         return false;
     }
