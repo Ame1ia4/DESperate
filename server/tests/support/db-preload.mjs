@@ -25,12 +25,13 @@ globalThis.__db = {
 function makeFakeClient() {
   let callIndex = 0
   return {
-    async query(text) {
+    async query(text, params) {
       if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return {}
       const results = globalThis.__db.clientQueryResults
       const item = results[callIndex++]
       if (!item) throw new Error(`No clientQueryResults[${callIndex - 1}] set`)
       if (item.throwError) throw item.throwError
+      if (typeof item.onCall === 'function') item.onCall(text, params)
       return item
     },
     release() {},

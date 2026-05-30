@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
+import { startBlockchainWorker } from './blockchain/publisher.js'
 import { register, registrationNonce } from './handlers/auth/index.js'
 import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
@@ -445,4 +446,5 @@ app.use((err, _req, res, _next) => {
 })
 
 const server = app.listen(80, () => console.log('Server running on :80'))
+startBlockchainWorker()
 registerShutdownSignals(server)

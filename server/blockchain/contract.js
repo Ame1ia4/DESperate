@@ -10,4 +10,11 @@ export const ABI = [
     "name": "HashStored",
     "type": "event"
   },
+  {
+    "inputs": [{ "internalType": "bytes32[]", "name": "merkleRoots", "type": "bytes32[]" }],
+    "name": "storeBatchHashes",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
 ];

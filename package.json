@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "setup": "git config --local core.hooksPath .githooks",
-    "test": "node --import ./server/tests/support/db-preload.mjs --test server/tests/**/*.test.js",
+    "test": "node --experimental-test-module-mocks --import ./server/tests/support/db-preload.mjs --test server/tests/**/*.test.js",
     "migrate": "node-pg-migrate up --migrations-dir server/database/migrations/",
     "migrate:down": "node-pg-migrate down --migrations-dir server/database/migrations/",
     "migrate:create": "node-pg-migrate create --migrations-dir server/database/migrations/"
