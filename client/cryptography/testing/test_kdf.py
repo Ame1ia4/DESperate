@@ -48,19 +48,22 @@ def salt():
 
 class TestArgon2idParameters:
     """
-    OWASP Password Storage Cheat Sheet requires Argon2id with at minimum:
-      time_cost >= 3, memory_cost >= 64MB, parallelism >= 4
+    OWASP Password Storage Cheat Sheet requires Argon2id with:
+      time_cost = 1, memory_cost = 46Mib, parallelism = 1
+      or minimum:
+      time_cost = 2, memory_cost = 19Mib, parallelism = 1
     https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
     """
 
-    def test_time_cost_meets_owasp_standard(self):
-        assert ARGON2_TIME_COST >= 2
-
-    def test_memory_cost_meets_owasp_standard(self):
-        assert ARGON2_MEMORY_COST >= 19456
-
-    def test_parallelism_meets_owasp_standard(self):
-        assert ARGON2_PARALLELISM >= 1
+    def test_params_meet_owasp_standard(self):
+        # minimum:     m=19456, t=2, p=1
+        # recommended: m=47104, t=1, p=1
+        meets_minimum     = ARGON2_MEMORY_COST >= 19456 and ARGON2_TIME_COST >= 2 and ARGON2_PARALLELISM >= 1
+        meets_recommended = ARGON2_MEMORY_COST >= 47104 and ARGON2_TIME_COST >= 1 and ARGON2_PARALLELISM >= 1
+        assert meets_minimum or meets_recommended, (
+            f"Argon2id params (m={ARGON2_MEMORY_COST}, t={ARGON2_TIME_COST}, p={ARGON2_PARALLELISM}) "
+            "meet neither OWASP minimum (m=19456,t=2,p=1) nor recommended (m=47104,t=1,p=1)"
+        )
 
     def test_hash_length_is_32_bytes(self):
         assert ARGON2_HASH_LEN == 32
