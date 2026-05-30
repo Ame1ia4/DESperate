@@ -67,8 +67,13 @@ export async function authInit(req, res) {
     return res.json({ salt: fakeSalt(username), serverPublicEphemeral: ephemeral.public })
   }
 
-  // RFC 5054 §2.5.3: b SHOULD be ≥ 256 bits (enforced by the library).
   const serverEphemeral = srp.generateEphemeral(row.srp_verifier)
+
+  // RFC 5054 §2.5.3: b MUST be ≥ 256 bits. Crash rather than continue with a
+  // weak ephemeral — this indicates a broken library or misconfiguration.
+  if (serverEphemeral.secret.length < 64) {
+    throw new Error('SRP b too short: need ≥ 256 bits')
+  }
 
   // Atomically replace any existing challenge — prevents accumulation and
   // ensures a retrying client always starts a fresh handshake.

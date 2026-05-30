@@ -269,6 +269,20 @@ describe('POST /auth/init', () => {
     })
   })
 
+  describe('SRP ephemeral secret strength', () => {
+    it('returns 500 if the library produces a b shorter than 256 bits (< 64 hex chars)', async () => {
+      const srpModule = await import('secure-remote-password/server.js')
+      const original = srpModule.generateEphemeral
+      srpModule.generateEphemeral = () => ({ secret: 'a'.repeat(63), public: 'b'.repeat(512) })
+      try {
+        const res = await post(validBody())
+        assert.strictEqual(res.status, 500)
+      } finally {
+        srpModule.generateEphemeral = original
+      }
+    })
+  })
+
   describe('DB error handling', () => {
     it('returns 500 on unexpected query error', async () => {
       globalThis.__db.queryImpl = async () => { throw new Error('connection refused') }
