@@ -15,9 +15,9 @@ Two primitives are provided:
 
   argon2id_hash() / argon2id_verify()
     Argon2id (RFC 9106) for password hashing and local key derivation.
-    Parameters follow the OWASP Password Storage Cheat Sheet minimum:
-      time_cost   = 2   iterations
-      memory_cost = 19456 KiB (≈ 19 MiB)
+    Parameters follow the OWASP Password Storage Cheat Sheet recommendation:
+      time_cost   = 1   iteration
+      memory_cost = 47104 KiB (≈ 46 MiB)
       parallelism = 1   thread
       hash_len    = 32  bytes
     These parameters are justified against OWASP and must be cited in the

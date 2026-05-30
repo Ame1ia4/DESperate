@@ -45,8 +45,8 @@ OPK_COUNT: int = 20
 # Do not reduce these values. Increasing memory_cost or time_cost improves
 # security at the cost of latency.
 
-ARGON2_TIME_COST: int    = 2        # iterations
-ARGON2_MEMORY_COST: int  = 19456   # KiB ≈ 19 MiB
+ARGON2_TIME_COST: int    = 1        # iterations
+ARGON2_MEMORY_COST: int  = 47104   # KiB ≈ 46 MiB
 ARGON2_PARALLELISM: int  = 1       # threads
 ARGON2_HASH_LEN: int     = 32      # bytes — 256-bit output
 ARGON2_SALT_LEN: int     = 16      # bytes — 128-bit random salt per hash
