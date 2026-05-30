@@ -37,6 +37,7 @@ References:
 from __future__ import annotations
 
 import os
+import threading
 from typing import Optional, Tuple
 
 import oqs
@@ -121,25 +122,43 @@ class MLKEMRatchet(_BaseDHRatchet):
                 )
             with oqs.KeyEncapsulation(KEM_ALG) as kem:
                 ciphertext, shared_secret = kem.encap_secret(other_pub)
-            # Store ciphertext so session layer can include it in the header
-            MLKEMRatchet._pending_ciphertext = ciphertext
+            # Store ciphertext so session layer can include it in the header.
+            # Thread-local so concurrent sessions on different threads can't
+            # consume each other's ciphertext.
+            MLKEMRatchet._local.pending_ciphertext = ciphertext
             return shared_secret
         else:
-            # Receiver path — decapsulate using our secret key
-            if len(other_pub) != KEM_CIPHERTEXT_LEN:
+            # Receiver path — other_pub is the sender's new ML-KEM public key
+            # (used by the library to track ratchet state for future DH steps).
+            # The actual ciphertext to decapsulate is stashed in
+            # _local.pending_kem_ct by the session layer via push_kem_ct()
+            # before decrypt_message() is called, keeping the sender's pub key
+            # and kem_ct separated across the library boundary so Header.ratchet_pub
+            # stays meaningful for subsequent sender→receiver DH steps.
+            if len(other_pub) != KEM_PUBLIC_KEY_LEN:
                 raise ValueError(
-                    f"Receiver path expects ML-KEM ciphertext "
-                    f"({KEM_CIPHERTEXT_LEN} bytes), got {len(other_pub)}"
+                    f"Receiver path expects sender's ML-KEM public key "
+                    f"({KEM_PUBLIC_KEY_LEN} bytes), got {len(other_pub)}"
+                )
+            kem_ct = getattr(MLKEMRatchet._local, "pending_kem_ct", None)
+            if kem_ct is None:
+                raise RuntimeError(
+                    "No KEM ciphertext available — push_kem_ct() must be "
+                    "called before decrypt_message() on the receiver path."
+                )
+            MLKEMRatchet._local.pending_kem_ct = None
+            if len(kem_ct) != KEM_CIPHERTEXT_LEN:
+                raise ValueError(
+                    f"Stashed KEM ciphertext has wrong length "
+                    f"(expected {KEM_CIPHERTEXT_LEN}, got {len(kem_ct)})"
                 )
             with oqs.KeyEncapsulation(KEM_ALG, own_priv) as kem:
-                shared_secret = kem.decap_secret(other_pub)
-            return shared_secret
+                return kem.decap_secret(kem_ct)
 
-    # Class-level storage for ciphertext produced during encapsulation.
-    # The session layer reads this immediately after _perform_diffie_hellman
-    # to include it in the outgoing message header.
-    # This is reset to None after each read to detect accidental reuse.
-    _pending_ciphertext: Optional[bytes] = None
+    # Thread-local storage for ratchet state that crosses the library boundary.
+    # Each thread has its own slots, so concurrent sessions on different threads
+    # cannot consume each other's values.
+    _local: threading.local = threading.local()
 
     @classmethod
     def pop_pending_ciphertext(cls) -> bytes:
@@ -149,11 +168,23 @@ class MLKEMRatchet(_BaseDHRatchet):
         Call this immediately after encrypt() to include the ciphertext
         in the message header. Raises if no ciphertext is pending.
         """
-        ct = cls._pending_ciphertext
+        ct = getattr(cls._local, "pending_ciphertext", None)
         if ct is None:
             raise RuntimeError(
                 "No pending ciphertext — was pop_pending_ciphertext() "
                 "called without a preceding encapsulation?"
             )
-        cls._pending_ciphertext = None
+        cls._local.pending_ciphertext = None
         return ct
+
+    @classmethod
+    def push_kem_ct(cls, kem_ct: bytes) -> None:
+        """
+        Stash the ML-KEM ciphertext from the wire header so the receiver path
+        of the next _perform_diffie_hellman call on this thread can consume it.
+
+        Must be called on the same thread that will call decrypt_message(),
+        immediately before that call. The ciphertext is cleared automatically
+        after it is consumed by _perform_diffie_hellman.
+        """
+        cls._local.pending_kem_ct = kem_ct

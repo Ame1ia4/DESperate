@@ -198,11 +198,13 @@ class TestMLKEMRatchet:
 
     @pytest.fixture(autouse=True)
     def reset_pending_ct(self):
-        """Reset class-level pending ciphertext before each test."""
+        """Reset per-thread pending ratchet state before and after each test."""
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        MLKEMRatchet._pending_ciphertext = None
+        MLKEMRatchet._local.pending_ciphertext = None
+        MLKEMRatchet._local.pending_kem_ct     = None
         yield
-        MLKEMRatchet._pending_ciphertext = None
+        MLKEMRatchet._local.pending_ciphertext = None
+        MLKEMRatchet._local.pending_kem_ct     = None
 
     def test_generate_key_pair_returns_correct_sizes(self):
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
@@ -213,22 +215,27 @@ class TestMLKEMRatchet:
     def test_sender_path_sets_pending_ciphertext(self):
         """
         When own_priv is None (sender), _perform_diffie_hellman must
-        encapsulate and store the ciphertext in _pending_ciphertext.
+        encapsulate and store the ciphertext in _local.pending_ciphertext.
         """
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
         ss = MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
-        assert MLKEMRatchet._pending_ciphertext is not None
-        assert len(MLKEMRatchet._pending_ciphertext) == 1568
+        assert getattr(MLKEMRatchet._local, "pending_ciphertext", None) is not None
+        assert len(MLKEMRatchet._local.pending_ciphertext) == 1568
         assert ss == b"\xdd" * 32
 
-    def test_receiver_path_clears_pending_ciphertext(self):
+    def test_receiver_path_consumes_kem_ct_and_leaves_no_ciphertext(self):
         """
-        When own_priv is set (receiver), no ciphertext is produced.
-        _pending_ciphertext must remain None.
+        When own_priv is set (receiver), _perform_diffie_hellman reads the
+        kem_ct from _local.pending_kem_ct (pushed by push_kem_ct) and clears
+        it. No encapsulation ciphertext is produced (_local.pending_ciphertext
+        stays None). other_pub carries the sender's new pub key for ratchet
+        state tracking, not the kem_ct.
         """
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xcc" * 1568)
-        assert MLKEMRatchet._pending_ciphertext is None
+        MLKEMRatchet.push_kem_ct(b"\xcc" * 1568)
+        ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
+        assert getattr(MLKEMRatchet._local, "pending_ciphertext", None) is None
+        assert getattr(MLKEMRatchet._local, "pending_kem_ct",     None) is None
         assert ss == b"\xee" * 32
 
     def test_pop_pending_ciphertext_clears_after_read(self):
@@ -236,7 +243,7 @@ class TestMLKEMRatchet:
         MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
         ct = MLKEMRatchet.pop_pending_ciphertext()
         assert ct is not None
-        assert MLKEMRatchet._pending_ciphertext is None
+        assert getattr(MLKEMRatchet._local, "pending_ciphertext", None) is None
 
     def test_pop_pending_ciphertext_raises_when_empty(self):
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
@@ -249,9 +256,22 @@ class TestMLKEMRatchet:
             MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 32)
 
     def test_receiver_path_wrong_ciphertext_size_raises(self):
+        """push_kem_ct stashes a wrong-size ciphertext; DH should reject it."""
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
+        MLKEMRatchet.push_kem_ct(b"\xaa" * 32)
         with pytest.raises(ValueError, match="1568"):
-            MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 32)
+            MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
+
+    def test_receiver_path_raises_without_push_kem_ct(self):
+        """Receiver path must raise if push_kem_ct() was never called."""
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
+        with pytest.raises(RuntimeError, match="push_kem_ct"):
+            MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
+
+    def test_push_kem_ct_sets_thread_local(self):
+        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
+        MLKEMRatchet.push_kem_ct(b"\xff" * 1568)
+        assert getattr(MLKEMRatchet._local, "pending_kem_ct", None) == b"\xff" * 1568
 
     def test_sender_and_receiver_paths_produce_different_secrets(self):
         """
@@ -259,9 +279,10 @@ class TestMLKEMRatchet:
         return different values — verifies the paths are distinct.
         """
         from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        sender_ss   = MLKEMRatchet._perform_diffie_hellman(None,        b"\xaa" * 1568)
-        MLKEMRatchet._pending_ciphertext = None
-        receiver_ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xcc" * 1568)
+        sender_ss = MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
+        MLKEMRatchet._local.pending_ciphertext = None
+        MLKEMRatchet.push_kem_ct(b"\xcc" * 1568)
+        receiver_ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
         assert sender_ss   == b"\xdd" * 32
         assert receiver_ss == b"\xee" * 32
 
@@ -279,15 +300,19 @@ class TestWireFormat:
 
     def test_wire_header_length(self):
         """
-        Wire header = message_index (4) + ratchet_pub (1568) + kem_ct (1568)
-                    = 3140 bytes per message.
-        This is a known tradeoff vs classical X25519 (68 bytes).
-        Document in design doc.
+        Wire header = msg_index (4) + pn (4) + n (4)
+                    + ratchet_pub (1568) + kem_ct (1568) = 3148 bytes.
+        pn and n carry the DoubleRatchet Header chain-length fields so the
+        receiver can reconstruct the full Header for out-of-order handling.
         """
-        from core.dh_ratchet.session import _WIRE_HEADER_LEN, _MSG_INDEX_LEN
+        from core.dh_ratchet.session import (
+            _WIRE_HEADER_LEN, _MSG_INDEX_LEN, _PN_LEN, _N_LEN,
+        )
         from core.constants import KEM_PUBLIC_KEY_LEN, KEM_CIPHERTEXT_LEN
-        assert _WIRE_HEADER_LEN == _MSG_INDEX_LEN + KEM_PUBLIC_KEY_LEN + KEM_CIPHERTEXT_LEN
-        assert _WIRE_HEADER_LEN == 3140
+        assert _WIRE_HEADER_LEN == (
+            _MSG_INDEX_LEN + _PN_LEN + _N_LEN + KEM_PUBLIC_KEY_LEN + KEM_CIPHERTEXT_LEN
+        )
+        assert _WIRE_HEADER_LEN == 3148
 
     def test_message_index_encoding(self):
         """message_index is uint32 little-endian — verify decode."""
@@ -299,14 +324,14 @@ class TestWireFormat:
     def test_wire_header_overhead_documented(self):
         """
         Document the overhead increase vs X25519 ratchet.
-        X25519 header: 4 (index) + 32 (pub) + 32 (ct equivalent) = 68 bytes
-        ML-KEM header: 4 (index) + 1568 (pub) + 1568 (ct) = 3140 bytes
-        Increase: 3072 bytes per message — must be in design document.
+        Classical header: 4 (index) + 4 (pn) + 4 (n) + 32 (x25519 pub) = 44 bytes
+        ML-KEM header:    4 (index) + 4 (pn) + 4 (n) + 1568 (pub) + 1568 (ct) = 3148
+        Increase: 3104 bytes per message — must be in design document.
         """
-        classical_overhead = 4 + 32 + 32
-        pq_overhead        = 3140
+        classical_overhead = 4 + 4 + 4 + 32      # index + pn + n + x25519 pub; no separate ct
+        pq_overhead        = 3148
         increase           = pq_overhead - classical_overhead
-        assert increase == 3072
+        assert increase == 3104
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -360,21 +385,21 @@ class TestRatchetSessionPersistence:
 
     @pytest.mark.asyncio
     async def test_message_index_increments_on_encrypt(self, session, mock_ratchet):
-        """message_index must increment before encryption — nonce depends on it."""
-        # Set up mock encrypted message
+        """message_index must increment before encryption — it is prepended to AD."""
         header = MagicMock()
-        header.ratchet_pub = b"\xaa" * 1568
+        header.ratchet_pub                   = b"\xaa" * 1568
+        header.previous_sending_chain_length = 0
+        header.sending_chain_length          = 1
         encrypted = MagicMock()
         encrypted.header     = header
         encrypted.ciphertext = b"\xbb" * 32
         mock_ratchet.encrypt_message.return_value = encrypted
 
-        with patch("core.dh_ratchet.dh_ratchet.MLKEMRatchet._pending_ciphertext", b"\xcc" * 1568):
-            with patch("core.dh_ratchet.dh_ratchet.MLKEMRatchet.pop_pending_ciphertext",
-                       return_value=b"\xcc" * 1568):
-                assert session._msg_index == 0
-                await session.encrypt(b"hello", b"ad")
-                assert session._msg_index == 1
+        with patch("core.dh_ratchet.dh_ratchet.MLKEMRatchet.pop_pending_ciphertext",
+                   return_value=b"\xcc" * 1568):
+            assert session._msg_index == 0
+            await session.encrypt(b"hello", b"ad")
+            assert session._msg_index == 1
 
     @pytest.mark.asyncio
     async def test_wire_too_short_raises(self, session):
