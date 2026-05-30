@@ -16,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.kdf import argon2id_derive_key
 from core.constants import ARGON2_TIME_COST, ARGON2_MEMORY_COST, ARGON2_PARALLELISM
 
-RUNS       = 5
+#Minimum owasp params average ~20ms, recommended params average ~29.5ms
+
+RUNS       = 100
 PASSWORD   = "test-password-for-benchmarking"
 
 print(f"Argon2id parameters: t={ARGON2_TIME_COST}, m={ARGON2_MEMORY_COST} KiB (~{ARGON2_MEMORY_COST // 1024} MiB), p={ARGON2_PARALLELISM}")
