@@ -3,7 +3,7 @@ main.py — TCP RPC server for E2EE cryptography operations.
 
 Listens on 127.0.0.1:54231. Protocol: newline-delimited JSON.
   Request:  {"id": "<uuid>", "method": "<name>", "params": {...}}\n
-  Response: {...}\n
+  Response: {"id": "<uuid>", ...}\n
 """
 import asyncio
 import json
@@ -51,8 +51,15 @@ async def handle_generate_identity_bundle(params: dict) -> dict:
     if not password:
         return {"error": "Password required."}
     try:
-        # Wipe any existing keystore before creating a fresh identity
         if KEYSTORE_DIR.exists():
+            # Require the caller to prove they own the existing keystore before
+            # wiping it — prevents any local process from destroying keys without
+            # knowing the current password.
+            try:
+                existing = StateStore.load(KEYSTORE_DIR, password)
+                existing.load_state("identity")
+            except InvalidTag:
+                return {"error": "Wrong password — cannot overwrite existing keystore."}
             shutil.rmtree(KEYSTORE_DIR)
         bundle = _gen_bundle(user_id)
         store = StateStore.create(KEYSTORE_DIR, password)
@@ -90,6 +97,7 @@ async def handle_client(
                 await writer.drain()
                 continue
 
+            req_id = request.get("id")
             method = request.get("method", "")
             params = request.get("params", {})
 
@@ -99,6 +107,7 @@ async def handle_client(
             else:
                 response = await handler(params)
 
+            response["id"] = req_id
             writer.write(
                 json.dumps(response, separators=(",", ":")).encode() + b"\n"
             )

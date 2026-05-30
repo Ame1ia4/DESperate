@@ -77,7 +77,7 @@ add_custom_command(TARGET appsecure_messenger POST_BUILD
     COMMAND ${CMAKE_COMMAND}
         -DSRC_DIR=${CRYPTO_DIST}
         -DDST_DIR=$<TARGET_FILE_DIR:appsecure_messenger>/crypto_service
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_build_error.cmake
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_crypto_bundle.cmake
     COMMENT "Copying crypto_service bundle to build output"
 )
 
