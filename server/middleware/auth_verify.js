@@ -1,32 +1,17 @@
 import * as srp from 'secure-remote-password/server.js'
 import { query } from '../database/db.js'
 import { storeSessionKey } from '../state/session_keys.js'
-import {
-  HEX_RE,
-  UUID_RE,
-  USERNAME_MIN,
-  USERNAME_MAX,
-  USERNAME_REGEX,
-  SRP_EPHEMERAL_HEX,
-  SRP_EPHEMERAL_HEX_MIN,
-  SRP_SESSION_PROOF_HEX,
-} from '../constants/auth.js'
+import { isValidUsername, isValidUUID, isValidClientPublicEphemeral } from '../utils/validate.js'
+import { HEX_RE, SRP_SESSION_PROOF_HEX } from '../constants/auth.js'
 
 export async function authVerify(req, res) {
   const { username, device_id, clientPublicEphemeral, clientSessionProof } = req.body
 
   if (
-    typeof username !== 'string' ||
-    typeof device_id !== 'string' ||
-    typeof clientPublicEphemeral !== 'string' ||
+    !isValidUsername(username) ||
+    !isValidUUID(device_id) ||
+    !isValidClientPublicEphemeral(clientPublicEphemeral) ||
     typeof clientSessionProof !== 'string' ||
-    username.length < USERNAME_MIN ||
-    username.length > USERNAME_MAX ||
-    !USERNAME_REGEX.test(username) ||
-    !UUID_RE.test(device_id) ||
-    clientPublicEphemeral.length < SRP_EPHEMERAL_HEX_MIN ||
-    clientPublicEphemeral.length > SRP_EPHEMERAL_HEX ||
-    !HEX_RE.test(clientPublicEphemeral) ||
     clientSessionProof.length !== SRP_SESSION_PROOF_HEX ||
     !HEX_RE.test(clientSessionProof)
   ) {

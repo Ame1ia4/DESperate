@@ -1,16 +1,8 @@
 import * as srp from 'secure-remote-password/server.js'
 import { createHmac, hkdfSync } from 'node:crypto'
 import { query, withTransaction } from '../database/db.js'
-import {
-  HEX_RE,
-  UUID_RE,
-  USERNAME_MIN,
-  USERNAME_MAX,
-  USERNAME_REGEX,
-  SRP_EPHEMERAL_HEX,
-  SRP_EPHEMERAL_HEX_MIN,
-  SRP_VERIFIER_HEX,
-} from '../constants/auth.js'
+import { isValidUsername, isValidUUID, isValidClientPublicEphemeral } from '../utils/validate.js'
+import { SRP_VERIFIER_HEX } from '../constants/auth.js'
 
 // Fail fast at startup — a missing secret makes fakeSalt() throw only for
 // unknown users, turning the unknown-user path into a 500 (enumeration oracle).
@@ -38,16 +30,9 @@ export async function authInit(req, res) {
   const { username, device_id, clientPublicEphemeral } = req.body
 
   if (
-    typeof username !== 'string' ||
-    typeof device_id !== 'string' ||
-    typeof clientPublicEphemeral !== 'string' ||
-    username.length < USERNAME_MIN ||
-    username.length > USERNAME_MAX ||
-    !USERNAME_REGEX.test(username) ||
-    !UUID_RE.test(device_id) ||
-    clientPublicEphemeral.length < SRP_EPHEMERAL_HEX_MIN ||
-    clientPublicEphemeral.length > SRP_EPHEMERAL_HEX ||
-    !HEX_RE.test(clientPublicEphemeral)
+    !isValidUsername(username) ||
+    !isValidUUID(device_id) ||
+    !isValidClientPublicEphemeral(clientPublicEphemeral)
   ) {
     return res.status(400).json({ error: 'Invalid request' })
   }

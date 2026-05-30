@@ -1,12 +1,11 @@
-import { createHash } from 'node:crypto'
 import { query, withTransaction } from '../../database/db.js'
 import { verifyDualSignature } from '../../utils/crypto.js'
 import { parseHex } from '../../utils/parseHex.js'
 import { consumeNonce } from './nonce.js'
+import { isValidUsername } from '../../utils/validate.js'
 import {
   HEX_RE,
   SRP_SALT_HEX, SRP_VERIFIER_HEX,
-  USERNAME_REGEX, USERNAME_MIN, USERNAME_MAX,
   DEVICE_NAME_MAX,
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
@@ -15,12 +14,7 @@ import {
 export async function register(req, res) {
   const { username, bundle } = req.body
 
-  if (
-    typeof username !== 'string' ||
-    !USERNAME_REGEX.test(username) ||
-    username.length < USERNAME_MIN ||
-    username.length > USERNAME_MAX
-  ) {
+  if (!isValidUsername(username)) {
     return res.status(400).json({ error: 'Invalid username' })
   }
 
@@ -119,9 +113,6 @@ export async function register(req, res) {
     return res.status(409).json({ error: 'Registration failed' })
   }
 
-  // SHA-256 of the signing key — user-verifiable fingerprint for out-of-band comparison.
-  const identity_fingerprint = createHash('sha256').update(signingPub).digest('hex')
-
   let deviceId
   try {
     deviceId = await withTransaction(async (client) => {
@@ -135,16 +126,14 @@ export async function register(req, res) {
           user_id, device_name,
           idk_classical_pub, idk_pq_pub,
           identity_signing_pub,
-          identity_fingerprint,
           signed_prekey_pub, signed_prekey_signature
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           user.id,
           device_name ?? null,
           idkClassicalPub,
           idkPqPub,
           signingPub,
-          identity_fingerprint,
           signedPrekeyPub,
           signedPrekeySig,
         ]
