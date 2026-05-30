@@ -1,5 +1,6 @@
 import * as srp from 'secure-remote-password/server.js'
 import { query } from '../database/db.js'
+import { storeSessionKey } from '../state/session_keys.js'
 import {
   HEX_RE,
   UUID_RE,
@@ -9,7 +10,6 @@ import {
   SRP_EPHEMERAL_HEX,
   SRP_EPHEMERAL_HEX_MIN,
   SRP_SESSION_PROOF_HEX,
-  SRP_SESSION_INTERVAL,
 } from '../constants/auth.js'
 
 export async function authVerify(req, res) {
@@ -79,14 +79,7 @@ export async function authVerify(req, res) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
-  // Stamp session lifetime on the device row so requireAuth can gate subsequent requests.
-  await query(
-    `UPDATE devices
-     SET srp_verified_at = NOW(),
-         srp_expires_at  = NOW() + INTERVAL '${SRP_SESSION_INTERVAL}'
-     WHERE id = $1`,
-    [device_id]
-  )
+  storeSessionKey(device_id, serverSession.key)
 
   console.info('auth_login: session established', { username, device_id })
   res.json({ serverSessionProof: serverSession.proof })

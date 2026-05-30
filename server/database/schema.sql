@@ -134,12 +134,7 @@ CREATE TABLE devices (
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     revoked BOOLEAN
-        NOT NULL DEFAULT FALSE,
-
-    -- Set by /auth/login on successful SRP handshake.
-    -- NULL means the device has never authenticated.
-    srp_verified_at TIMESTAMP WITH TIME ZONE,
-    srp_expires_at  TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_devices_user
@@ -891,7 +886,7 @@ WHERE id = $1;
 -- AUTHENTICATION MODEL
 -- =========================================================
 
--- LOGIN (SRP-6a, RFC 5054):
+-- LOGIN (SRP-6a, RFC 2945):
 --
 -- Round 1 — POST /auth/init:
 --   client sends username + device_id + A
@@ -903,17 +898,20 @@ WHERE id = $1;
 --   client sends username + device_id + A + M1
 --   server loads+deletes challenge (single-use)
 --   server calls deriveSession — throws on wrong password
---   server stamps devices.srp_verified_at + srp_expires_at (24 h)
+--   server stores K in-process memory only (30-second TTL, one-use)
 --   server returns M2 (mutual auth proof)
 --
--- SUBSEQUENT REQUESTS:
+-- SUBSEQUENT REQUEST (must immediately follow /auth/login):
 --
---   client sends X-Device-ID header
---   server checks devices WHERE srp_expires_at > NOW() AND revoked = FALSE
+--   client derives: auth_key = HKDF-SHA256(K, salt="", info="session-auth", length=32)
+--   client sends X-Device-ID and X-Session-Proof headers
+--   X-Session-Proof = HMAC-SHA256(auth_key, method:path:hex(SHA256(body)))
+--   server looks up K in memory, verifies HMAC, discards K
 --
 -- NO:
 --
 -- - JWTs
 -- - bearer tokens
 -- - server-side sessions
+-- - srp_verified_at / srp_expires_at columns
 -- - Argon2id (password is never sent to or stored by the server)

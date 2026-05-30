@@ -30,9 +30,9 @@ export const SRP_EPHEMERAL_HEX_MIN = 256  // lower bound: real 2048-bit group va
                                           // 256 tolerates libraries that strip leading zeros without accepting garbage
 export const SRP_SESSION_PROOF_HEX = 64   // M1/M2 = SHA-256 output = 32 bytes = 64 hex chars
 
-// ── SRP device session ──────────────────────────────────────────────────────
-
-export const SRP_SESSION_INTERVAL = '24 hours'  // stamped on devices.srp_expires_at after /auth/login
+// ── requireAuth proof ───────────────────────────────────────────────────────
+// HMAC-SHA256 output = 32 bytes = 64 hex chars
+export const HMAC_HEX_LEN = 64
 
 // ── Input validation ────────────────────────────────────────────────────────
 

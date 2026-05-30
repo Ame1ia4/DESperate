@@ -5,6 +5,7 @@ import express from 'express'
 import * as srpClient from 'secure-remote-password/client.js'
 import * as srpServer from 'secure-remote-password/server.js'
 import { authVerify } from '../../middleware/auth_verify.js'
+import { consumeSessionKey } from '../../state/session_keys.js'
 import {
   SRP_EPHEMERAL_HEX,
   SRP_EPHEMERAL_HEX_MIN,
@@ -66,14 +67,13 @@ before(() => new Promise(resolve => {
 
 after(() => new Promise(resolve => server.close(resolve)))
 
-// Default: valid device+user, valid challenge, successful DELETE and UPDATE
-// Query order: [1] device+user JOIN, [2] challenge SELECT, [3] challenge DELETE, [4] devices UPDATE
+// Default: valid device+user, valid challenge, successful DELETE
+// Query order: [1] device+user JOIN, [2] challenge SELECT, [3] challenge DELETE
 beforeEach(() => {
   globalThis.__db.queryImpl = seqQueryImpl(
-    { rows: [knownCreds()] },     // SELECT device+user JOIN
+    { rows: [knownCreds()] },      // SELECT device+user JOIN
     { rows: [activeChallenge()] }, // SELECT srp_challenges
     { rows: [] },                  // DELETE srp_challenges
-    { rows: [] },                  // UPDATE devices (srp_verified_at, srp_expires_at)
   )
 })
 
@@ -128,16 +128,11 @@ describe('POST /auth/login', () => {
       assert.ok(!('srp_verifier'          in res.body))
     })
 
-    it('stamps srp_verified_at and srp_expires_at on the device row', async () => {
-      const queries = []
-      globalThis.__db.queryImpl = async (sql) => {
-        queries.push(sql)
-        if (sql.includes('srp_verifier'))            return { rows: [knownCreds()] }
-        if (sql.includes('FROM srp_challenges'))     return { rows: [activeChallenge()] }
-        return { rows: [] }
-      }
+    it('stores session key K in the session key store after successful handshake', async () => {
       await post(validBody())
-      assert.ok(queries.some(q => q.includes('UPDATE devices') && q.includes('srp_verified_at')))
+      const K = consumeSessionKey(DEVICE_ID)
+      assert.ok(K !== null)
+      assert.match(K, /^[0-9a-f]+$/i)
     })
   })
 
@@ -147,25 +142,26 @@ describe('POST /auth/login', () => {
       globalThis.__db.queryImpl = async (sql) => {
         queries.push(sql)
         if (sql.includes('srp_verifier'))            return { rows: [knownCreds()] }
-        if (sql.includes('FROM srp_challenges'))     return { rows: [activeChallenge()] }
+        if (/^\s*SELECT/i.test(sql) && sql.includes('srp_challenges')) return { rows: [activeChallenge()] }
         return { rows: [] }
       }
       await post(validBody())
       assert.ok(queries.some(q => q.includes('DELETE') && q.includes('srp_challenges')))
     })
 
-    it('challenge is deleted even when M1 is wrong — UPDATE devices is NOT called', async () => {
+    it('challenge is deleted even when M1 is wrong — K is NOT stored', async () => {
+      consumeSessionKey(DEVICE_ID) // drain any K left from previous successful test
       const queries = []
       globalThis.__db.queryImpl = async (sql) => {
         queries.push(sql)
         if (sql.includes('srp_verifier'))            return { rows: [knownCreds()] }
-        if (sql.includes('FROM srp_challenges'))     return { rows: [activeChallenge()] }
+        if (/^\s*SELECT/i.test(sql) && sql.includes('srp_challenges')) return { rows: [activeChallenge()] }
         return { rows: [] }
       }
       const wrongM1 = randomBytes(SRP_SESSION_PROOF_HEX / 2).toString('hex')
       await post({ ...validBody(), clientSessionProof: wrongM1 })
       assert.ok(queries.some(q => q.includes('DELETE') && q.includes('srp_challenges')))
-      assert.ok(!queries.some(q => q.includes('UPDATE devices')))
+      assert.strictEqual(consumeSessionKey(DEVICE_ID), null)
     })
   })
 
@@ -285,7 +281,7 @@ describe('POST /auth/login', () => {
     it('returns 500 when the challenge DELETE throws', async () => {
       globalThis.__db.queryImpl = async (sql) => {
         if (sql.includes('srp_verifier'))          return { rows: [knownCreds()] }
-        if (sql.includes('FROM srp_challenges'))   return { rows: [activeChallenge()] }
+        if (/^\s*SELECT/i.test(sql) && sql.includes('srp_challenges')) return { rows: [activeChallenge()] }
         throw new Error('disk full')
       }
       const res = await post(validBody())
