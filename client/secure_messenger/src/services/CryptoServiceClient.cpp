@@ -276,12 +276,11 @@ QString CryptoServiceClient::locateServiceScript()
         QCoreApplication
         ::applicationDirPath();
 
-    const QString candidate =
-        basePath +
-        "/crypto_service";
+    const QString bundled =
+        basePath + "/crypto_service/crypto_service.exe";
 
-    if (QFileInfo::exists(candidate)) {
-        return candidate;
+    if (QFileInfo::exists(bundled)) {
+        return bundled;
     }
 
     return {};
