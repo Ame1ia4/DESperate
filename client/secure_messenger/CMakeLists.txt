@@ -5,6 +5,7 @@ project(secure_messenger VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Quick Network QuickControls2)
+find_package(OpenSSL REQUIRED)
 
 qt_standard_project_setup(REQUIRES 6.10)
 
@@ -20,6 +21,7 @@ qt_add_executable(appsecure_messenger
     src/models/ConversationModel.cpp
     src/models/UserModel.cpp
     src/network/TLSManager.cpp
+    src/network/TrustStore.cpp
     src/storage/LocalMessageStore.cpp
 )
 
@@ -68,6 +70,8 @@ set_target_properties(appsecure_messenger PROPERTIES
 
 target_link_libraries(appsecure_messenger
     PRIVATE Qt6::Quick Qt6::Network Qt6::QuickControls2
+            OpenSSL::SSL OpenSSL::Crypto
+            $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
 install(TARGETS appsecure_messenger
@@ -75,3 +79,6 @@ install(TARGETS appsecure_messenger
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+enable_testing()
+add_subdirectory(tests)

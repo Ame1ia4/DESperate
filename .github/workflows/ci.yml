@@ -120,17 +120,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: 6.6.0
-          modules: qtquick qtquickcontrols2
+          version: '6.11.1'
 
       - name: Configure (CMake)
-        run: cmake -B qt_build -S qt_client -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B qt_build -S client/secure_messenger -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build qt_build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir qt_build --output-on-failure
 
 
   # ── 4. Solidity smart contract ─────────────────────────────────────
