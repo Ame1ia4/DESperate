@@ -29,9 +29,9 @@ log = logging.getLogger(__name__)
 
 
 async def handle_unlock_keystore(params: dict) -> dict:
-    password = params.get("password", "")
+    password = params.get("keystore_password", "")
     if not password:
-        return {"success": False, "error": "Password required."}
+        return {"success": False, "error": "keystore_password required."}
     try:
         store = StateStore.load(KEYSTORE_DIR, password)
         store.load_state("identity")  # raises InvalidTag on wrong password
@@ -46,10 +46,10 @@ async def handle_unlock_keystore(params: dict) -> dict:
 
 
 async def handle_generate_identity_bundle(params: dict) -> dict:
-    password = params.get("password", "")
+    password = params.get("keystore_password", "")
     user_id = params.get("user_id", "local")
     if not password:
-        return {"error": "Password required."}
+        return {"error": "keystore_password required."}
     try:
         if KEYSTORE_DIR.exists():
             # Require the caller to prove they own the existing keystore before
