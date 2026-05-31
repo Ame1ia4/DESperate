@@ -521,9 +521,9 @@ def verify_hybrid_signature(
     """
     Verify a hybrid Ed25519 + ML-DSA-87 signature over arbitrary message bytes.
 
-    Both algorithms must verify independently. Returns False if either fails
-    or if the signature length is wrong. Raises MalformedSignedCiphertextError
-    if ik_sig_pub is the wrong length (structural error, not a bad signature).
+    Both algorithms must verify independently. Returns False if either fails.
+    Raises MalformedSignedCiphertextError if ik_sig_pub or signature is the
+    wrong length (structural error, not a crypto failure).
 
     Parameters
     ----------
@@ -536,7 +536,9 @@ def verify_hybrid_signature(
             f"ik_sig_pub must be {HYBRID_PUBLIC_KEY_LEN} bytes, got {len(ik_sig_pub)}."
         )
     if len(signature) != HYBRID_SIGNATURE_LEN:
-        return False
+        raise MalformedSignedCiphertextError(
+            f"signature must be {HYBRID_SIGNATURE_LEN} bytes, got {len(signature)}."
+        )
 
     ed_pub_bytes  = ik_sig_pub[:ED25519_PUBLIC_KEY_LEN]
     dsa_pub_bytes = ik_sig_pub[ED25519_PUBLIC_KEY_LEN:]

@@ -64,7 +64,7 @@ def build_sig_input(
     """
     if not (0 <= message_index < 2**64):
         raise ValueError("message_index must be a uint64")
-    return msgpack.packb([ciphertext, aad, sender_id, recipient_id, message_index])
+    return msgpack.packb([ciphertext, aad, sender_id, recipient_id, message_index], use_bin_type=True)
 
 
 # ── SignedCiphertext dataclass ────────────────────────────────────────────────
@@ -94,13 +94,13 @@ class SignedCiphertext:
         return msgpack.packb([
             self.sender_id, self.recipient_id,
             self.message_index, self.signature, self.ciphertext,
-        ])
+        ], use_bin_type=True)
 
     @classmethod
     def from_bytes(cls, data: bytes) -> SignedCiphertext:
         """Parse wire format produced by to_bytes(). Raises MalformedSignedCiphertextError on any structural problem."""
         try:
-            sender_id, recipient_id, message_index, signature, ciphertext = msgpack.unpackb(data)
+            sender_id, recipient_id, message_index, signature, ciphertext = msgpack.unpackb(data, raw=False)
         except Exception as exc:
             raise MalformedSignedCiphertextError(f"Failed to parse payload: {exc}") from exc
         if len(signature) != HYBRID_SIGNATURE_LEN:
@@ -155,10 +155,6 @@ def verify_ciphertext(
     expected_pub: optional locally pinned key for TOFU enforcement. Compared in constant
     time — a mismatch raises the same error as a bad signature to prevent timing oracles.
     """
-    if expected_pub is not None:
-        if not hmac.compare_digest(expected_pub, ik_sig_pub):
-            raise SignatureVerificationError("Signature verification failed.")
-
     sig_input = build_sig_input(
         ciphertext=signed.ciphertext, aad=aad,
         sender_id=signed.sender_id, recipient_id=signed.recipient_id,
@@ -167,13 +163,17 @@ def verify_ciphertext(
 
     try:
         valid = verify_hybrid_signature(sig_input, signed.signature, ik_sig_pub)
-    except MalformedSignedCiphertextError:
-        raise
     except Exception:
         raise SignatureVerificationError("Signature verification failed.")
 
     if not valid:
         raise SignatureVerificationError("Signature verification failed.")
+
+    if expected_pub is not None:
+        if not isinstance(expected_pub, bytes) or not isinstance(ik_sig_pub, bytes):
+            raise SignatureVerificationError("Signature verification failed.")
+        if not hmac.compare_digest(expected_pub, ik_sig_pub):
+            raise SignatureVerificationError("Signature verification failed.")
 
 
 # ── Convenience: verify and extract ──────────────────────────────────────────

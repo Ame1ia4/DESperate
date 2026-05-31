@@ -61,6 +61,7 @@ from core.constants              import MAX_SKIP
 from core.dh_ratchet.dh_ratchet  import X25519Ratchet
 from core.dh_ratchet.ratchet_kdf import RootChainKDF, MessageChainKDF
 from core.header_counter         import HeaderCounter
+from core.signatures             import SignedCiphertext
 from core.state_store            import StateStore
 
 
@@ -210,8 +211,13 @@ class RatchetSession:
             session_id = session_id,
             initial    = int(state.get("header_counter", 0)),
         )
+        if "msg_index" not in state:
+            raise KeyError(
+                f"Persisted state for session {session_id!r} is missing 'msg_index'. "
+                "State may have been written by an incompatible client version."
+            )
         session = cls(ratchet, store, session_id, counter)
-        session._msg_index = int(state.get("msg_index", 0))
+        session._msg_index = int(state["msg_index"])
         return session
 
     # ── Encrypt / Decrypt ────────────────────────────────────────────────
@@ -227,15 +233,15 @@ class RatchetSession:
         msg_index is prepended to associated_data before passing to
         DoubleRatchet so the wire counter is covered by the AEAD tag.
         """
-        self._msg_index += 1
-        msg_index = self._msg_index
-
-        ad_with_index = struct.pack("<I", msg_index) + associated_data
+        next_index = self._msg_index + 1
+        ad_with_index = struct.pack("<I", next_index) + associated_data
 
         encrypted = await self._ratchet.encrypt_message(
             message         = plaintext,
             associated_data = ad_with_index,
         )
+        self._msg_index = next_index
+        msg_index = self._msg_index
 
         ratchet_pub = encrypted.header.ratchet_pub
         if len(ratchet_pub) != _RATCHET_PUB_LEN:
@@ -257,16 +263,22 @@ class RatchetSession:
         await self._persist()
         return wire
 
-    async def decrypt(self, data: bytes, associated_data: bytes) -> bytes:
+    async def decrypt(self, signed: SignedCiphertext, associated_data: bytes) -> bytes:
         """
-        Decrypt a wire-format message and return the plaintext.
+        Decrypt a verified SignedCiphertext and return the plaintext.
+
+        `signed` MUST have been obtained via verify_and_extract() (or
+        verify_ciphertext() followed by SignedCiphertext.from_bytes()). Accepting
+        SignedCiphertext rather than raw bytes makes skipping verification a
+        deliberate choice rather than the path of least resistance.
 
         Raises
         ------
-        ValueError : if `data` is too short to contain the fixed header.
+        ValueError : if the ratchet wire payload is too short or empty.
         Exception  : python-doubleratchet propagates authentication and
                      out-of-order failures; the session does not catch them.
         """
+        data = signed.ciphertext
         if len(data) < _WIRE_HEADER_LEN:
             raise ValueError(
                 f"Wire message too short: need at least {_WIRE_HEADER_LEN} "
@@ -278,6 +290,8 @@ class RatchetSession:
         n           = struct.unpack("<I", data[_MSG_INDEX_LEN + _PN_LEN : _RATCHET_PUB_OFFSET])[0]
         ratchet_pub = data[_RATCHET_PUB_OFFSET : _WIRE_HEADER_LEN]
         ciphertext  = data[_WIRE_HEADER_LEN:]
+        if not ciphertext:
+            raise ValueError("Wire message has an empty ciphertext body.")
 
         ad_with_index = struct.pack("<I", msg_index) + associated_data
 

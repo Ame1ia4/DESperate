@@ -317,8 +317,17 @@ class TestRatchetSessionPersistence:
 
     @pytest.mark.asyncio
     async def test_wire_too_short_raises(self, session):
+        from core.signatures import SignedCiphertext
+        from core.constants import HYBRID_SIGNATURE_LEN
+        signed = SignedCiphertext(
+            ciphertext=b"\x00" * 10,
+            signature=b"\x00" * HYBRID_SIGNATURE_LEN,
+            sender_id=b"alice",
+            recipient_id=b"bob",
+            message_index=1,
+        )
         with pytest.raises(ValueError, match="too short"):
-            await session.decrypt(b"\x00" * 10, b"ad")
+            await session.decrypt(signed, b"ad")
 
     def test_session_id_property(self, session):
         assert session.session_id == "test-session"
