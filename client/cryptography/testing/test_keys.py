@@ -7,6 +7,12 @@ Run with: pytest tests/test_keys.py -v
 """
 
 import pytest
+from core.constants import (
+    HYBRID_PUBLIC_KEY_LEN,
+    HYBRID_SIGNATURE_LEN,
+    ED25519_PUBLIC_KEY_LEN,
+    DSA_PUBLIC_KEY_LEN,
+)
 from core.keys import (
     KEM_ALG,
     SIG_ALG,
@@ -25,6 +31,7 @@ from core.keys import (
     generate_x25519_one_time_prekeys,
     generate_identity_bundle,
     verify_spk_signature,
+    verify_hybrid_signature,
     replenish_one_time_prekeys,
 )
 
@@ -60,72 +67,78 @@ class TestKEMKeypair:
         assert kp.secret_key.hex() not in repr(kp)
 
 
-# ── ML-DSA-87 signing keypair ────────────────────────────────────────────────
+# ── Hybrid Ed25519 + ML-DSA-87 signing keypair ──────────────────────────────
 
 class TestSigningKeypair:
 
-    def test_public_key_is_2592_bytes(self):
-        """FIPS 204 §5: ML-DSA-87 verification key is 2592 bytes."""
+    def test_public_key_is_hybrid_length(self):
+        """Hybrid public key: ed25519_pub (32) || ml_dsa87_pub (2592) = HYBRID_PUBLIC_KEY_LEN."""
         kp = generate_signing_keypair()
-        assert len(kp.public_key) == 2592
+        assert len(kp.public_key) == HYBRID_PUBLIC_KEY_LEN
+
+    def test_ed25519_component_is_32_bytes(self):
+        """Ed25519 public key occupies the first ED25519_PUBLIC_KEY_LEN bytes of the hybrid key."""
+        kp = generate_signing_keypair()
+        assert len(kp.public_key[:ED25519_PUBLIC_KEY_LEN]) == ED25519_PUBLIC_KEY_LEN
+
+    def test_ml_dsa_component_is_correct_length(self):
+        """ML-DSA-87 public key occupies the last DSA_PUBLIC_KEY_LEN bytes of the hybrid key."""
+        kp = generate_signing_keypair()
+        assert len(kp.public_key[ED25519_PUBLIC_KEY_LEN:]) == DSA_PUBLIC_KEY_LEN
 
     def test_secret_key_is_4896_bytes(self):
         """FIPS 204 §5: ML-DSA-87 signing key is 4896 bytes."""
         kp = generate_signing_keypair()
         assert len(kp.secret_key) == 4896
 
+    def test_ed25519_secret_key_is_32_bytes(self):
+        kp = generate_signing_keypair()
+        assert len(kp.ed25519_secret_key) == 32
+
     def test_two_keypairs_are_different(self):
         kp1 = generate_signing_keypair()
         kp2 = generate_signing_keypair()
         assert kp1.public_key != kp2.public_key
 
-    def test_signature_is_4627_bytes(self):
-        """FIPS 204 §5: ML-DSA-87 signature is 4627 bytes."""
+    def test_signature_is_hybrid_length(self):
+        """Hybrid signature: ed25519_sig || ml_dsa87_sig = HYBRID_SIGNATURE_LEN bytes."""
         kp  = generate_signing_keypair()
         sig = kp.sign(b"test message")
-        assert len(sig) == 4627
+        assert len(sig) == HYBRID_SIGNATURE_LEN
 
-    def test_sign_is_deterministic_with_same_key(self):
+    def test_two_signatures_over_same_message_both_verify(self):
         """
-        ML-DSA uses randomised signing by default in liboqs.
-        Two signatures over the same message may differ — this is correct
-        and both must verify. Test that both verify rather than that they match.
+        ML-DSA uses randomised signing so two hybrid signatures over the same
+        message differ. Both must verify — test verification, not equality.
         """
-        import oqs
         kp   = generate_signing_keypair()
         msg  = b"same message"
         sig1 = kp.sign(msg)
         sig2 = kp.sign(msg)
-        with oqs.Signature(SIG_ALG) as v:
-            assert v.verify(msg, sig1, kp.public_key)
-            assert v.verify(msg, sig2, kp.public_key)
+        assert verify_hybrid_signature(msg, sig1, kp.public_key)
+        assert verify_hybrid_signature(msg, sig2, kp.public_key)
 
     def test_signature_verifies_with_correct_key(self):
-        import oqs
         kp  = generate_signing_keypair()
         msg = b"hello world"
         sig = kp.sign(msg)
-        with oqs.Signature(SIG_ALG) as v:
-            assert v.verify(msg, sig, kp.public_key)
+        assert verify_hybrid_signature(msg, sig, kp.public_key)
 
     def test_signature_fails_with_wrong_key(self):
-        import oqs
         kp1 = generate_signing_keypair()
         kp2 = generate_signing_keypair()
         sig = kp1.sign(b"message")
-        with oqs.Signature(SIG_ALG) as v:
-            assert not v.verify(b"message", sig, kp2.public_key)
+        assert not verify_hybrid_signature(b"message", sig, kp2.public_key)
 
     def test_signature_fails_with_tampered_message(self):
-        import oqs
         kp  = generate_signing_keypair()
         sig = kp.sign(b"original message")
-        with oqs.Signature(SIG_ALG) as v:
-            assert not v.verify(b"tampered message", sig, kp.public_key)
+        assert not verify_hybrid_signature(b"tampered message", sig, kp.public_key)
 
     def test_repr_does_not_expose_secret_key(self):
         kp = generate_signing_keypair()
         assert kp.secret_key.hex() not in repr(kp)
+        assert kp.ed25519_secret_key.hex() not in repr(kp)
 
 
 # ── X25519 keypair ───────────────────────────────────────────────────────────
@@ -181,15 +194,16 @@ class TestSignedPrekey:
         spk = generate_signed_prekey(signing_kp, spk_id=7)
         assert spk.spk_id == 7
 
-    def test_spk_signature_is_4627_bytes(self, signing_kp):
+    def test_spk_signature_is_hybrid_length(self, signing_kp):
+        """Hybrid signature: ed25519_sig || ml_dsa87_sig = HYBRID_SIGNATURE_LEN bytes."""
         spk = generate_signed_prekey(signing_kp)
-        assert len(spk.signature) == 4627
+        assert len(spk.signature) == HYBRID_SIGNATURE_LEN
 
     def test_spk_signature_verifies(self, signing_kp):
         """
         Initiating parties verify this signature before using the SPK.
-        A compromised server cannot forge a valid signature without the
-        user's ML-DSA-87 secret key.
+        A compromised server cannot forge a valid signature without both the
+        user's Ed25519 and ML-DSA-87 secret keys.
         """
         spk   = generate_signed_prekey(signing_kp)
         valid = verify_spk_signature(
@@ -281,8 +295,9 @@ class TestIdentityBundle:
         pub = bundle.to_public_bundle()
         serialised = str(pub)
         # None of the secret key hex strings should appear in the public bundle
-        assert bundle.ik_kem.secret_key.hex()       not in serialised
-        assert bundle.ik_sig.secret_key.hex()       not in serialised
+        assert bundle.ik_kem.secret_key.hex()              not in serialised
+        assert bundle.ik_sig.secret_key.hex()              not in serialised
+        assert bundle.ik_sig.ed25519_secret_key.hex()      not in serialised
         assert bundle.ik_classical.private_key_bytes.hex() not in serialised
         for opk in bundle.kem_opks:
             assert opk.secret_key.hex() not in serialised
@@ -299,10 +314,11 @@ class TestIdentityBundle:
 
     def test_private_bundle_has_all_secret_keys(self, bundle):
         priv = bundle.to_private_bundle()
-        assert "ik_kem_sec"       in priv
-        assert "ik_sig_sec"       in priv
-        assert "ik_classical_sec" in priv
-        assert "spk_sec"          in priv
+        assert "ik_kem_sec"           in priv
+        assert "ik_sig_sec"           in priv
+        assert "ik_sig_ed25519_sec"   in priv
+        assert "ik_classical_sec"     in priv
+        assert "spk_sec"              in priv
         # Private bundle uses split format — no combined "opks" key
         assert "opks" not in priv
         for opk in priv["opks_x25519"]:
@@ -313,7 +329,7 @@ class TestIdentityBundle:
     def test_public_bundle_spk_signature_verifies(self, bundle):
         """
         End-to-end check: SPK signature in the public bundle must verify
-        against the published ML-DSA-87 identity key.
+        against the published hybrid Ed25519 + ML-DSA-87 identity key.
         This is what an initiating client does before using the SPK.
         """
         pub = bundle.to_public_bundle()

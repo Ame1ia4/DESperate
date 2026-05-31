@@ -42,6 +42,10 @@ from dataclasses import dataclass, field
 
 import oqs
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
     X25519PublicKey,
@@ -60,6 +64,10 @@ from core.constants import (
     KEM_CIPHERTEXT_LEN,
     DSA_PUBLIC_KEY_LEN,
     DSA_SIGNATURE_LEN,
+    ED25519_PUBLIC_KEY_LEN,
+    ED25519_SIGNATURE_LEN,
+    HYBRID_PUBLIC_KEY_LEN,
+    HYBRID_SIGNATURE_LEN,
 )
 
 
@@ -135,14 +143,26 @@ class KEMKeypair:
 
 @dataclass
 class SigningKeypair:
-    """ML-DSA-87 keypair. secret_key never leaves the device."""
-    public_key: bytes
-    secret_key: bytes
+    """
+    Hybrid Ed25519 + ML-DSA-87 signing keypair.
+
+    public_key        : 2624-byte hybrid public key (ed25519_pub || ml_dsa87_pub)
+    secret_key        : ML-DSA-87 secret key (4896 bytes)
+    ed25519_secret_key: Ed25519 private key bytes (32 bytes)
+
+    Both secret keys never leave the device.
+    """
+    public_key:         bytes   # 2624 bytes: ed25519_pub (32) || ml_dsa87_pub (2592)
+    secret_key:         bytes   # ML-DSA-87 secret key (4896 bytes)
+    ed25519_secret_key: bytes   # Ed25519 private key (32 bytes)
 
     def sign(self, message: bytes) -> bytes:
-        """Sign message. Returns raw ML-DSA-87 signature (4627 bytes)."""
+        """Sign message. Returns hybrid 4691-byte signature (ed25519_sig || ml_dsa87_sig)."""
+        ed_priv = Ed25519PrivateKey.from_private_bytes(self.ed25519_secret_key)
+        ed_sig  = ed_priv.sign(message)
         with oqs.Signature(SIG_ALG, self.secret_key) as signer:
-            return signer.sign(message)
+            dsa_sig = signer.sign(message)
+        return ed_sig + dsa_sig
 
     def __repr__(self) -> str:
         return f"SigningKeypair(public={self.public_key.hex()[:16]}…)"
@@ -221,12 +241,12 @@ class KEMOneTimePrekey:
 class SignedPrekey:
     """
     X25519 signed prekey (SPK).
-    Signed by the user's ML-DSA-87 identity key.
+    Signed by the user's hybrid Ed25519 + ML-DSA-87 identity key.
     Rotation policy: rotate weekly (PQXDH spec §3.3).
     """
     spk_id:    int
     keypair:   X25519Keypair
-    signature: bytes   # ML-DSA-87 signature over keypair.public_key_bytes
+    signature: bytes   # hybrid 4691-byte signature over keypair.public_key_bytes
 
     def __repr__(self) -> str:
         return (
@@ -312,8 +332,9 @@ class IdentityBundle:
             "user_id":          self.user_id,
             "ik_kem_pub":       self.ik_kem.public_key.hex(),
             "ik_kem_sec":       self.ik_kem.secret_key.hex(),
-            "ik_sig_pub":       self.ik_sig.public_key.hex(),
-            "ik_sig_sec":       self.ik_sig.secret_key.hex(),
+            "ik_sig_pub":           self.ik_sig.public_key.hex(),
+            "ik_sig_sec":           self.ik_sig.secret_key.hex(),
+            "ik_sig_ed25519_sec":   self.ik_sig.ed25519_secret_key.hex(),
             "ik_classical_pub": self.ik_classical.public_key_bytes.hex(),
             "ik_classical_sec": self.ik_classical.private_key_bytes.hex(),
             "spk_id":           self.spk.spk_id,
@@ -357,11 +378,18 @@ def generate_kem_keypair() -> KEMKeypair:
 
 
 def generate_signing_keypair() -> SigningKeypair:
-    """Generate a fresh ML-DSA-87 keypair."""
+    """Generate a fresh hybrid Ed25519 + ML-DSA-87 signing keypair."""
+    ed_priv      = Ed25519PrivateKey.generate()
+    ed_pub_bytes = ed_priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    ed_sec_bytes = ed_priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
     with oqs.Signature(SIG_ALG) as sig:
-        public_key = sig.generate_keypair()
-        secret_key = sig.export_secret_key()
-    return SigningKeypair(public_key=public_key, secret_key=secret_key)
+        dsa_pub = sig.generate_keypair()
+        dsa_sec = sig.export_secret_key()
+    return SigningKeypair(
+        public_key         = ed_pub_bytes + dsa_pub,
+        secret_key         = dsa_sec,
+        ed25519_secret_key = ed_sec_bytes,
+    )
 
 
 def generate_signed_prekey(
@@ -370,7 +398,7 @@ def generate_signed_prekey(
 ) -> SignedPrekey:
     """
     Generate a fresh X25519 signed prekey.
-    The SPK public key is signed with the user's ML-DSA-87 identity key.
+    The SPK public key is signed with the user's hybrid Ed25519 + ML-DSA-87 identity key.
     """
     spk_keypair = X25519Keypair.generate()
     signature   = signing_keypair.sign(spk_keypair.public_key_bytes)
@@ -471,17 +499,75 @@ def generate_identity_bundle(
     )
 
 
+class MalformedSignedCiphertextError(Exception):
+    """
+    Raised when a hybrid-signed payload is structurally invalid —
+    wrong key or signature length, or bytes that cannot be parsed.
+
+    Distinct from a bad-signature failure: the bytes cannot even be
+    interpreted, not that verification failed on valid-looking input.
+    """
+
+
+def verify_hybrid_signature(
+    message:    bytes,
+    signature:  bytes,
+    ik_sig_pub: bytes,
+) -> bool:
+    """
+    Verify a hybrid Ed25519 + ML-DSA-87 signature over arbitrary message bytes.
+
+    Both algorithms must verify independently. Returns False if either fails
+    or if the signature length is wrong. Raises MalformedSignedCiphertextError
+    if ik_sig_pub is the wrong length (structural error, not a bad signature).
+
+    Parameters
+    ----------
+    message    : the exact bytes that were signed
+    signature  : 4691-byte hybrid signature (ed25519_sig (64) || ml_dsa87_sig (4627))
+    ik_sig_pub : 2624-byte hybrid public key (ed25519_pub (32) || ml_dsa87_pub (2592))
+    """
+    if len(ik_sig_pub) != HYBRID_PUBLIC_KEY_LEN:
+        raise MalformedSignedCiphertextError(
+            f"ik_sig_pub must be {HYBRID_PUBLIC_KEY_LEN} bytes, got {len(ik_sig_pub)}."
+        )
+    if len(signature) != HYBRID_SIGNATURE_LEN:
+        return False
+
+    ed_pub_bytes  = ik_sig_pub[:ED25519_PUBLIC_KEY_LEN]
+    dsa_pub_bytes = ik_sig_pub[ED25519_PUBLIC_KEY_LEN:]
+    ed_sig        = signature[:ED25519_SIGNATURE_LEN]
+    dsa_sig       = signature[ED25519_SIGNATURE_LEN:]
+
+    try:
+        Ed25519PublicKey.from_public_bytes(ed_pub_bytes).verify(ed_sig, message)
+    except Exception:
+        return False
+
+    try:
+        with oqs.Signature(SIG_ALG) as verifier:
+            if not verifier.verify(message, dsa_sig, dsa_pub_bytes):
+                return False
+    except Exception:
+        return False
+
+    return True
+
+
 def verify_spk_signature(
     spk_pub:    bytes,
     signature:  bytes,
     ik_sig_pub: bytes,
 ) -> bool:
     """
-    Verify that an SPK was signed by the expected ML-DSA-87 identity key.
-    Returns True if valid. Returns False if tampered — abort session initiation.
+    Verify that an SPK was signed by the expected hybrid Ed25519 + ML-DSA-87 identity key.
+    Returns True if both signatures are valid. Returns False otherwise — abort session initiation.
+    Both algorithms must verify independently; neither alone is sufficient.
     """
-    with oqs.Signature(SIG_ALG) as verifier:
-        return verifier.verify(spk_pub, signature, ik_sig_pub)
+    try:
+        return verify_hybrid_signature(spk_pub, signature, ik_sig_pub)
+    except MalformedSignedCiphertextError:
+        return False
 
 
 def replenish_one_time_prekeys(

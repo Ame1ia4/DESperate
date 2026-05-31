@@ -35,6 +35,14 @@ KEM_CIPHERTEXT_LEN: int  = 1568   # ML-KEM-1024 ciphertext  (FIPS 203)
 DSA_PUBLIC_KEY_LEN: int  = 2592   # ML-DSA-87   public key  (FIPS 204)
 DSA_SIGNATURE_LEN: int   = 4627   # ML-DSA-87   signature   (FIPS 204)
 
+# Ed25519 (FIPS 186-5, RFC 8032) key and signature sizes
+ED25519_PUBLIC_KEY_LEN: int = 32   # Ed25519 public key
+ED25519_SIGNATURE_LEN: int  = 64   # Ed25519 signature
+
+# Hybrid (Ed25519 ‖ ML-DSA-87) concatenated sizes — must match server/constants/auth.js
+HYBRID_PUBLIC_KEY_LEN: int  = ED25519_PUBLIC_KEY_LEN + DSA_PUBLIC_KEY_LEN   # 2624
+HYBRID_SIGNATURE_LEN: int   = ED25519_SIGNATURE_LEN  + DSA_SIGNATURE_LEN    # 4691
+
 # Default number of one-time prekeys generated per bundle.
 # Consumed one-per-session; server should alert the user when running low.
 OPK_COUNT: int = 20
