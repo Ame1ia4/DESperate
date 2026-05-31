@@ -2,21 +2,21 @@
 tests/test_ratchet.py
 
 Unit tests for:
-  core/dh_ratchet.py   — ML-KEM DiffieHellmanRatchet subclass
+  core/dh_ratchet.py   — X25519 DiffieHellmanRatchet subclass
   core/ratchet_kdf.py  — Root and message chain KDF implementations
   core/session.py      — RatchetSession lifecycle
 
 Tests are split into three groups:
-  - ratchet_kdf: fully testable without liboqs (pure HKDF)
-  - dh_ratchet:  testable with mocked oqs (structure and API)
-  - session:     testable with mocked DoubleRatchet (lifecycle and persistence)
+  - ratchet_kdf:   fully testable without mocks (pure HKDF)
+  - dh_ratchet:    uses real cryptography library (no external dependencies)
+  - session:       testable with mocked DoubleRatchet (lifecycle and persistence)
 
 Run with: pytest testing/test_ratchet.py -v
 """
 
 import struct
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -169,122 +169,49 @@ class TestMessageChainKDF:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MLKEMRatchet
-# Tests structure, pending ciphertext management, and error handling.
-# liboqs calls are mocked so these run without liboqs installed.
+# X25519Ratchet
+# Tests key generation and DH exchange. Uses real cryptography — no mocks
+# needed since the cryptography library has no external dependencies.
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestMLKEMRatchet:
-
-    @pytest.fixture(autouse=True)
-    def mock_oqs(self, monkeypatch):
-        """Mock oqs.KeyEncapsulation so tests run without liboqs."""
-        import sys
-        mock_oqs = MagicMock()
-
-        # _generate_key_pair mock
-        kem_instance = MagicMock()
-        kem_instance.__enter__ = lambda s: s
-        kem_instance.__exit__  = MagicMock(return_value=False)
-        kem_instance.generate_keypair.return_value = b"\xaa" * 1568
-        kem_instance.export_secret_key.return_value = b"\xbb" * 3168
-        kem_instance.encap_secret.return_value = (b"\xcc" * 1568, b"\xdd" * 32)
-        kem_instance.decap_secret.return_value = b"\xee" * 32
-        mock_oqs.KeyEncapsulation.return_value = kem_instance
-
-        monkeypatch.setattr("core.dh_ratchet.dh_ratchet.oqs", mock_oqs)
-        self._mock_kem = kem_instance
-        return mock_oqs
-
-    @pytest.fixture(autouse=True)
-    def reset_pending_ct(self):
-        """Reset per-thread pending ratchet state before and after each test."""
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        MLKEMRatchet._local.pending_ciphertext = None
-        MLKEMRatchet._local.pending_kem_ct     = None
-        yield
-        MLKEMRatchet._local.pending_ciphertext = None
-        MLKEMRatchet._local.pending_kem_ct     = None
+class TestX25519Ratchet:
 
     def test_generate_key_pair_returns_correct_sizes(self):
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        pub, sec = MLKEMRatchet._generate_key_pair()
-        assert len(pub) == 1568
-        assert len(sec) == 3168
+        from core.dh_ratchet.dh_ratchet import X25519Ratchet
+        pub, priv = X25519Ratchet._generate_key_pair()
+        assert len(pub)  == 32
+        assert len(priv) == 32
 
-    def test_sender_path_sets_pending_ciphertext(self):
-        """
-        When own_priv is None (sender), _perform_diffie_hellman must
-        encapsulate and store the ciphertext in _local.pending_ciphertext.
-        """
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        ss = MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
-        assert getattr(MLKEMRatchet._local, "pending_ciphertext", None) is not None
-        assert len(MLKEMRatchet._local.pending_ciphertext) == 1568
-        assert ss == b"\xdd" * 32
+    def test_generate_key_pair_produces_different_keys(self):
+        from core.dh_ratchet.dh_ratchet import X25519Ratchet
+        pub1, _ = X25519Ratchet._generate_key_pair()
+        pub2, _ = X25519Ratchet._generate_key_pair()
+        assert pub1 != pub2
 
-    def test_receiver_path_consumes_kem_ct_and_leaves_no_ciphertext(self):
-        """
-        When own_priv is set (receiver), _perform_diffie_hellman reads the
-        kem_ct from _local.pending_kem_ct (pushed by push_kem_ct) and clears
-        it. No encapsulation ciphertext is produced (_local.pending_ciphertext
-        stays None). other_pub carries the sender's new pub key for ratchet
-        state tracking, not the kem_ct.
-        """
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        MLKEMRatchet.push_kem_ct(b"\xcc" * 1568)
-        ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
-        assert getattr(MLKEMRatchet._local, "pending_ciphertext", None) is None
-        assert getattr(MLKEMRatchet._local, "pending_kem_ct",     None) is None
-        assert ss == b"\xee" * 32
+    def test_dh_produces_32_byte_shared_secret(self):
+        from core.dh_ratchet.dh_ratchet import X25519Ratchet
+        pub_a, priv_a = X25519Ratchet._generate_key_pair()
+        pub_b, priv_b = X25519Ratchet._generate_key_pair()
+        ss = X25519Ratchet._perform_diffie_hellman(priv_a, pub_b)
+        assert len(ss) == 32
 
-    def test_pop_pending_ciphertext_clears_after_read(self):
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
-        ct = MLKEMRatchet.pop_pending_ciphertext()
-        assert ct is not None
-        assert getattr(MLKEMRatchet._local, "pending_ciphertext", None) is None
+    def test_dh_is_symmetric(self):
+        """X25519(a_priv, b_pub) == X25519(b_priv, a_pub)."""
+        from core.dh_ratchet.dh_ratchet import X25519Ratchet
+        pub_a, priv_a = X25519Ratchet._generate_key_pair()
+        pub_b, priv_b = X25519Ratchet._generate_key_pair()
+        ss_a = X25519Ratchet._perform_diffie_hellman(priv_a, pub_b)
+        ss_b = X25519Ratchet._perform_diffie_hellman(priv_b, pub_a)
+        assert ss_a == ss_b
 
-    def test_pop_pending_ciphertext_raises_when_empty(self):
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        with pytest.raises(RuntimeError, match="pending"):
-            MLKEMRatchet.pop_pending_ciphertext()
-
-    def test_sender_path_wrong_key_size_raises(self):
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        with pytest.raises(ValueError, match="1568"):
-            MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 32)
-
-    def test_receiver_path_wrong_ciphertext_size_raises(self):
-        """push_kem_ct stashes a wrong-size ciphertext; DH should reject it."""
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        MLKEMRatchet.push_kem_ct(b"\xaa" * 32)
-        with pytest.raises(ValueError, match="1568"):
-            MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
-
-    def test_receiver_path_raises_without_push_kem_ct(self):
-        """Receiver path must raise if push_kem_ct() was never called."""
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        with pytest.raises(RuntimeError, match="push_kem_ct"):
-            MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
-
-    def test_push_kem_ct_sets_thread_local(self):
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        MLKEMRatchet.push_kem_ct(b"\xff" * 1568)
-        assert getattr(MLKEMRatchet._local, "pending_kem_ct", None) == b"\xff" * 1568
-
-    def test_sender_and_receiver_paths_produce_different_secrets(self):
-        """
-        Encapsulation (sender) and decapsulation (receiver) are mocked to
-        return different values — verifies the paths are distinct.
-        """
-        from core.dh_ratchet.dh_ratchet import MLKEMRatchet
-        sender_ss = MLKEMRatchet._perform_diffie_hellman(None, b"\xaa" * 1568)
-        MLKEMRatchet._local.pending_ciphertext = None
-        MLKEMRatchet.push_kem_ct(b"\xcc" * 1568)
-        receiver_ss = MLKEMRatchet._perform_diffie_hellman(b"\xbb" * 3168, b"\xaa" * 1568)
-        assert sender_ss   == b"\xdd" * 32
-        assert receiver_ss == b"\xee" * 32
+    def test_different_key_pairs_produce_different_secrets(self):
+        from core.dh_ratchet.dh_ratchet import X25519Ratchet
+        pub_a, priv_a = X25519Ratchet._generate_key_pair()
+        pub_b, priv_b = X25519Ratchet._generate_key_pair()
+        pub_c, priv_c = X25519Ratchet._generate_key_pair()
+        ss_ab = X25519Ratchet._perform_diffie_hellman(priv_a, pub_b)
+        ss_ac = X25519Ratchet._perform_diffie_hellman(priv_a, pub_c)
+        assert ss_ab != ss_ac
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -300,19 +227,15 @@ class TestWireFormat:
 
     def test_wire_header_length(self):
         """
-        Wire header = msg_index (4) + pn (4) + n (4)
-                    + ratchet_pub (1568) + kem_ct (1568) = 3148 bytes.
+        Wire header = version (1) + msg_index (4) + pn (4) + n (4) + ratchet_pub (32) = 45 bytes.
         pn and n carry the DoubleRatchet Header chain-length fields so the
         receiver can reconstruct the full Header for out-of-order handling.
         """
         from core.dh_ratchet.session import (
-            _WIRE_HEADER_LEN, _MSG_INDEX_LEN, _PN_LEN, _N_LEN,
+            _WIRE_HEADER_LEN, _WIRE_VERSION_LEN, _MSG_INDEX_LEN, _PN_LEN, _N_LEN, _RATCHET_PUB_LEN,
         )
-        from core.constants import KEM_PUBLIC_KEY_LEN, KEM_CIPHERTEXT_LEN
-        assert _WIRE_HEADER_LEN == (
-            _MSG_INDEX_LEN + _PN_LEN + _N_LEN + KEM_PUBLIC_KEY_LEN + KEM_CIPHERTEXT_LEN
-        )
-        assert _WIRE_HEADER_LEN == 3148
+        assert _WIRE_HEADER_LEN == _WIRE_VERSION_LEN + _MSG_INDEX_LEN + _PN_LEN + _N_LEN + _RATCHET_PUB_LEN
+        assert _WIRE_HEADER_LEN == 45
 
     def test_message_index_encoding(self):
         """message_index is uint32 little-endian — verify decode."""
@@ -321,17 +244,10 @@ class TestWireFormat:
             decoded = struct.unpack("<I", encoded)[0]
             assert decoded == idx
 
-    def test_wire_header_overhead_documented(self):
-        """
-        Document the overhead increase vs X25519 ratchet.
-        Classical header: 4 (index) + 4 (pn) + 4 (n) + 32 (x25519 pub) = 44 bytes
-        ML-KEM header:    4 (index) + 4 (pn) + 4 (n) + 1568 (pub) + 1568 (ct) = 3148
-        Increase: 3104 bytes per message — must be in design document.
-        """
-        classical_overhead = 4 + 4 + 4 + 32      # index + pn + n + x25519 pub; no separate ct
-        pq_overhead        = 3148
-        increase           = pq_overhead - classical_overhead
-        assert increase == 3104
+    def test_ratchet_pub_length(self):
+        """X25519 public key is 32 bytes."""
+        from core.dh_ratchet.session import _RATCHET_PUB_LEN
+        assert _RATCHET_PUB_LEN == 32
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -364,22 +280,19 @@ class TestRatchetSessionPersistence:
         s = RatchetSession(mock_ratchet, mock_store, "test-session", counter)
         return s
 
-    @pytest.mark.asyncio
-    async def test_persist_saves_ratchet_state(self, session, mock_store):
-        await session._persist()
+    def test_persist_saves_ratchet_state(self, session, mock_store):
+        session._persist()
         assert mock_store.state_exists("test-session")
 
-    @pytest.mark.asyncio
-    async def test_persist_saves_message_index(self, session, mock_store):
+    def test_persist_saves_message_index(self, session, mock_store):
         session._msg_index = 7
-        await session._persist()
+        session._persist()
         state = mock_store.load_state("test-session")
         assert state["msg_index"] == 7
 
-    @pytest.mark.asyncio
-    async def test_persist_saves_header_counter(self, session, mock_store):
+    def test_persist_saves_header_counter(self, session, mock_store):
         session._counter._counter = 5
-        await session._persist()
+        session._persist()
         state = mock_store.load_state("test-session")
         assert state["header_counter"] == 5
 
@@ -387,7 +300,7 @@ class TestRatchetSessionPersistence:
     async def test_message_index_increments_on_encrypt(self, session, mock_ratchet):
         """message_index must increment before encryption — it is prepended to AD."""
         header = MagicMock()
-        header.ratchet_pub                   = b"\xaa" * 1568
+        header.ratchet_pub                   = b"\xaa" * 32
         header.previous_sending_chain_length = 0
         header.sending_chain_length          = 1
         encrypted = MagicMock()
@@ -395,16 +308,23 @@ class TestRatchetSessionPersistence:
         encrypted.ciphertext = b"\xbb" * 32
         mock_ratchet.encrypt_message.return_value = encrypted
 
-        with patch("core.dh_ratchet.dh_ratchet.MLKEMRatchet.pop_pending_ciphertext",
-                   return_value=b"\xcc" * 1568):
-            assert session._msg_index == 0
-            await session.encrypt(b"hello", b"ad")
-            assert session._msg_index == 1
+        assert session._msg_index == 0
+        await session.encrypt(b"hello", b"ad")
+        assert session._msg_index == 1
 
     @pytest.mark.asyncio
     async def test_wire_too_short_raises(self, session):
+        from core.signatures import SignedCiphertext
+        from core.constants import HYBRID_SIGNATURE_LEN
+        signed = SignedCiphertext(
+            ciphertext=b"\x00" * 10,
+            signature=b"\x00" * HYBRID_SIGNATURE_LEN,
+            sender_id=b"alice",
+            recipient_id=b"bob",
+            message_index=1,
+        )
         with pytest.raises(ValueError, match="too short"):
-            await session.decrypt(b"\x00" * 10, b"ad")
+            await session.decrypt(signed, b"ad")
 
     def test_session_id_property(self, session):
         assert session.session_id == "test-session"

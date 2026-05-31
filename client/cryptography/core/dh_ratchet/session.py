@@ -5,24 +5,25 @@ RatchetSession — lifecycle, wire format, and state persistence for one
 Double Ratchet conversation.
 
 Wraps python-doubleratchet's DoubleRatchet object with:
-  - MLKEMRatchet as the asymmetric ratchet primitive (post-quantum)
+  - X25519Ratchet as the DH ratchet primitive (classical X25519)
   - RootChainKDF / MessageChainKDF for the symmetric ratchet KDFs
   - StateStore for atomic encrypted persistence
   - HeaderCounter for header-key nonce management
 
 Wire format (per encrypted message)
 -----------------------------------
+    [ version     :  1 byte,  0x02 — format version tag ]
     [ msg_index   :  4 bytes, little-endian uint32 — monotonic send counter ]
     [ pn          :  4 bytes, little-endian uint32 — previous_sending_chain_length ]
     [ n           :  4 bytes, little-endian uint32 — sending_chain_length ]
-    [ ratchet_pub :  1568 bytes, ML-KEM-1024 public key ]
-    [ kem_ct      :  1568 bytes, ML-KEM-1024 ciphertext ]
+    [ ratchet_pub : 32 bytes, X25519 public key ]
     [ ciphertext  :  variable, ChaCha20-Poly1305 output from DoubleRatchet ]
 
-Total fixed header: 3148 bytes. This is the dominant overhead vs a classical
-X25519 Double Ratchet (which would be 4+4+4+32+0 = 44 bytes); the +3104
-bytes per message is the price of post-quantum forward secrecy and is
-documented in the design document as a known tradeoff.
+Total fixed header: 45 bytes.
+
+The version byte lets the decoder immediately reject messages from incompatible
+client versions (e.g. old 3148-byte format) with a diagnostic error instead of
+silently passing the 44-byte minimum-length guard and decoding garbage fields.
 
 pn and n mirror the fields in the DoubleRatchet Header so the receiver can
 reconstruct the Header for decrypt_message() and handle out-of-order delivery
@@ -34,9 +35,7 @@ msg_index is prepended to the associated_data passed to DoubleRatchet so the
 wire counter is covered by the AEAD tag — a MITM cannot silently reorder
 messages by flipping it. ratchet_pub, pn, and n are authenticated by
 DoubleRatchet internally (the library includes the serialised Header in the
-AEAD associated data). kem_ct is implicitly authenticated through the ratchet
-chain: a flipped ciphertext produces a wrong shared secret, which causes the
-symmetric chain to diverge and decryption to fail.
+AEAD associated data).
 
 Persistence
 -----------
@@ -63,10 +62,11 @@ import struct
 from doubleratchet import DoubleRatchet
 from doubleratchet.types import EncryptedMessage, Header
 
-from core.constants              import MAX_SKIP, KEM_PUBLIC_KEY_LEN, KEM_CIPHERTEXT_LEN
-from core.dh_ratchet.dh_ratchet  import MLKEMRatchet
+from core.constants              import MAX_SKIP
+from core.dh_ratchet.dh_ratchet  import X25519Ratchet
 from core.dh_ratchet.ratchet_kdf import RootChainKDF, MessageChainKDF
 from core.header_counter         import HeaderCounter
+from core.signatures             import SignedCiphertext
 from core.state_store            import StateStore
 
 
@@ -77,16 +77,19 @@ from core.state_store            import StateStore
 # TestMessageChainConstant in testing/test_ratchet.py.
 _MESSAGE_CHAIN_CONSTANT: bytes = b"dr-v1-message-chain-constant"
 
-_MSG_INDEX_LEN:      int = 4                   # uint32 LE — our monotonic AD counter
-_PN_LEN:             int = 4                   # uint32 LE — previous_sending_chain_length
-_N_LEN:              int = 4                   # uint32 LE — sending_chain_length
-_RATCHET_PUB_LEN:    int = KEM_PUBLIC_KEY_LEN  # 1568
-_KEM_CT_LEN:         int = KEM_CIPHERTEXT_LEN  # 1568
+_WIRE_VERSION:       bytes = b"\x02"  # format version — rejects old-format messages
+_WIRE_VERSION_LEN:   int   = 1
+_MSG_INDEX_LEN:      int   = 4   # uint32 LE — our monotonic AD counter
+_PN_LEN:             int   = 4   # uint32 LE — previous_sending_chain_length
+_N_LEN:              int   = 4   # uint32 LE — sending_chain_length
+_RATCHET_PUB_LEN:    int   = 32  # X25519 public key
 
 # Byte offsets into the fixed wire header (used in both encrypt and decrypt).
-_RATCHET_PUB_OFFSET: int = _MSG_INDEX_LEN + _PN_LEN + _N_LEN          # 12
-_KEM_CT_OFFSET:      int = _RATCHET_PUB_OFFSET + _RATCHET_PUB_LEN     # 1580
-_WIRE_HEADER_LEN:    int = _KEM_CT_OFFSET + _KEM_CT_LEN                # 3148
+_MSG_INDEX_OFFSET:   int = _WIRE_VERSION_LEN                              # 1
+_PN_OFFSET:          int = _MSG_INDEX_OFFSET   + _MSG_INDEX_LEN           # 5
+_N_OFFSET:           int = _PN_OFFSET          + _PN_LEN                  # 9
+_RATCHET_PUB_OFFSET: int = _N_OFFSET           + _N_LEN                  # 13
+_WIRE_HEADER_LEN:    int = _RATCHET_PUB_OFFSET + _RATCHET_PUB_LEN        # 45
 
 
 # ── Session ──────────────────────────────────────────────────────────────────
@@ -131,22 +134,19 @@ class RatchetSession:
     ) -> "RatchetSession":
         """
         Build a session as the initiator (Alice). PQXDH must have completed
-        and produced `SK`. `bob_ratchet_pub` is taken from Bob's published
-        key bundle on first contact and carried forward in message headers
-        after that.
+        and produced `SK`. `bob_ratchet_pub` is Bob's X25519 ratchet public
+        key (32 bytes) from his key bundle.
         """
-        # Validate inputs before touching the library — bad inputs produce
-        # cryptic internal errors; these messages are easier to diagnose.
         if len(SK) != 32:
             raise ValueError(f"SK must be 32 bytes, got {len(SK)}")
-        if len(bob_ratchet_pub) != KEM_PUBLIC_KEY_LEN:
+        if len(bob_ratchet_pub) != _RATCHET_PUB_LEN:
             raise ValueError(
-                f"bob_ratchet_pub must be {KEM_PUBLIC_KEY_LEN} bytes, "
+                f"bob_ratchet_pub must be {_RATCHET_PUB_LEN} bytes, "
                 f"got {len(bob_ratchet_pub)}"
             )
 
         ratchet = await DoubleRatchet.encrypt_initial_message(
-            diffie_hellman_ratchet_class = MLKEMRatchet,
+            diffie_hellman_ratchet_class = X25519Ratchet,
             root_chain_kdf               = RootChainKDF,
             message_chain_kdf            = MessageChainKDF,
             message_chain_constant       = _MESSAGE_CHAIN_CONSTANT,
@@ -161,7 +161,7 @@ class RatchetSession:
                 f"{type(ratchet).__name__!r} — check python-doubleratchet API version."
             )
         session = cls(ratchet, store, session_id, HeaderCounter(session_id=session_id))
-        await session._persist()
+        session._persist()
         return session
 
     @classmethod
@@ -173,14 +173,14 @@ class RatchetSession:
     ) -> "RatchetSession":
         """
         Build a session as the responder (Bob). PQXDH must have completed
-        and produced `SK`. The first message from Alice will carry the
-        ratchet ciphertext that triggers Bob's first DH ratchet step.
+        and produced `SK`. The first message from Alice will carry her
+        X25519 ratchet public key and trigger Bob's first DH ratchet step.
         """
         if len(SK) != 32:
             raise ValueError(f"SK must be 32 bytes, got {len(SK)}")
 
         ratchet = await DoubleRatchet.decrypt_initial_message(
-            diffie_hellman_ratchet_class = MLKEMRatchet,
+            diffie_hellman_ratchet_class = X25519Ratchet,
             root_chain_kdf               = RootChainKDF,
             message_chain_kdf            = MessageChainKDF,
             message_chain_constant       = _MESSAGE_CHAIN_CONSTANT,
@@ -194,7 +194,7 @@ class RatchetSession:
                 f"{type(ratchet).__name__!r} — check python-doubleratchet API version."
             )
         session = cls(ratchet, store, session_id, HeaderCounter(session_id=session_id))
-        await session._persist()
+        session._persist()
         return session
 
     @classmethod
@@ -210,7 +210,7 @@ class RatchetSession:
         state = store.load_state(session_id)
         ratchet = await DoubleRatchet.from_json(
             serialized                   = state["ratchet"],
-            diffie_hellman_ratchet_class = MLKEMRatchet,
+            diffie_hellman_ratchet_class = X25519Ratchet,
             root_chain_kdf               = RootChainKDF,
             message_chain_kdf            = MessageChainKDF,
             message_chain_constant       = _MESSAGE_CHAIN_CONSTANT,
@@ -221,8 +221,13 @@ class RatchetSession:
             session_id = session_id,
             initial    = int(state.get("header_counter", 0)),
         )
+        if "msg_index" not in state:
+            raise KeyError(
+                f"Persisted state for session {session_id!r} is missing 'msg_index'. "
+                "State may have been written by an incompatible client version."
+            )
         session = cls(ratchet, store, session_id, counter)
-        session._msg_index = int(state.get("msg_index", 0))
+        session._msg_index = int(state["msg_index"])
         return session
 
     # ── Encrypt / Decrypt ────────────────────────────────────────────────
@@ -238,90 +243,76 @@ class RatchetSession:
         msg_index is prepended to associated_data before passing to
         DoubleRatchet so the wire counter is covered by the AEAD tag.
         """
-        self._msg_index += 1
-        msg_index = self._msg_index
+        next_index = self._msg_index + 1
+        ad_with_index = struct.pack("<I", next_index) + associated_data
 
-        # Prepend msg_index to AD so the wire counter is bound to the AEAD
-        # tag. Without this a MITM could silently reorder messages by swapping
-        # their msg_index values — decryption would succeed but ordering breaks.
-        ad_with_index = struct.pack("<I", msg_index) + associated_data
-
-        # DoubleRatchet drives the symmetric ratchet and may internally trigger
-        # MLKEMRatchet._perform_diffie_hellman (sender path), which stashes the
-        # fresh ML-KEM ciphertext in _local.pending_ciphertext for us to retrieve.
         encrypted = await self._ratchet.encrypt_message(
             message         = plaintext,
             associated_data = ad_with_index,
         )
 
-        # Retrieve the ciphertext produced during the ratchet step. If no DH
-        # step occurred this message (within-chain), fill with zeros — the wire
-        # layout stays fixed-size and the receiver skips decapsulation.
-        try:
-            kem_ct = MLKEMRatchet.pop_pending_ciphertext()
-        except RuntimeError:
-            kem_ct = b"\x00" * _KEM_CT_LEN
-
         ratchet_pub = encrypted.header.ratchet_pub
         if len(ratchet_pub) != _RATCHET_PUB_LEN:
-            # ML-KEM-1024 public keys are always 1568 bytes. A wrong length
-            # means the library is in an unexpected state — fail loudly rather
-            # than pad and silently transmit a malformed packet.
             raise ValueError(
                 f"ratchet_pub has unexpected length {len(ratchet_pub)} "
                 f"(expected {_RATCHET_PUB_LEN}). Library state may be corrupt."
             )
 
-        # pn and n are serialised into the wire header so the receiver can
-        # reconstruct the full DoubleRatchet Header for decrypt_message().
-        # Without them, out-of-order message handling in the library is broken.
         pn = encrypted.header.previous_sending_chain_length
         n  = encrypted.header.sending_chain_length
 
         wire = (
-            struct.pack("<I", msg_index)
+            _WIRE_VERSION
+            + struct.pack("<I", next_index)
             + struct.pack("<I", pn)
             + struct.pack("<I", n)
             + ratchet_pub
-            + kem_ct
             + encrypted.ciphertext
         )
-        await self._persist()
+        # Persist before committing to memory — if the write fails, the index is
+        # not advanced and the next encrypt will retry with the same index.
+        self._persist(pending_msg_index=next_index)
+        self._msg_index = next_index
         return wire
 
-    async def decrypt(self, data: bytes, associated_data: bytes) -> bytes:
+    async def decrypt(self, signed: SignedCiphertext, associated_data: bytes) -> bytes:
         """
-        Decrypt a wire-format message and return the plaintext.
+        Decrypt a verified SignedCiphertext and return the plaintext.
+
+        `signed` MUST have been obtained via verify_and_extract() (or
+        verify_ciphertext() followed by SignedCiphertext.from_bytes()). Accepting
+        SignedCiphertext rather than raw bytes makes skipping verification a
+        deliberate choice rather than the path of least resistance.
 
         Raises
         ------
-        ValueError : if `data` is too short to contain the fixed header.
+        ValueError : if the ratchet wire payload is too short or empty.
         Exception  : python-doubleratchet propagates authentication and
                      out-of-order failures; the session does not catch them.
         """
+        data = signed.ciphertext
         if len(data) < _WIRE_HEADER_LEN:
             raise ValueError(
                 f"Wire message too short: need at least {_WIRE_HEADER_LEN} "
                 f"bytes for the fixed header, got {len(data)}"
             )
 
-        # Parse the fixed wire header using the pre-computed offset constants.
-        msg_index   = struct.unpack("<I", data[:_MSG_INDEX_LEN])[0]
-        pn          = struct.unpack("<I", data[_MSG_INDEX_LEN : _MSG_INDEX_LEN + _PN_LEN])[0]
-        n           = struct.unpack("<I", data[_MSG_INDEX_LEN + _PN_LEN : _RATCHET_PUB_OFFSET])[0]
-        ratchet_pub = data[_RATCHET_PUB_OFFSET : _KEM_CT_OFFSET]
-        kem_ct      = data[_KEM_CT_OFFSET       : _WIRE_HEADER_LEN]
+        if data[0:1] != _WIRE_VERSION:
+            raise ValueError(
+                f"Incompatible wire format: expected version byte "
+                f"0x{_WIRE_VERSION.hex()}, got 0x{data[0]:02x}. "
+                f"Message may be from an incompatible client version."
+            )
+
+        msg_index   = struct.unpack("<I", data[_MSG_INDEX_OFFSET : _PN_OFFSET])[0]
+        pn          = struct.unpack("<I", data[_PN_OFFSET         : _N_OFFSET])[0]
+        n           = struct.unpack("<I", data[_N_OFFSET          : _RATCHET_PUB_OFFSET])[0]
+        ratchet_pub = data[_RATCHET_PUB_OFFSET : _WIRE_HEADER_LEN]
         ciphertext  = data[_WIRE_HEADER_LEN:]
+        if not ciphertext:
+            raise ValueError("Wire message has an empty ciphertext body.")
 
-        # Mirror the AD construction from encrypt() so the AEAD tag covers
-        # msg_index on the decrypt side too.
         ad_with_index = struct.pack("<I", msg_index) + associated_data
-
-        # Stash kem_ct for MLKEMRatchet's receiver-path _perform_diffie_hellman.
-        # The library passes Header.ratchet_pub as other_pub, so we keep that
-        # field as the sender's actual new public key (for correct ratchet-state
-        # tracking) and deliver the decapsulation ciphertext via thread-local.
-        MLKEMRatchet.push_kem_ct(kem_ct)
 
         plaintext = await self._ratchet.decrypt_message(
             message = EncryptedMessage(
@@ -339,7 +330,7 @@ class RatchetSession:
 
     # ── Persistence ──────────────────────────────────────────────────────
 
-    async def _persist(self) -> None:
+    def _persist(self, pending_msg_index: int | None = None) -> None:
         """
         Atomically write the full session state to StateStore.
 
@@ -347,11 +338,15 @@ class RatchetSession:
         own JSON form), "header_counter" (HeaderCounter.current), and
         "msg_index" (this session's send index). Unit tests assert on each
         of these key names.
+
+        pending_msg_index: if provided, written as msg_index instead of
+        self._msg_index. Used by encrypt() to persist the new index before
+        committing it to memory, so a failed write never advances the counter.
         """
         state = {
             "ratchet":        self._ratchet.json,
             "header_counter": self._counter.current,
-            "msg_index":      self._msg_index,
+            "msg_index":      pending_msg_index if pending_msg_index is not None else self._msg_index,
         }
         self._store.save_state(self._session_id, state)
 
