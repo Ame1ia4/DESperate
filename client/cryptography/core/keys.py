@@ -4,12 +4,12 @@ core/keys.py
 PQXDH key bundle generation.
 
 Generates and manages cryptographic identity material for each user:
-  - ML-KEM-1024  identity keypair     (key encapsulation, NIST FIPS 203 level 5)
-  - ML-DSA-87    signing keypair      (signatures,        NIST FIPS 204 level 5)
-  - X25519       identity keypair     (classical DH leg of hybrid PQXDH)
-  - X25519       signed prekey        (SPK, rotated periodically)
-  - X25519       one-time prekeys     (classical DH4 leg per session)
-  - ML-KEM-1024  one-time prekeys     (PQ encapsulation leg per session)
+  - ML-KEM-1024  identity keypair               (key encapsulation, NIST FIPS 203 level 5)
+  - Ed25519 + ML-DSA-87  signing keypair        (hybrid signatures, FIPS 186-5 + FIPS 204)
+  - X25519       identity keypair               (classical DH leg of hybrid PQXDH)
+  - X25519       signed prekey                  (SPK, rotated periodically)
+  - X25519       one-time prekeys               (classical DH4 leg per session)
+  - ML-KEM-1024  one-time prekeys               (PQ encapsulation leg per session)
 
 Each PQXDH session initiation consumes one X25519 OPK (for DH4) and one
 ML-KEM OPK (for PQ encapsulation). Both are identified by the same opk_id
@@ -19,15 +19,19 @@ INVARIANT: x25519_opks and kem_opks must always have the same length and
 matching opk_ids at every index. All generation and replenishment functions
 enforce this — callers must never modify either list independently.
 
-Key sizes at ML-KEM-1024 / ML-DSA-87 (NIST level 5):
+Key sizes (NIST level 5):
   ML-KEM-1024  public key : 1568 bytes
   ML-KEM-1024  secret key : 3168 bytes
   ML-KEM-1024  ciphertext : 1568 bytes
   ML-DSA-87    public key : 2592 bytes
   ML-DSA-87    secret key : 4896 bytes
   ML-DSA-87    signature  : 4627 bytes
+  Ed25519      public key :   32 bytes
+  Ed25519      secret key :   32 bytes
   X25519       public key :   32 bytes
   X25519       secret key :   32 bytes
+  Hybrid sig public key   : 2624 bytes  (ed25519_pub || ml_dsa_pub)
+  Hybrid signature        : 4691 bytes  (ed25519_sig || ml_dsa_sig)
 
 References:
   PQXDH specification: https://signal.org/docs/specifications/pqxdh/
@@ -83,17 +87,17 @@ def _assert_key_sizes() -> None:
         pub = kem.generate_keypair()
         ct, _ = kem.encap_secret(pub)
         assert len(pub) == KEM_PUBLIC_KEY_LEN, \
-            f"ML-KEM-1024 public key: expected {KEM_PUBLIC_KEY_LEN}, got {len(pub)}"
+            f"{KEM_ALG} public key: expected {KEM_PUBLIC_KEY_LEN}, got {len(pub)}"
         assert len(ct) == KEM_CIPHERTEXT_LEN, \
-            f"ML-KEM-1024 ciphertext: expected {KEM_CIPHERTEXT_LEN}, got {len(ct)}"
+            f"{KEM_ALG} ciphertext: expected {KEM_CIPHERTEXT_LEN}, got {len(ct)}"
 
     with oqs.Signature(SIG_ALG) as sig:
         pub = sig.generate_keypair()
         s   = sig.sign(b"probe")
         assert len(pub) == DSA_PUBLIC_KEY_LEN, \
-            f"ML-DSA-87 public key: expected {DSA_PUBLIC_KEY_LEN}, got {len(pub)}"
+            f"{SIG_ALG} public key: expected {DSA_PUBLIC_KEY_LEN}, got {len(pub)}"
         assert len(s) == DSA_SIGNATURE_LEN, \
-            f"ML-DSA-87 signature: expected {DSA_SIGNATURE_LEN}, got {len(s)}"
+            f"{SIG_ALG} signature: expected {DSA_SIGNATURE_LEN}, got {len(s)}"
 
 
 # ── OPK pair invariant enforcement ───────────────────────────────────────────
