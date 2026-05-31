@@ -2,7 +2,7 @@ import { describe, it, before, after, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { randomBytes } from 'node:crypto'
-import srpClient from 'secure-remote-password/client.js'
+import { createSRPClient } from 'js-srp6a'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { generateKeyBundle, validDeviceBody, zeroHex, randomHex } from '../helpers/keyFixtures.js'
@@ -26,9 +26,10 @@ let server
 let baseUrl
 let bundle
 
+const srpClient    = createSRPClient('SHA-256', 3072)
 const testSalt     = srpClient.generateSalt()
 const testVerifier = srpClient.deriveVerifier(
-  srpClient.derivePrivateKey(testSalt, 'testuser', 'securePassword123')
+  await srpClient.derivePrivateKey(testSalt, 'testuser', 'securePassword123')
 )
 
 before(() => new Promise(resolve => {

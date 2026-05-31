@@ -1,4 +1,4 @@
-import * as srp from 'secure-remote-password/server.js'
+import { createSRPServer } from 'js-srp6a'
 import { createHmac, hkdfSync } from 'node:crypto'
 import { query, withTransaction } from '../database/db.js'
 import { isValidUsername, isValidUUID, isValidClientPublicEphemeral } from '../utils/validate.js'
@@ -11,6 +11,8 @@ if (!process.env.AUTH_FAKE_SECRET) {
 }
 const SERVER_SECRET = process.env.AUTH_FAKE_SECRET
 
+const srp = createSRPServer('SHA-256', 3072)
+
 // Both are keyed to AUTH_FAKE_SECRET so an external attacker cannot pre-compute
 // the mapping even if they observe many responses for the same username.
 // RFC 5054 §2.5.1.3
@@ -20,8 +22,8 @@ function fakeSalt(username) {
 }
 
 function fakeVerifier(username) {
-  // HKDF-SHA256 expands the HMAC key to the full 256 bytes required for a
-  // 2048-bit SRP verifier (RFC 5054 Appendix A §3).
+  // HKDF-SHA256 expands the HMAC key to the full 384 bytes required for a
+  // 3072-bit SRP verifier (RFC 5054 Appendix A §3).
   const okm = hkdfSync('sha256', SERVER_SECRET, username, 'srp-fake-verifier', SRP_VERIFIER_HEX / 2)
   return Buffer.from(okm).toString('hex')
 }
@@ -54,7 +56,7 @@ export async function authInit(req, res) {
   if (!row) {
     // RFC 5054 §2.5.1.3 — return fake salt + ephemeral so the response is
     // indistinguishable from a valid one. Round 2 will reject via proof mismatch.
-    const ephemeral = srp.generateEphemeral(fakeVerifier(username))
+    const ephemeral = await srp.generateEphemeral(fakeVerifier(username))
     // Equalise timing with real path — real path runs a DELETE+INSERT transaction;
     // fake path runs a no-op DELETE so both paths pay similar DB round-trip cost.
     await withTransaction(async (client) => {
@@ -67,7 +69,7 @@ export async function authInit(req, res) {
     return res.json({ salt: fakeSalt(username), serverPublicEphemeral: ephemeral.public })
   }
 
-  const serverEphemeral = srp.generateEphemeral(row.srp_verifier)
+  const serverEphemeral = await srp.generateEphemeral(row.srp_verifier)
 
   // RFC 5054 §2.5.3: b MUST be ≥ 256 bits. Crash rather than continue with a
   // weak ephemeral — this indicates a broken library or misconfiguration.

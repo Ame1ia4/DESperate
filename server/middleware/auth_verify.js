@@ -1,8 +1,10 @@
-import * as srp from 'secure-remote-password/server.js'
+import { createSRPServer } from 'js-srp6a'
 import { query } from '../database/db.js'
 import { storeSessionKey } from '../state/session_keys.js'
 import { isValidUsername, isValidUUID, isValidClientPublicEphemeral } from '../utils/validate.js'
 import { HEX_RE, SRP_SESSION_PROOF_HEX } from '../constants/auth.js'
+
+const srp = createSRPServer('SHA-256', 3072)
 
 export async function authVerify(req, res) {
   const { username, device_id, clientPublicEphemeral, clientSessionProof } = req.body
@@ -48,7 +50,7 @@ export async function authVerify(req, res) {
 
   let serverSession
   try {
-    serverSession = srp.deriveSession(
+    serverSession = await srp.deriveSession(
       challenge.srp_server_secret,
       clientPublicEphemeral,
       creds.srp_salt,
