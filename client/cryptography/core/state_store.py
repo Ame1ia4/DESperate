@@ -244,6 +244,64 @@ class StateStore:
 
         return cls(base_dir, enc_key)
 
+    @classmethod
+    def create_with_key(cls, base_dir: Path, enc_key: bytes, master_salt: bytes) -> StateStore:
+        """
+        Create a new StateStore using a pre-derived encryption key.
+
+        Use this when Argon2id has already been run externally (master-password
+        flow) to avoid a second expensive derivation.  master_salt is written
+        to disk so that the salt file remains present for load_with_key checks.
+
+        Parameters
+        ----------
+        base_dir    : directory to store state files (created if absent)
+        enc_key     : 32-byte encryption key already derived via HKDF
+        master_salt : the Argon2id salt used in that derivation (persisted)
+        """
+        if len(master_salt) != ARGON2_SALT_LEN:
+            raise ValueError(
+                f"master_salt must be {ARGON2_SALT_LEN} bytes, got {len(master_salt)}"
+            )
+        base_dir  = Path(base_dir)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        salt_path = base_dir / _SALT_FILE
+        if salt_path.exists():
+            raise FileExistsError(
+                f"StateStore already exists at {base_dir}. "
+                f"Use StateStore.load_with_key() instead."
+            )
+        _atomic_write(salt_path, master_salt)
+        return cls(base_dir, enc_key)
+
+    @classmethod
+    def load_with_key(cls, base_dir: Path, enc_key: bytes) -> StateStore:
+        """
+        Load an existing StateStore using a pre-derived encryption key.
+
+        Use this when Argon2id has already been run externally (master-password
+        flow).  The salt file must exist (written by create_with_key or create).
+
+        Parameters
+        ----------
+        base_dir : directory containing existing state files
+        enc_key  : 32-byte encryption key already derived via HKDF
+        """
+        base_dir  = Path(base_dir)
+        salt_path = base_dir / _SALT_FILE
+        if not salt_path.exists():
+            raise FileNotFoundError(
+                f"No StateStore found at {base_dir}. "
+                f"Use StateStore.create_with_key() for first use."
+            )
+        salt = salt_path.read_bytes()
+        if len(salt) != ARGON2_SALT_LEN:
+            raise ValueError(
+                f"Corrupt salt file: expected {ARGON2_SALT_LEN} bytes, "
+                f"got {len(salt)}"
+            )
+        return cls(base_dir, enc_key)
+
     # ── Ratchet state ─────────────────────────────────────────────────────────
 
     def save_state(self, session_id: str, state: dict) -> None:

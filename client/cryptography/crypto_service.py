@@ -232,7 +232,15 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── SRP authentication ─────────────────────────────────────────────────────
 
     if method == "srp_start":
-        _srp_session = SrpSession(params["username"], params["password"])
+        # Discard any stale session from a previous incomplete flow.
+        _srp_session = None
+        _cached_keystore_key = None
+        master_salt = _load_master_salt()
+        srp_pass, keystore_key, _ = derive_master_components(
+            params["password"], master_salt
+        )
+        _cached_keystore_key = keystore_key
+        _srp_session = SrpSession(params["username"], srp_pass.hex())
         return {"A": _srp_session.A_hex}
 
     if method == "srp_challenge":
