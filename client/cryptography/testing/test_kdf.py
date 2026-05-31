@@ -55,14 +55,16 @@ class TestArgon2idParameters:
     https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
     """
 
+    APPROVED_PROFILES = {
+        (47104, 1, 1),  # OWASP recommended: m=46MiB, t=1, p=1
+        (19456, 2, 1),  # OWASP minimum:     m=19MiB, t=2, p=1
+    }
+
     def test_params_meet_owasp_standard(self):
-        # minimum:     m=19456, t=2, p=1
-        # recommended: m=47104, t=1, p=1
-        meets_minimum     = ARGON2_MEMORY_COST >= 19456 and ARGON2_TIME_COST >= 2 and ARGON2_PARALLELISM >= 1
-        meets_recommended = ARGON2_MEMORY_COST >= 47104 and ARGON2_TIME_COST >= 1 and ARGON2_PARALLELISM >= 1
-        assert meets_minimum or meets_recommended, (
+        assert (ARGON2_MEMORY_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM) in self.APPROVED_PROFILES, (
             f"Argon2id params (m={ARGON2_MEMORY_COST}, t={ARGON2_TIME_COST}, p={ARGON2_PARALLELISM}) "
-            "meet neither OWASP minimum (m=19456,t=2,p=1) nor recommended (m=47104,t=1,p=1)"
+            "are not one of the two approved OWASP profiles: "
+            "recommended (47104,1,1) or minimum (19456,2,1)"
         )
 
     def test_hash_length_is_32_bytes(self):

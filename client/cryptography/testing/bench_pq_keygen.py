@@ -21,7 +21,6 @@ from core.keys import (
 from core.constants import KEM_ALG, SIG_ALG, OPK_COUNT
 
 RUNS = 1000
-#PQ keygen average: 3.7ms
 
 
 def bench(label: str, fn, *args, runs: int = RUNS) -> list[float]:

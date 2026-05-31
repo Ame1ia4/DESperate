@@ -21,6 +21,7 @@ from cryptography.exceptions import InvalidTag
 HOST = "127.0.0.1"
 PORT = 54231
 KEYSTORE_DIR = Path.home() / ".desperate" / "keystore"
+_registration_lock = asyncio.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -42,9 +43,9 @@ async def handle_unlock_keystore(params: dict) -> dict:
         return {"success": False, "error": "No keystore found. Register first."}
     except InvalidTag:
         return {"success": False, "error": "Invalid password."}
-    except Exception as exc:
+    except Exception:
         log.exception("unlock_keystore failed")
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": "Internal server error."}
 
 
 async def handle_generate_identity_bundle(params: dict) -> dict:
@@ -53,26 +54,27 @@ async def handle_generate_identity_bundle(params: dict) -> dict:
     if not password:
         return {"error": "keystore_password required."}
     try:
-        if KEYSTORE_DIR.exists():
-            # Require the caller to prove they own the existing keystore before
-            # wiping it — prevents any local process from destroying keys without
-            # knowing the current password.
-            try:
-                # Same reason as handle_unlock_keystore — Argon2id must not block the event loop.
-                existing = await asyncio.to_thread(StateStore.load, KEYSTORE_DIR, password)
-                existing.load_state("identity")
-            except InvalidTag:
-                return {"error": "Wrong password — cannot overwrite existing keystore."}
-            shutil.rmtree(KEYSTORE_DIR)
-        # ML-KEM-1024 / ML-DSA-87 key generation via liboqs is CPU-intensive — run in a thread.
-        bundle = await asyncio.to_thread(_gen_bundle, user_id)
-        # StateStore.create runs Argon2id to derive the encryption key — same reasoning.
-        store = await asyncio.to_thread(StateStore.create, KEYSTORE_DIR, password)
-        store.save_state("identity", bundle.to_private_bundle())
-        return bundle.to_public_bundle()
-    except Exception as exc:
+        async with _registration_lock:
+            if KEYSTORE_DIR.exists():
+                # Require the caller to prove they own the existing keystore before
+                # wiping it — prevents any local process from destroying keys without
+                # knowing the current password.
+                try:
+                    # Same reason as handle_unlock_keystore — Argon2id must not block the event loop.
+                    existing = await asyncio.to_thread(StateStore.load, KEYSTORE_DIR, password)
+                    existing.load_state("identity")
+                except InvalidTag:
+                    return {"error": "Wrong password — cannot overwrite existing keystore."}
+                shutil.rmtree(KEYSTORE_DIR)
+            # ML-KEM-1024 / ML-DSA-87 key generation via liboqs is CPU-intensive — run in a thread.
+            bundle = await asyncio.to_thread(_gen_bundle, user_id)
+            # StateStore.create runs Argon2id to derive the encryption key — same reasoning.
+            store = await asyncio.to_thread(StateStore.create, KEYSTORE_DIR, password)
+            store.save_state("identity", bundle.to_private_bundle())
+            return bundle.to_public_bundle()
+    except Exception:
         log.exception("generate_identity_bundle failed")
-        return {"error": str(exc)}
+        return {"error": "Internal server error."}
 
 
 HANDLERS = {
