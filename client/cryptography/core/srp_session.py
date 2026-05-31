@@ -43,8 +43,11 @@ _N_3072_HEX = (
 _SRP_3072_KWARGS: dict = {
     "hash_alg": srp.SHA256,
     "ng_type":  srp.NG_CUSTOM,
-    "n_hex":    _N_3072_HEX,
-    "g_hex":    "2",
+    # _ctsrp (OpenSSL/ctypes backend used on Linux) types n_hex/g_hex as
+    # c_char_p and raises ArgumentError when given a str.  Encode to bytes so
+    # both the C extension and the pure-Python fallback accept the values.
+    "n_hex":    _N_3072_HEX.encode("ascii"),
+    "g_hex":    b"2",
 }
 
 
