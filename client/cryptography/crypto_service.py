@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import srp as _srp
 
 from core.keys import generate_identity_bundle as _gen_bundle
-from core.srp_session import SrpSession
+from core.srp_session import SrpSession, _SRP_3072_KWARGS
 
 HOST = "127.0.0.1"
 PORT = 54231
@@ -53,7 +53,7 @@ def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
     Salt is ~32 bytes; verifier is ~384 bytes (3072-bit group).
     """
     salt, verifier = _srp.create_salted_verification_key(
-        username, password, hash_alg=_srp.SHA256, ng_type=_srp.NG_3072
+        username, password, **_SRP_3072_KWARGS
     )
     return salt, verifier
 

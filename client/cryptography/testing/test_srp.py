@@ -9,7 +9,7 @@ Run with: pytest testing/test_srp.py -v
 import pytest
 import srp
 
-from core.srp_session import SrpSession
+from core.srp_session import SrpSession, _SRP_3072_KWARGS
 
 
 USERNAME = "testuser"
@@ -44,13 +44,13 @@ class TestProcessChallenge:
     def test_process_challenge_returns_64_char_hex(self):
         """M1 = SHA-256 output = 32 bytes = 64 hex chars."""
         salt, vkey = srp.create_salted_verification_key(
-            USERNAME, PASSWORD, hash_alg=srp.SHA256, ng_type=srp.NG_3072
+            USERNAME, PASSWORD, **_SRP_3072_KWARGS
         )
         session = SrpSession(USERNAME, PASSWORD)
         A_bytes = bytes.fromhex(session.A_hex)
 
         svr = srp.Verifier(USERNAME, salt, vkey, A_bytes,
-                           hash_alg=srp.SHA256, ng_type=srp.NG_3072)
+                           **_SRP_3072_KWARGS)
         _s, B = svr.get_challenge()
 
         M1_hex = session.process_challenge(salt.hex(), B.hex())
@@ -60,7 +60,7 @@ class TestProcessChallenge:
     def test_process_challenge_rejects_zero_B(self):
         """B mod N == 0 is an invalid ephemeral — must raise ValueError."""
         salt, _vkey = srp.create_salted_verification_key(
-            USERNAME, PASSWORD, hash_alg=srp.SHA256, ng_type=srp.NG_3072
+            USERNAME, PASSWORD, **_SRP_3072_KWARGS
         )
         session = SrpSession(USERNAME, PASSWORD)
         with pytest.raises(ValueError, match="invalid"):
@@ -77,14 +77,14 @@ class TestVerifyServer:
         Returns (client_authenticated, server_authenticated).
         """
         salt, vkey = srp.create_salted_verification_key(
-            USERNAME, server_password, hash_alg=srp.SHA256, ng_type=srp.NG_3072
+            USERNAME, server_password, **_SRP_3072_KWARGS
         )
 
         client = SrpSession(USERNAME, client_password)
         A_bytes = bytes.fromhex(client.A_hex)
 
         svr = srp.Verifier(USERNAME, salt, vkey, A_bytes,
-                           hash_alg=srp.SHA256, ng_type=srp.NG_3072)
+                           **_SRP_3072_KWARGS)
         _s, B = svr.get_challenge()
 
         M1_hex = client.process_challenge(salt.hex(), B.hex())
@@ -111,13 +111,13 @@ class TestVerifyServer:
     def test_tampered_M2_rejected_by_client(self):
         """Client must reject a forged server proof."""
         salt, vkey = srp.create_salted_verification_key(
-            USERNAME, PASSWORD, hash_alg=srp.SHA256, ng_type=srp.NG_3072
+            USERNAME, PASSWORD, **_SRP_3072_KWARGS
         )
         client = SrpSession(USERNAME, PASSWORD)
         A_bytes = bytes.fromhex(client.A_hex)
 
         svr = srp.Verifier(USERNAME, salt, vkey, A_bytes,
-                           hash_alg=srp.SHA256, ng_type=srp.NG_3072)
+                           **_SRP_3072_KWARGS)
         _s, B = svr.get_challenge()
 
         M1_hex = client.process_challenge(salt.hex(), B.hex())
