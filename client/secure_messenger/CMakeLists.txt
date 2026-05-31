@@ -74,6 +74,17 @@ target_link_libraries(appsecure_messenger
             $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
+# Copy the PyInstaller crypto_service bundle next to the app binary after every build
+cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH _CLIENT_DIR)
+set(CRYPTO_DIST "${_CLIENT_DIR}/cryptography/dist/crypto_service")
+add_custom_command(TARGET appsecure_messenger POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CRYPTO_DIST}
+        -DDST_DIR=$<TARGET_FILE_DIR:appsecure_messenger>/crypto_service
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_crypto_bundle.cmake
+    COMMENT "Copying crypto_service bundle to build output"
+)
+
 install(TARGETS appsecure_messenger
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

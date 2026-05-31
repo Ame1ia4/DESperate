@@ -1,0 +1,143 @@
+"""
+main.py — TCP RPC server for E2EE cryptography operations.
+
+Listens on 127.0.0.1:54231. Protocol: newline-delimited JSON.
+  Request:  {"id": "<uuid>", "method": "<name>", "params": {...}}\n
+  Response: {"id": "<uuid>", ...}\n
+"""
+import asyncio
+import json
+import logging
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from core.keys import generate_identity_bundle as _gen_bundle
+from core.state_store import StateStore
+from cryptography.exceptions import InvalidTag
+
+HOST = "127.0.0.1"
+PORT = 54231
+KEYSTORE_DIR = Path.home() / ".desperate" / "keystore"
+_registration_lock = asyncio.Lock()
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+
+async def handle_unlock_keystore(params: dict) -> dict:
+    password = params.get("keystore_password", "")
+    if not password:
+        return {"success": False, "error": "keystore_password required."}
+    try:
+        # Argon2id (inside StateStore.load) is CPU-intensive and synchronous —
+        # run in a thread so the event loop stays free during key derivation.
+        store = await asyncio.to_thread(StateStore.load, KEYSTORE_DIR, password)
+        store.load_state("identity")  # raises InvalidTag on wrong password
+        return {"success": True}
+    except FileNotFoundError:
+        return {"success": False, "error": "No keystore found. Register first."}
+    except InvalidTag:
+        return {"success": False, "error": "Invalid password."}
+    except Exception:
+        log.exception("unlock_keystore failed")
+        return {"success": False, "error": "Internal server error."}
+
+
+async def handle_generate_identity_bundle(params: dict) -> dict:
+    password = params.get("keystore_password", "")
+    user_id = params.get("user_id", "local")
+    if not password:
+        return {"error": "keystore_password required."}
+    try:
+        async with _registration_lock:
+            if KEYSTORE_DIR.exists():
+                # Require the caller to prove they own the existing keystore before
+                # wiping it — prevents any local process from destroying keys without
+                # knowing the current password.
+                try:
+                    # Same reason as handle_unlock_keystore — Argon2id must not block the event loop.
+                    existing = await asyncio.to_thread(StateStore.load, KEYSTORE_DIR, password)
+                    existing.load_state("identity")
+                except InvalidTag:
+                    return {"error": "Wrong password — cannot overwrite existing keystore."}
+                shutil.rmtree(KEYSTORE_DIR)
+            # ML-KEM-1024 / ML-DSA-87 key generation via liboqs is CPU-intensive — run in a thread.
+            bundle = await asyncio.to_thread(_gen_bundle, user_id)
+            # StateStore.create runs Argon2id to derive the encryption key — same reasoning.
+            store = await asyncio.to_thread(StateStore.create, KEYSTORE_DIR, password)
+            store.save_state("identity", bundle.to_private_bundle())
+            return bundle.to_public_bundle()
+    except Exception:
+        log.exception("generate_identity_bundle failed")
+        return {"error": "Internal server error."}
+
+
+HANDLERS = {
+    "unlock_keystore": handle_unlock_keystore,
+    "generate_identity_bundle": handle_generate_identity_bundle,
+}
+
+# ── Connection handling ────────────────────────────────────────────────────────
+
+
+async def handle_client(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    peer = writer.get_extra_info("peername")
+    log.info("connection from %s", peer)
+    try:
+        async for line in reader:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError:
+                writer.write(
+                    json.dumps({"error": "Invalid JSON"}).encode() + b"\n"
+                )
+                await writer.drain()
+                continue
+
+            req_id = request.get("id")
+            method = request.get("method", "")
+            params = request.get("params", {})
+
+            handler = HANDLERS.get(method)
+            if handler is None:
+                response = {"error": f"Unknown method: {method!r}"}
+            else:
+                response = await handler(params)
+
+            response = {**response, "id": req_id}
+            writer.write(
+                json.dumps(response, separators=(",", ":")).encode() + b"\n"
+            )
+            await writer.drain()
+    except asyncio.IncompleteReadError:
+        pass
+    except Exception:
+        log.exception("error handling client %s", peer)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        log.info("disconnected %s", peer)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+
+async def serve() -> None:
+    server = await asyncio.start_server(handle_client, HOST, PORT)
+    log.info("crypto service listening on %s:%d", HOST, PORT)
+    async with server:
+        await server.serve_forever()
+
+
+if __name__ == "__main__":
+    asyncio.run(serve())
