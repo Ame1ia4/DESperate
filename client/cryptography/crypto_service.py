@@ -14,9 +14,7 @@ Compile to a standalone binary with PyInstaller:
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import socket
 import sys
 from pathlib import Path
@@ -34,26 +32,6 @@ import srp as _srp
 from core.keys import generate_identity_bundle as _gen_bundle
 from core.srp_session import SrpSession
 
-# ── RFC 5054 Appendix A — 3072-bit safe prime ────────────────────────────────
-# Server PR will update secure-remote-password to match this group.
-
-_N_3072 = int(
-    "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74"
-    "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437"
-    "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
-    "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF05"
-    "98DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB"
-    "9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"
-    "E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF695581718"
-    "3995497CEA956AE515D2261898FA051015728E5A8AAAC42DAD33170D04507A33"
-    "A85521ABDF1CBA64ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7"
-    "ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6BF12FFA06D98A0864"
-    "D87602733EC86A64521F2B18177B200CBBE117577A615D6C770988C0BAD946E2"
-    "08E24FA074E5AB3143DB5BFCE0FD108E4B82D120A93AD2CAFFFFFFFFFFFFFFFF",
-    16,
-)
-_G_3072 = 2
-
 HOST = "127.0.0.1"
 PORT = 54231
 
@@ -66,20 +44,18 @@ _srp_session: SrpSession | None = None
 
 def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
     """
-    Derive a 32-byte SRP salt and 256-byte verifier.
+    Derive an SRP salt and verifier via pysrp (NG_3072, SHA-256).
 
-    Uses RFC 5054 §2.3 x derivation:  x = H(s | H(I ":" P))
-    Matches the server's secure-remote-password npm library exactly.
-    Salt is 32 bytes (64 hex chars) — matches server's SRP_SALT_HEX=64.
-    Verifier is 256 bytes (512 hex chars) — matches server's SRP_VERIFIER_HEX=512.
+    Using pysrp guarantees the x derivation matches what SrpSession uses
+    internally on the login path — a hand-rolled derivation risks silent
+    auth failure for every registered user if any byte-level detail diverges.
+
+    Salt is ~32 bytes; verifier is ~384 bytes (3072-bit group).
     """
-    salt = os.urandom(32)
-    inner = hashlib.sha256((username + ":" + password).encode("utf-8")).digest()
-    x_bytes = hashlib.sha256(salt + inner).digest()
-    x = int.from_bytes(x_bytes, "big")
-    v = pow(_G_3072, x, _N_3072)
-    v_bytes = v.to_bytes(384, "big")  # 384 bytes = 3072 bits
-    return salt, v_bytes
+    salt, verifier = _srp.create_salted_verification_key(
+        username, password, hash_alg=_srp.SHA256, ng_type=_srp.NG_3072
+    )
+    return salt, verifier
 
 
 def _dual_sign(ed25519_priv: Ed25519PrivateKey, mldsa_secret: bytes, message: bytes) -> bytes:

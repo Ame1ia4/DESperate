@@ -22,7 +22,7 @@ public:
         const QString& password,
         const QString& nonce);
 
-    // SRP-6a client session (RFC 5054, 2048-bit group, SHA-256).
+    // SRP-6a client session (RFC 5054, 3072-bit group, SHA-256).
     // Call srpStart → srpChallenge → srpVerify in order.
     QString srpStart(
         const QString& username,

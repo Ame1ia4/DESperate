@@ -41,21 +41,6 @@ class TestAValue:
 
 class TestProcessChallenge:
 
-    def _server_ephemeral(self, verifier: bytes) -> tuple[bytes, bytes]:
-        """Generate a server ephemeral (secret b, public B) via pysrp."""
-        svr = srp.Verifier(USERNAME, verifier, hash_alg=srp.SHA256, ng_type=srp.NG_3072)
-        # pysrp Verifier exposes get_challenge() which returns (salt, B)
-        # We need to get salt and B from the verifier
-        # Actually, let's use srp.create_salted_verification_key to make the verifier
-        # and then create a Verifier for the server side.
-        return svr
-
-    def _full_server(self):
-        salt, vkey = srp.create_salted_verification_key(
-            USERNAME, PASSWORD, hash_alg=srp.SHA256, ng_type=srp.NG_3072
-        )
-        return salt, vkey
-
     def test_process_challenge_returns_64_char_hex(self):
         """M1 = SHA-256 output = 32 bytes = 64 hex chars."""
         salt, vkey = srp.create_salted_verification_key(
