@@ -51,7 +51,7 @@ from typing import Any, Optional
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.exceptions import InvalidTag
 
-from core.constants import NONCE_LEN, TAG_LEN
+from core.constants import KEY_LEN, NONCE_LEN, TAG_LEN
 from core.kdf import (
     argon2id_derive_key,
     hkdf_derive,
@@ -259,6 +259,10 @@ class StateStore:
         enc_key     : 32-byte encryption key already derived via HKDF
         master_salt : the Argon2id salt used in that derivation (persisted)
         """
+        if len(enc_key) != KEY_LEN:
+            raise ValueError(
+                f"enc_key must be {KEY_LEN} bytes, got {len(enc_key)}"
+            )
         if len(master_salt) != ARGON2_SALT_LEN:
             raise ValueError(
                 f"master_salt must be {ARGON2_SALT_LEN} bytes, got {len(master_salt)}"
@@ -287,6 +291,10 @@ class StateStore:
         base_dir : directory containing existing state files
         enc_key  : 32-byte encryption key already derived via HKDF
         """
+        if len(enc_key) != KEY_LEN:
+            raise ValueError(
+                f"enc_key must be {KEY_LEN} bytes, got {len(enc_key)}"
+            )
         base_dir  = Path(base_dir)
         salt_path = base_dir / _SALT_FILE
         if not salt_path.exists():
