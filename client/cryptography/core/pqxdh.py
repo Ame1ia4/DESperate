@@ -55,7 +55,6 @@ References:
 from __future__ import annotations
 
 import ctypes
-import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -66,7 +65,6 @@ from core.keys import (
     IdentityBundle,
     X25519Keypair,
     verify_spk_signature,
-    _assert_opk_lists_valid,
 )
 from core.kdf import hkdf_derive, INFO_PQXDH_SK
 
