@@ -338,6 +338,54 @@ class IdentityBundle:
             ],
         }
 
+    @classmethod
+    def from_private_bundle(cls, d: dict) -> IdentityBundle:
+        """
+        Reconstruct an IdentityBundle from a dict produced by to_private_bundle().
+
+        All *_sec and *_pub fields are hex-encoded bytes. The OPK invariant
+        (matching opk_ids at every index) is re-validated by __post_init__.
+        """
+        x25519_opks = [
+            X25519OneTimePrekey(
+                opk_id     = opk["opk_id"],
+                public_key = bytes.fromhex(opk["opk_pub"]),
+                secret_key = bytes.fromhex(opk["opk_sec"]),
+            )
+            for opk in d["opks_x25519"]
+        ]
+        kem_opks = [
+            KEMOneTimePrekey(
+                opk_id     = opk["opk_id"],
+                public_key = bytes.fromhex(opk["opk_pub"]),
+                secret_key = bytes.fromhex(opk["opk_sec"]),
+            )
+            for opk in d["opks_kem"]
+        ]
+        return cls(
+            user_id      = d["user_id"],
+            ik_kem       = KEMKeypair(
+                public_key = bytes.fromhex(d["ik_kem_pub"]),
+                secret_key = bytes.fromhex(d["ik_kem_sec"]),
+            ),
+            ik_sig       = SigningKeypair(
+                public_key = bytes.fromhex(d["ik_sig_pub"]),
+                secret_key = bytes.fromhex(d["ik_sig_sec"]),
+            ),
+            ik_classical = X25519Keypair(
+                X25519PrivateKey.from_private_bytes(bytes.fromhex(d["ik_classical_sec"]))
+            ),
+            spk          = SignedPrekey(
+                spk_id    = d["spk_id"],
+                keypair   = X25519Keypair(
+                    X25519PrivateKey.from_private_bytes(bytes.fromhex(d["spk_sec"]))
+                ),
+                signature = bytes.fromhex(d["spk_sig"]),
+            ),
+            x25519_opks  = x25519_opks,
+            kem_opks     = kem_opks,
+        )
+
     def __repr__(self) -> str:
         return (
             f"IdentityBundle(user_id={self.user_id!r}, "

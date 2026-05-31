@@ -26,25 +26,33 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
 import srp as _srp
 
-from core.keys import generate_identity_bundle as _gen_bundle
+from core.keys import generate_identity_bundle as _gen_bundle, IdentityBundle
 from core.srp_session import SrpSession, _SRP_3072_KWARGS
 from core.password import derive_master_components
+from core.state_store import encrypt_blob, decrypt_blob, _atomic_write
 
 HOST = "127.0.0.1"
 PORT = 54231
 
-# Persisted Argon2id salt for the master password derivation.
-# Written once at registration; read on every login.
-_MASTER_SALT_PATH = Path.home() / ".desperate" / "master_salt"
+# ── On-disk paths (all under ~/.desperate/) ──────────────────────────────────
+
+_APP_DIR          = Path.home() / ".desperate"
+_MASTER_SALT_PATH = _APP_DIR / "master_salt"   # Argon2id salt — written once at registration
+_IDENTITY_PATH    = _APP_DIR / "identity.enc"  # Encrypted private key bundle
+_USER_ID_PATH     = _APP_DIR / "user_id"       # Plaintext username — used to reconstruct AD
 
 # ── In-memory service state ──────────────────────────────────────────────────
 
-_srp_session:        SrpSession | None = None
-_cached_keystore_key: bytes | None     = None  # set by srp_start, consumed by unlock_keystore
+_srp_session:         SrpSession | None      = None
+_cached_keystore_key: bytes | None           = None  # set by srp_start, consumed by unlock_keystore
+_identity_bundle:     IdentityBundle | None  = None  # loaded by unlock_keystore
+_ed25519_priv:        Ed25519PrivateKey | None = None  # loaded by unlock_keystore, used for signing
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -63,6 +71,11 @@ def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
         username, password, **_SRP_3072_KWARGS
     )
     return salt, verifier
+
+
+def _identity_ad(user_id: str) -> bytes:
+    """Associated data for the identity bundle — binds the ciphertext to this user."""
+    return f"desperate-v1:identity:{user_id}".encode()
 
 
 def _write_master_salt(salt: bytes) -> None:
@@ -152,9 +165,19 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         spk_sig     = _dual_sign(ed25519_priv, bundle.ik_sig.secret_key,
                                  bundle.spk.keypair.public_key_bytes)
 
-        srp_pass, _keystore_key, master_salt = derive_master_components(password)
+        srp_pass, keystore_key, master_salt = derive_master_components(password)
         _write_master_salt(master_salt)
         salt_bytes, verifier_bytes = _create_srp_verifier(username, srp_pass.hex())
+
+        # Encrypt and persist private key bundle at rest.
+        private_data = bundle.to_private_bundle()
+        private_data["ed25519_sec"] = ed25519_priv.private_bytes(
+            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
+        ).hex()
+        plaintext = json.dumps(private_data, separators=(",", ":")).encode()
+        blob = encrypt_blob(keystore_key, plaintext, _identity_ad(username))
+        _atomic_write(_IDENTITY_PATH, blob)
+        _atomic_write(_USER_ID_PATH, username.encode())
 
         return {
             "srp_salt":               salt_bytes.hex(),
@@ -171,17 +194,27 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── Keystore ──────────────────────────────────────────────────────────────
 
     if method == "unlock_keystore":
+        global _identity_bundle, _ed25519_priv
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
         # Use the keystore key cached during srp_start if available;
-        # otherwise re-derive (e.g. unlock without a preceding SRP flow).
+        # otherwise re-derive (e.g. unlock called standalone without SRP).
         keystore_key = _cached_keystore_key
         _cached_keystore_key = None
         if keystore_key is None:
             master_salt = _load_master_salt()
             _, keystore_key, _ = derive_master_components(password, master_salt)
-        # keystore_key is ready — StateStore integration wired when ratchet state is introduced
+        try:
+            user_id   = _USER_ID_PATH.read_bytes().decode()
+            blob      = _IDENTITY_PATH.read_bytes()
+            plaintext = decrypt_blob(keystore_key, blob, _identity_ad(user_id))
+        except (FileNotFoundError, InvalidTag):
+            return {"success": False, "error": "Keystore unlock failed"}
+        private_data     = json.loads(plaintext.decode())
+        ed25519_sec_hex  = private_data.pop("ed25519_sec")
+        _identity_bundle = IdentityBundle.from_private_bundle(private_data)
+        _ed25519_priv    = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ed25519_sec_hex))
         return {"success": True}
 
     # ── Message encryption/decryption (Double Ratchet) ────────────────────────

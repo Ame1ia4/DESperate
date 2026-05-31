@@ -501,43 +501,44 @@ class StateStore:
         return self._sess_dir / f"{session_id}{_META_SUFFIX}"
 
     def _encrypt_write(self, path: Path, plaintext: bytes, ad: bytes) -> None:
-        """
-        Encrypt plaintext and write to path atomically.
-
-        Wire format: nonce (12) || ciphertext || tag (16)
-        """
-        nonce      = os.urandom(NONCE_LEN)
-        ciphertext = ChaCha20Poly1305(self._enc_key).encrypt(
-            nonce, plaintext, ad
-        )
-        blob = nonce + ciphertext
-        _atomic_write(path, blob)
+        """Encrypt plaintext and write to path atomically. Wire format: nonce (12) || ciphertext || tag (16)."""
+        _atomic_write(path, encrypt_blob(self._enc_key, plaintext, ad))
 
     def _read_decrypt(self, path: Path, ad: bytes) -> bytes:
-        """
-        Read an encrypted blob from path and decrypt it.
-
-        Raises InvalidTag if authentication fails — either the file has
-        been tampered with or the wrong passphrase was used.
-        """
-        blob = path.read_bytes()
-
-        if len(blob) < _MIN_BLOB_LEN:
-            raise ValueError(
-                f"Encrypted file too short: {path} "
-                f"({len(blob)} bytes, minimum {_MIN_BLOB_LEN})"
-            )
-
-        nonce      = blob[:NONCE_LEN]
-        ciphertext = blob[NONCE_LEN:]
-
-        return ChaCha20Poly1305(self._enc_key).decrypt(nonce, ciphertext, ad)
+        """Read an encrypted blob from path and decrypt it. Raises InvalidTag on tampering or wrong key."""
+        return decrypt_blob(self._enc_key, path.read_bytes(), ad)
 
     def __repr__(self) -> str:
         return f"StateStore(base_dir={self._base_dir!r})"
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
+
+def encrypt_blob(enc_key: bytes, plaintext: bytes, ad: bytes) -> bytes:
+    """
+    Encrypt plaintext with ChaCha20-Poly1305.
+
+    Returns nonce (12 B) || ciphertext+tag. Pass the result to decrypt_blob
+    to recover plaintext. The associated data (ad) must match on decryption —
+    use it to bind the blob to its intended purpose (e.g. filename, user id).
+    """
+    nonce = os.urandom(NONCE_LEN)
+    return nonce + ChaCha20Poly1305(enc_key).encrypt(nonce, plaintext, ad)
+
+
+def decrypt_blob(enc_key: bytes, blob: bytes, ad: bytes) -> bytes:
+    """
+    Decrypt a blob produced by encrypt_blob.
+
+    Raises InvalidTag if the key is wrong, the blob has been tampered with,
+    or the associated data does not match.
+    """
+    if len(blob) < _MIN_BLOB_LEN:
+        raise ValueError(
+            f"blob too short: {len(blob)} bytes, minimum {_MIN_BLOB_LEN}"
+        )
+    return ChaCha20Poly1305(enc_key).decrypt(blob[:NONCE_LEN], blob[NONCE_LEN:], ad)
+
 
 def _make_ad(session_id: str, file_type: str) -> bytes:
     """
