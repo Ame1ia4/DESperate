@@ -112,7 +112,7 @@ def _dual_sign(ed25519_priv: Ed25519PrivateKey, mldsa_secret: bytes, message: by
 # ── RPC handlers ─────────────────────────────────────────────────────────────
 
 def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global _srp_session, _cached_keystore_key
+    global _srp_session, _cached_keystore_key, _identity_bundle, _ed25519_priv
 
     # ── SRP authentication ────────────────────────────────────────────────────
 
@@ -182,8 +182,13 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 "Delete ~/.desperate/ to start fresh."
             )
         blob = encrypt_blob(keystore_key, plaintext, _identity_ad(username))
-        _atomic_write(_IDENTITY_PATH, blob)
-        _atomic_write(_USER_ID_PATH, username.encode())
+        try:
+            _atomic_write(_IDENTITY_PATH, blob)
+            _atomic_write(_USER_ID_PATH, username.encode())
+        except Exception:
+            # Roll back the salt so registration can be retried cleanly.
+            _MASTER_SALT_PATH.unlink(missing_ok=True)
+            raise
 
         return {
             "srp_salt":               salt_bytes.hex(),
@@ -200,7 +205,6 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── Keystore ──────────────────────────────────────────────────────────────
 
     if method == "unlock_keystore":
-        global _identity_bundle, _ed25519_priv
         # Consume the cached key immediately so it is cleared regardless of
         # whether the call succeeds, fails, or returns early.
         keystore_key = _cached_keystore_key
