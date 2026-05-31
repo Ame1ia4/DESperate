@@ -161,7 +161,7 @@ class RatchetSession:
                 f"{type(ratchet).__name__!r} — check python-doubleratchet API version."
             )
         session = cls(ratchet, store, session_id, HeaderCounter(session_id=session_id))
-        await session._persist()
+        session._persist()
         return session
 
     @classmethod
@@ -194,7 +194,7 @@ class RatchetSession:
                 f"{type(ratchet).__name__!r} — check python-doubleratchet API version."
             )
         session = cls(ratchet, store, session_id, HeaderCounter(session_id=session_id))
-        await session._persist()
+        session._persist()
         return session
 
     @classmethod
@@ -271,7 +271,7 @@ class RatchetSession:
         )
         # Persist before committing to memory — if the write fails, the index is
         # not advanced and the next encrypt will retry with the same index.
-        await self._persist(pending_msg_index=next_index)
+        self._persist(pending_msg_index=next_index)
         self._msg_index = next_index
         return wire
 
@@ -330,7 +330,7 @@ class RatchetSession:
 
     # ── Persistence ──────────────────────────────────────────────────────
 
-    async def _persist(self, pending_msg_index: int | None = None) -> None:
+    def _persist(self, pending_msg_index: int | None = None) -> None:
         """
         Atomically write the full session state to StateStore.
 

@@ -227,15 +227,15 @@ class TestWireFormat:
 
     def test_wire_header_length(self):
         """
-        Wire header = msg_index (4) + pn (4) + n (4) + ratchet_pub (32) = 44 bytes.
+        Wire header = version (1) + msg_index (4) + pn (4) + n (4) + ratchet_pub (32) = 45 bytes.
         pn and n carry the DoubleRatchet Header chain-length fields so the
         receiver can reconstruct the full Header for out-of-order handling.
         """
         from core.dh_ratchet.session import (
-            _WIRE_HEADER_LEN, _MSG_INDEX_LEN, _PN_LEN, _N_LEN, _RATCHET_PUB_LEN,
+            _WIRE_HEADER_LEN, _WIRE_VERSION_LEN, _MSG_INDEX_LEN, _PN_LEN, _N_LEN, _RATCHET_PUB_LEN,
         )
-        assert _WIRE_HEADER_LEN == _MSG_INDEX_LEN + _PN_LEN + _N_LEN + _RATCHET_PUB_LEN
-        assert _WIRE_HEADER_LEN == 44
+        assert _WIRE_HEADER_LEN == _WIRE_VERSION_LEN + _MSG_INDEX_LEN + _PN_LEN + _N_LEN + _RATCHET_PUB_LEN
+        assert _WIRE_HEADER_LEN == 45
 
     def test_message_index_encoding(self):
         """message_index is uint32 little-endian — verify decode."""
@@ -280,22 +280,19 @@ class TestRatchetSessionPersistence:
         s = RatchetSession(mock_ratchet, mock_store, "test-session", counter)
         return s
 
-    @pytest.mark.asyncio
-    async def test_persist_saves_ratchet_state(self, session, mock_store):
-        await session._persist()
+    def test_persist_saves_ratchet_state(self, session, mock_store):
+        session._persist()
         assert mock_store.state_exists("test-session")
 
-    @pytest.mark.asyncio
-    async def test_persist_saves_message_index(self, session, mock_store):
+    def test_persist_saves_message_index(self, session, mock_store):
         session._msg_index = 7
-        await session._persist()
+        session._persist()
         state = mock_store.load_state("test-session")
         assert state["msg_index"] == 7
 
-    @pytest.mark.asyncio
-    async def test_persist_saves_header_counter(self, session, mock_store):
+    def test_persist_saves_header_counter(self, session, mock_store):
         session._counter._counter = 5
-        await session._persist()
+        session._persist()
         state = mock_store.load_state("test-session")
         assert state["header_counter"] == 5
 
