@@ -2,10 +2,11 @@ import { describe, it, before, after, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
 import { randomBytes } from 'node:crypto'
-import srpClient from 'secure-remote-password/client.js'
+import { createSRPClient } from 'js-srp6a'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { generateKeyBundle, validDeviceBody, zeroHex, randomHex } from '../helpers/keyFixtures.js'
+import { issueNonce } from '../../handlers/auth/nonce.js'
 import {
   X25519_PUB_BYTES, SIGNING_PUB_BYTES, DUAL_SIG_BYTES,
   MLKEM_PUB_BYTES, ED25519_SIG_BYTES,
@@ -25,10 +26,10 @@ let server
 let baseUrl
 let bundle
 
-// Generate a valid SRP salt + verifier once for the test suite
+const srpClient    = createSRPClient('SHA-256', 3072)
 const testSalt     = srpClient.generateSalt()
 const testVerifier = srpClient.deriveVerifier(
-  srpClient.derivePrivateKey(testSalt, 'testuser', 'securePassword123')
+  await srpClient.derivePrivateKey(testSalt, 'testuser', 'securePassword123')
 )
 
 before(() => new Promise(resolve => {
@@ -41,7 +42,6 @@ before(() => new Promise(resolve => {
 
 after(() => new Promise(resolve => server.close(resolve)))
 
-// Happy-path client query results: INSERT user → INSERT device
 const happyClientResults = () => [
   { rows: [{ id: 'user-uuid' }] },
   { rows: [{ id: 'device-uuid' }] },
@@ -53,6 +53,14 @@ beforeEach(() => {
   globalThis.__db.clientQueryResults = happyClientResults()
 })
 
+// Signs a hex nonce with the bundle's Ed25519 + ML-DSA keys.
+function signNonce(nonce) {
+  const nonceBytes = Buffer.from(nonce, 'hex')
+  const ed25519Sig = Buffer.from(ed25519.sign(nonceBytes, bundle.ed25519PrivKey))
+  const mlDsaSig   = Buffer.from(ml_dsa87.sign(nonceBytes, bundle.mlDsaSecKey))
+  return Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
+}
+
 async function post(body) {
   const res = await fetch(`${baseUrl}/auth/register`, {
     method: 'POST',
@@ -62,12 +70,21 @@ async function post(body) {
   return { status: res.status, body: await res.json() }
 }
 
-const validBody = () => ({
-  username: 'testuser',
-  salt:     testSalt,
-  verifier: testVerifier,
-  device:   validDeviceBody(bundle),
-})
+// Generates a fresh bundle body each call — nonces are single-use so each
+// test that succeeds or is expected to reach nonce-check must get a new one.
+const validBody = () => {
+  const nonce = issueNonce()
+  return {
+    username: 'testuser',
+    bundle: {
+      srp_salt:        testSalt,
+      srp_verifier:    testVerifier,
+      nonce,
+      nonce_signature: signNonce(nonce),
+      ...validDeviceBody(bundle),
+    },
+  }
+}
 
 describe('POST /auth/register', () => {
   describe('happy path', () => {
@@ -79,14 +96,14 @@ describe('POST /auth/register', () => {
 
     it('accepts registration without optional idk_pq_pub', async () => {
       const body = validBody()
-      delete body.device.idk_pq_pub
+      delete body.bundle.idk_pq_pub
       const res = await post(body)
       assert.strictEqual(res.status, 201)
     })
 
     it('accepts a device_name within length limit', async () => {
       const body = validBody()
-      body.device.device_name = 'My Device'
+      body.bundle.device_name = 'My Device'
       const res = await post(body)
       assert.strictEqual(res.status, 201)
     })
@@ -127,86 +144,32 @@ describe('POST /auth/register', () => {
     })
   })
 
-  describe('SRP credential validation', () => {
-    it('rejects missing salt', async () => {
-      const body = validBody()
-      delete body.salt
+  describe('bundle validation', () => {
+    it('rejects missing bundle', async () => {
+      const { bundle: _, ...body } = validBody()
       const res = await post(body)
       assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid salt')
+      assert.strictEqual(res.body.error, 'Invalid bundle')
     })
 
-    it('rejects salt that is too short', async () => {
-      const res = await post({ ...validBody(), salt: 'a'.repeat(SRP_SALT_HEX - 1) })
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid salt')
-    })
-
-    it('rejects salt that is too long', async () => {
-      const res = await post({ ...validBody(), salt: 'a'.repeat(SRP_SALT_HEX + 1) })
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid salt')
-    })
-
-    it('rejects salt with non-hex characters', async () => {
-      const res = await post({ ...validBody(), salt: 'g'.repeat(SRP_SALT_HEX) })
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid salt')
-    })
-
-    it('rejects missing verifier', async () => {
-      const body = validBody()
-      delete body.verifier
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid verifier')
-    })
-
-    it('rejects verifier that is too short', async () => {
-      const res = await post({ ...validBody(), verifier: 'a'.repeat(SRP_VERIFIER_HEX - 1) })
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid verifier')
-    })
-
-    it('rejects verifier that is too long', async () => {
-      const res = await post({ ...validBody(), verifier: 'a'.repeat(SRP_VERIFIER_HEX + 1) })
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid verifier')
-    })
-
-    it('rejects verifier with non-hex characters', async () => {
-      const res = await post({ ...validBody(), verifier: 'z'.repeat(SRP_VERIFIER_HEX) })
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid verifier')
-    })
-  })
-
-  describe('device object validation', () => {
-    it('rejects missing device', async () => {
-      const { device: _, ...body } = validBody()
-      const res = await post(body)
-      assert.strictEqual(res.status, 400)
-      assert.strictEqual(res.body.error, 'Invalid device')
-    })
-
-    it('rejects device = null', async () => {
-      const res = await post({ ...validBody(), device: null })
+    it('rejects bundle = null', async () => {
+      const res = await post({ ...validBody(), bundle: null })
       assert.strictEqual(res.status, 400)
     })
 
-    it('rejects device = array', async () => {
-      const res = await post({ ...validBody(), device: [] })
+    it('rejects bundle = array', async () => {
+      const res = await post({ ...validBody(), bundle: [] })
       assert.strictEqual(res.status, 400)
     })
 
-    it('rejects device = string', async () => {
-      const res = await post({ ...validBody(), device: 'bad' })
+    it('rejects bundle = string', async () => {
+      const res = await post({ ...validBody(), bundle: 'bad' })
       assert.strictEqual(res.status, 400)
     })
 
     it('rejects device_name longer than 100 chars', async () => {
       const body = validBody()
-      body.device.device_name = 'x'.repeat(101)
+      body.bundle.device_name = 'x'.repeat(101)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid device_name')
@@ -214,16 +177,127 @@ describe('POST /auth/register', () => {
 
     it('accepts device_name = null (treated as absent)', async () => {
       const body = validBody()
-      body.device.device_name = null
+      body.bundle.device_name = null
       const res = await post(body)
       assert.strictEqual(res.status, 201)
+    })
+  })
+
+  describe('SRP credential validation', () => {
+    it('rejects missing srp_salt', async () => {
+      const body = validBody()
+      delete body.bundle.srp_salt
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid srp_salt')
+    })
+
+    it('rejects srp_salt that is too short', async () => {
+      const body = validBody()
+      body.bundle.srp_salt = 'a'.repeat(SRP_SALT_HEX - 1)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+    })
+
+    it('rejects srp_salt that is too long', async () => {
+      const body = validBody()
+      body.bundle.srp_salt = 'a'.repeat(SRP_SALT_HEX + 1)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+    })
+
+    it('rejects srp_salt with non-hex characters', async () => {
+      const body = validBody()
+      body.bundle.srp_salt = 'g'.repeat(SRP_SALT_HEX)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+    })
+
+    it('rejects missing srp_verifier', async () => {
+      const body = validBody()
+      delete body.bundle.srp_verifier
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid srp_verifier')
+    })
+
+    it('rejects srp_verifier that is too short', async () => {
+      const body = validBody()
+      body.bundle.srp_verifier = 'a'.repeat(SRP_VERIFIER_HEX - 1)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+    })
+
+    it('rejects srp_verifier with non-hex characters', async () => {
+      const body = validBody()
+      body.bundle.srp_verifier = 'z'.repeat(SRP_VERIFIER_HEX)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+    })
+  })
+
+  describe('nonce validation (key-possession proof, Sesame §6.3)', () => {
+    it('rejects missing nonce', async () => {
+      const body = validBody()
+      delete body.bundle.nonce
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid nonce')
+    })
+
+    it('rejects a nonce that was never issued', async () => {
+      const body = validBody()
+      body.bundle.nonce = randomHex(32)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid nonce')
+    })
+
+    it('rejects a nonce that has already been consumed (single-use)', async () => {
+      const body = validBody()
+      // First request consumes the nonce
+      await post(body)
+      // Second request with same nonce must fail
+      globalThis.__db.queryImpl          = async () => ({ rows: [] })
+      globalThis.__db.clientQueryResults = happyClientResults()
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid nonce')
+    })
+
+    it('rejects missing nonce_signature', async () => {
+      const body = validBody()
+      delete body.bundle.nonce_signature
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+    })
+
+    it('rejects nonce_signature of all zeros (valid length, invalid sig)', async () => {
+      const body = validBody()
+      body.bundle.nonce_signature = zeroHex(DUAL_SIG_BYTES)
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid key bundle')
+    })
+
+    it('rejects nonce_signature signed with a different keypair', async () => {
+      const body    = validBody()
+      const otherPk = randomBytes(32)
+      const { secretKey: otherMlSec } = ml_dsa87.keygen(randomBytes(32))
+      const nonceBytes  = Buffer.from(body.bundle.nonce, 'hex')
+      const badEd = Buffer.from(ed25519.sign(nonceBytes, otherPk))
+      const badMl = Buffer.from(ml_dsa87.sign(nonceBytes, otherMlSec))
+      body.bundle.nonce_signature = Buffer.concat([badEd, badMl]).toString('hex')
+      const res = await post(body)
+      assert.strictEqual(res.status, 400)
+      assert.strictEqual(res.body.error, 'Invalid key bundle')
     })
   })
 
   describe('key material size attacks', () => {
     it('rejects idk_classical_pub that is one byte short', async () => {
       const body = validBody()
-      body.device.idk_classical_pub = randomHex(X25519_PUB_BYTES - 1)
+      body.bundle.idk_classical_pub = randomHex(X25519_PUB_BYTES - 1)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.match(res.body.error, /idk_classical_pub/)
@@ -231,14 +305,14 @@ describe('POST /auth/register', () => {
 
     it('rejects idk_classical_pub with non-hex chars', async () => {
       const body = validBody()
-      body.device.idk_classical_pub = 'z'.repeat(X25519_PUB_BYTES * 2)
+      body.bundle.idk_classical_pub = 'z'.repeat(X25519_PUB_BYTES * 2)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
     })
 
     it('rejects identity_signing_pub with wrong total length', async () => {
       const body = validBody()
-      body.device.identity_signing_pub = randomHex(SIGNING_PUB_BYTES - 1)
+      body.bundle.identity_signing_pub = randomHex(SIGNING_PUB_BYTES - 1)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.match(res.body.error, /identity_signing_pub/)
@@ -246,39 +320,39 @@ describe('POST /auth/register', () => {
 
     it('rejects signed_prekey_pub with wrong length', async () => {
       const body = validBody()
-      body.device.signed_prekey_pub = randomHex(X25519_PUB_BYTES + 1)
+      body.bundle.signed_prekey_pub = randomHex(X25519_PUB_BYTES + 1)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
     })
 
     it('rejects signed_prekey_signature with wrong length', async () => {
       const body = validBody()
-      body.device.signed_prekey_signature = randomHex(DUAL_SIG_BYTES - 1)
+      body.bundle.signed_prekey_signature = randomHex(DUAL_SIG_BYTES - 1)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
     })
 
     it('rejects idk_pq_pub with wrong length when provided', async () => {
       const body = validBody()
-      body.device.idk_pq_pub = randomHex(MLKEM_PUB_BYTES - 1)
+      body.bundle.idk_pq_pub = randomHex(MLKEM_PUB_BYTES - 1)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.match(res.body.error, /idk_pq_pub/)
     })
   })
 
-  describe('signature verification attacks', () => {
+  describe('signed prekey signature verification', () => {
     it('rejects signed_prekey_signature of all zeros (valid length, invalid sig)', async () => {
       const body = validBody()
-      body.device.signed_prekey_signature = zeroHex(DUAL_SIG_BYTES)
+      body.bundle.signed_prekey_signature = zeroHex(DUAL_SIG_BYTES)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
     })
 
-    it('rejects signed_prekey_signature of random bytes (valid length)', async () => {
+    it('rejects signed_prekey_signature of random bytes', async () => {
       const body = validBody()
-      body.device.signed_prekey_signature = randomHex(DUAL_SIG_BYTES)
+      body.bundle.signed_prekey_signature = randomHex(DUAL_SIG_BYTES)
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
@@ -288,8 +362,8 @@ describe('POST /auth/register', () => {
       const body       = validBody()
       const wrongMsg   = randomBytes(32)
       const ed25519Sig = Buffer.from(ed25519.sign(wrongMsg, bundle.ed25519PrivKey))
-      const mlDsaSig   = Buffer.from(ml_dsa65.sign(wrongMsg, bundle.mlDsaSecKey))
-      body.device.signed_prekey_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
+      const mlDsaSig   = Buffer.from(ml_dsa87.sign(wrongMsg, bundle.mlDsaSecKey))
+      body.bundle.signed_prekey_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
@@ -298,33 +372,33 @@ describe('POST /auth/register', () => {
     it('rejects sig signed with a different (unrelated) keypair', async () => {
       const body                      = validBody()
       const otherPriv                 = randomBytes(32)
-      const { secretKey: otherMlSec } = ml_dsa65.keygen(randomBytes(32))
-      const spkPub                    = Buffer.from(body.device.signed_prekey_pub, 'hex')
+      const { secretKey: otherMlSec } = ml_dsa87.keygen(randomBytes(32))
+      const spkPub                    = Buffer.from(body.bundle.signed_prekey_pub, 'hex')
       const ed25519Sig                = Buffer.from(ed25519.sign(spkPub, otherPriv))
-      const mlDsaSig                  = Buffer.from(ml_dsa65.sign(spkPub, otherMlSec))
-      body.device.signed_prekey_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
+      const mlDsaSig                  = Buffer.from(ml_dsa87.sign(spkPub, otherMlSec))
+      body.bundle.signed_prekey_signature = Buffer.concat([ed25519Sig, mlDsaSig]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
     })
 
-    it('rejects when only the ML-DSA half of the signature is valid (ed25519 is zeros)', async () => {
+    it('rejects when only the ML-DSA half is valid (ed25519 is zeros)', async () => {
       const body     = validBody()
-      const spkPub   = Buffer.from(body.device.signed_prekey_pub, 'hex')
+      const spkPub   = Buffer.from(body.bundle.signed_prekey_pub, 'hex')
       const zeroEd   = Buffer.alloc(ED25519_SIG_BYTES)
-      const mlDsaSig = Buffer.from(ml_dsa65.sign(spkPub, bundle.mlDsaSecKey))
-      body.device.signed_prekey_signature = Buffer.concat([zeroEd, mlDsaSig]).toString('hex')
+      const mlDsaSig = Buffer.from(ml_dsa87.sign(spkPub, bundle.mlDsaSecKey))
+      body.bundle.signed_prekey_signature = Buffer.concat([zeroEd, mlDsaSig]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
     })
 
-    it('rejects when only the ed25519 half of the signature is valid (ml_dsa is zeros)', async () => {
+    it('rejects when only the Ed25519 half is valid (ml_dsa is zeros)', async () => {
       const body       = validBody()
-      const spkPub     = Buffer.from(body.device.signed_prekey_pub, 'hex')
+      const spkPub     = Buffer.from(body.bundle.signed_prekey_pub, 'hex')
       const ed25519Sig = Buffer.from(ed25519.sign(spkPub, bundle.ed25519PrivKey))
       const zeroMl     = Buffer.alloc(DUAL_SIG_BYTES - ED25519_SIG_BYTES)
-      body.device.signed_prekey_signature = Buffer.concat([ed25519Sig, zeroMl]).toString('hex')
+      body.bundle.signed_prekey_signature = Buffer.concat([ed25519Sig, zeroMl]).toString('hex')
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid key bundle')
@@ -347,7 +421,7 @@ describe('POST /auth/register', () => {
       assert.strictEqual(res.body.error, 'Registration failed')
     })
 
-    it('username-taken and DB-constraint-violation return identical JSON bodies (no enumeration)', async () => {
+    it('username-taken and DB-constraint-violation return identical JSON bodies', async () => {
       globalThis.__db.queryImpl = async () => ({ rows: [{ 1: 1 }] })
       const res1 = await post(validBody())
 
@@ -369,7 +443,7 @@ describe('POST /auth/register', () => {
   })
 
   describe('DB error propagation', () => {
-    it('returns 500 on unexpected DB error (not rethrown as 409)', async () => {
+    it('returns 500 on unexpected DB error', async () => {
       globalThis.__db.clientQueryResults = [{ throwError: new Error('connection refused') }]
       const res = await post(validBody())
       assert.strictEqual(res.status, 500)

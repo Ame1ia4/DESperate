@@ -35,9 +35,10 @@ CREATE TABLE users (
         UNIQUE
         NOT NULL,
 
-    -- Argon2id hash ONLY
-    password_hash VARCHAR(255)
-        NOT NULL,
+    -- SRP-6a credentials (RFC 5054). The server stores salt + verifier
+    -- only — it never sees the plaintext password.
+    srp_salt     VARCHAR(64)  NOT NULL,
+    srp_verifier VARCHAR(512) NOT NULL,
 
     created_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -143,6 +144,32 @@ CREATE INDEX idx_devices_user
 CREATE INDEX idx_devices_active
     ON devices(id)
     WHERE revoked = FALSE;
+
+-- =========================================================
+-- SRP CHALLENGES
+--
+-- Transient per-device handshake state for SRP round 1→2.
+-- One row per device (PK enforces this, preventing accumulation).
+-- auth_init DELETEs any existing row then INSERTs a fresh one.
+-- auth_login DELETEs the row immediately after use — challenges
+-- are single-use regardless of whether verification succeeds.
+-- =========================================================
+
+CREATE TABLE srp_challenges (
+    device_id UUID PRIMARY KEY
+        REFERENCES devices(id)
+        ON DELETE CASCADE,
+
+    -- Server's secret ephemeral b (hex). Never sent to the client.
+    srp_server_secret TEXT NOT NULL,
+
+    created_at TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- 5-minute window; auth_login rejects rows past this.
+    expires_at TIMESTAMP WITH TIME ZONE
+        NOT NULL DEFAULT CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+);
 
 -- =========================================================
 -- ONE-TIME PREKEYS
@@ -859,16 +886,32 @@ WHERE id = $1;
 -- AUTHENTICATION MODEL
 -- =========================================================
 
--- INITIAL AUTHENTICATION:
+-- LOGIN (SRP-6a, RFC 2945):
 --
--- username + password (Argon2id verified server-side)
+-- Round 1 — POST /auth/init:
+--   client sends username + device_id + A
+--   server verifies device belongs to user, not revoked
+--   server stores ephemeral b in srp_challenges (keyed on device_id, 5-min TTL)
+--   server returns srp_salt + B
 --
--- DEVICE AUTHENTICATION:
+-- Round 2 — POST /auth/login:
+--   client sends username + device_id + A + M1
+--   server loads+deletes challenge (single-use)
+--   server calls deriveSession — throws on wrong password
+--   server stores K in-process memory only (30-second TTL, one-use)
+--   server returns M2 (mutual auth proof)
 --
--- challenge-response signatures using identity_signing_pub
+-- SUBSEQUENT REQUEST (must immediately follow /auth/login):
+--
+--   client derives: auth_key = HKDF-SHA256(K, salt="", info="session-auth", length=32)
+--   client sends X-Device-ID and X-Session-Proof headers
+--   X-Session-Proof = HMAC-SHA256(auth_key, method:path:hex(SHA256(body)))
+--   server looks up K in memory, verifies HMAC, discards K
 --
 -- NO:
 --
 -- - JWTs
 -- - bearer tokens
 -- - server-side sessions
+-- - srp_verified_at / srp_expires_at columns
+-- - Argon2id (password is never sent to or stored by the server)
