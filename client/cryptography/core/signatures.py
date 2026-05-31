@@ -48,9 +48,6 @@ class SignatureVerificationError(Exception):
     The receiver must discard the message and must NOT decrypt the ciphertext.
     """
 
-# MalformedSignedCiphertextError is defined in core.keys and re-exported here
-# so callers can catch it from either module without a cross-import dependency.
-
 
 # ── Signature input construction ─────────────────────────────────────────────
 
