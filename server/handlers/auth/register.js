@@ -82,12 +82,6 @@ export async function register(req, res) {
     return res.status(400).json({ error: 'Invalid nonce' })
   }
 
-  // consumeNonce is single-use — always deletes the entry so a rejected
-  // registration cannot retry with the same nonce.
-  if (!consumeNonce(nonce)) {
-    return res.status(400).json({ error: 'Invalid nonce' })
-  }
-
   const nonceBytes = Buffer.from(nonce, 'hex')
 
   // Verify proof-of-possession of the signing key (Sesame §6.3).
@@ -106,6 +100,12 @@ export async function register(req, res) {
     signedPrekeySig.subarray(ED25519_SIG_BYTES)
   )) {
     return res.status(400).json({ error: 'Invalid key bundle' })
+  }
+
+  // consumeNonce is single-use — always deletes the entry so a rejected
+  // registration cannot retry with the same nonce.
+  if (!consumeNonce(nonce)) {
+    return res.status(400).json({ error: 'Invalid nonce' })
   }
 
   const { rows: taken } = await query('SELECT 1 FROM users WHERE username = $1', [username])

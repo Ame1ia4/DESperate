@@ -11,7 +11,6 @@ export const MLDSA_SIG_BYTES    = ml_dsa87.lengths.signature   // 4627 bytes (ML
 export const MLKEM_PUB_BYTES    = ml_kem1024.lengths.publicKey // 1568 bytes (ML-KEM-1024)
 // Hybrid signing public key: [ed25519_pub (32 B) || ml_dsa87_pub (2592 B)]
 export const SIGNING_PUB_BYTES  = ED25519_PUB_BYTES + MLDSA_PUB_BYTES  // 2624 bytes
-export const SIG_BYTES          = MLDSA_SIG_BYTES                       // ML-DSA-87 signature
 // Dual signature: [ed25519_sig (64 B) || ml_dsa87_sig (4627 B)]
 export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES   // 4691 bytes
 
