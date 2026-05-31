@@ -63,6 +63,7 @@ import oqs
 from core.keys import (
     KEM_ALG,
     IdentityBundle,
+    MalformedSignedCiphertextError,
     X25519Keypair,
     verify_spk_signature,
 )
@@ -225,7 +226,13 @@ def initiate(
     opks_x25519, opks_kem = _parse_remote_opks(remote_bundle)
 
     # ── Step 2: Verify SPK signature ──────────────────────────────────────────
-    if not verify_spk_signature(spk_b_pub, spk_b_sig, ik_b_sig_pub):
+    try:
+        spk_valid = verify_spk_signature(spk_b_pub, spk_b_sig, ik_b_sig_pub)
+    except MalformedSignedCiphertextError as exc:
+        raise SPKVerificationError(
+            f"SPK bundle is structurally invalid (spk_id={spk_b_id}): {exc}"
+        ) from exc
+    if not spk_valid:
         raise SPKVerificationError(
             f"SPK signature verification failed (spk_id={spk_b_id}). "
             f"Possible server substitution attack. Aborting."

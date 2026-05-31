@@ -103,6 +103,10 @@ class SignedCiphertext:
             sender_id, recipient_id, message_index, signature, ciphertext = msgpack.unpackb(data, raw=False)
         except Exception as exc:
             raise MalformedSignedCiphertextError(f"Failed to parse payload: {exc}") from exc
+        if not isinstance(message_index, int) or not (0 <= message_index < 2**64):
+            raise MalformedSignedCiphertextError(
+                f"message_index must be a uint64 (0 ≤ n < 2^64), got {message_index!r}."
+            )
         if len(signature) != HYBRID_SIGNATURE_LEN:
             raise MalformedSignedCiphertextError(
                 f"sig_len={len(signature)} but expected {HYBRID_SIGNATURE_LEN}. "
@@ -188,8 +192,13 @@ def verify_and_extract(
     Parse wire bytes, verify the hybrid signature, and return the SignedCiphertext.
     Enforces call order: from_bytes() → verify_ciphertext() → return for aead.decrypt().
 
-    Raises MalformedSignedCiphertextError if unparseable, SignatureVerificationError if invalid.
+    Raises SignatureVerificationError on any failure — both structural parse errors and
+    cryptographic verification failures are unified here so callers need only catch one type.
+    Call from_bytes() and verify_ciphertext() directly if you need to distinguish them.
     """
-    signed = SignedCiphertext.from_bytes(data)
+    try:
+        signed = SignedCiphertext.from_bytes(data)
+    except MalformedSignedCiphertextError as exc:
+        raise SignatureVerificationError("Signature verification failed.") from exc
     verify_ciphertext(signed=signed, aad=aad, ik_sig_pub=ik_sig_pub, expected_pub=expected_pub)
     return signed

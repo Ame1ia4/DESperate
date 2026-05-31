@@ -528,36 +528,65 @@ def verify_hybrid_signature(
     Parameters
     ----------
     message    : the exact bytes that were signed
-    signature  : 4691-byte hybrid signature (ed25519_sig (64) || ml_dsa87_sig (4627))
-    ik_sig_pub : 2624-byte hybrid public key (ed25519_pub (32) || ml_dsa87_pub (2592))
+    signature  : 4691-byte hybrid signature (ed25519_sig (64) || ml_dsa87_sig (4627)),
+                 or 4627-byte legacy ML-DSA-87-only signature (transition window)
+    ik_sig_pub : 2624-byte hybrid public key (ed25519_pub (32) || ml_dsa87_pub (2592)),
+                 or 2592-byte legacy ML-DSA-87-only key (transition window)
+
+    Transition window
+    -----------------
+    Users registered before the hybrid-signature PR have a 2592-byte ML-DSA-87-only
+    ik_sig_pub on the server. For those keys, Ed25519 verification is skipped and only
+    ML-DSA-87 is verified. Remove this branch once all users have re-registered.
     """
-    if len(ik_sig_pub) != HYBRID_PUBLIC_KEY_LEN:
+    if len(ik_sig_pub) == HYBRID_PUBLIC_KEY_LEN:
+        if len(signature) != HYBRID_SIGNATURE_LEN:
+            raise MalformedSignedCiphertextError(
+                f"signature must be {HYBRID_SIGNATURE_LEN} bytes for a hybrid key, "
+                f"got {len(signature)}."
+            )
+        ed_pub_bytes  = ik_sig_pub[:ED25519_PUBLIC_KEY_LEN]
+        dsa_pub_bytes = ik_sig_pub[ED25519_PUBLIC_KEY_LEN:]
+        ed_sig        = signature[:ED25519_SIGNATURE_LEN]
+        dsa_sig       = signature[ED25519_SIGNATURE_LEN:]
+
+        try:
+            Ed25519PublicKey.from_public_bytes(ed_pub_bytes).verify(ed_sig, message)
+        except Exception:
+            return False
+
+        try:
+            with oqs.Signature(SIG_ALG) as verifier:
+                if not verifier.verify(message, dsa_sig, dsa_pub_bytes):
+                    return False
+        except Exception:
+            return False
+
+        return True
+
+    elif len(ik_sig_pub) == DSA_PUBLIC_KEY_LEN:
+        # Legacy ML-DSA-87-only key — transition window, Ed25519 leg unavailable.
+        if len(signature) == DSA_SIGNATURE_LEN:
+            dsa_sig = signature
+        elif len(signature) == HYBRID_SIGNATURE_LEN:
+            dsa_sig = signature[ED25519_SIGNATURE_LEN:]
+        else:
+            raise MalformedSignedCiphertextError(
+                f"signature must be {DSA_SIGNATURE_LEN} or {HYBRID_SIGNATURE_LEN} bytes "
+                f"for a legacy key, got {len(signature)}."
+            )
+
+        try:
+            with oqs.Signature(SIG_ALG) as verifier:
+                return verifier.verify(message, dsa_sig, ik_sig_pub)
+        except Exception:
+            return False
+
+    else:
         raise MalformedSignedCiphertextError(
-            f"ik_sig_pub must be {HYBRID_PUBLIC_KEY_LEN} bytes, got {len(ik_sig_pub)}."
+            f"ik_sig_pub must be {HYBRID_PUBLIC_KEY_LEN} (hybrid) or "
+            f"{DSA_PUBLIC_KEY_LEN} (legacy) bytes, got {len(ik_sig_pub)}."
         )
-    if len(signature) != HYBRID_SIGNATURE_LEN:
-        raise MalformedSignedCiphertextError(
-            f"signature must be {HYBRID_SIGNATURE_LEN} bytes, got {len(signature)}."
-        )
-
-    ed_pub_bytes  = ik_sig_pub[:ED25519_PUBLIC_KEY_LEN]
-    dsa_pub_bytes = ik_sig_pub[ED25519_PUBLIC_KEY_LEN:]
-    ed_sig        = signature[:ED25519_SIGNATURE_LEN]
-    dsa_sig       = signature[ED25519_SIGNATURE_LEN:]
-
-    try:
-        Ed25519PublicKey.from_public_bytes(ed_pub_bytes).verify(ed_sig, message)
-    except Exception:
-        return False
-
-    try:
-        with oqs.Signature(SIG_ALG) as verifier:
-            if not verifier.verify(message, dsa_sig, dsa_pub_bytes):
-                return False
-    except Exception:
-        return False
-
-    return True
 
 
 def verify_spk_signature(
@@ -567,13 +596,14 @@ def verify_spk_signature(
 ) -> bool:
     """
     Verify that an SPK was signed by the expected hybrid Ed25519 + ML-DSA-87 identity key.
-    Returns True if both signatures are valid. Returns False otherwise — abort session initiation.
+    Returns True if both signatures are valid. Returns False for a cryptographic failure.
     Both algorithms must verify independently; neither alone is sufficient.
+
+    Raises MalformedSignedCiphertextError if ik_sig_pub or signature is structurally invalid
+    (wrong length, corrupt key from server). Callers must distinguish this from a False return,
+    which indicates a genuine signature failure on well-formed input.
     """
-    try:
-        return verify_hybrid_signature(spk_pub, signature, ik_sig_pub)
-    except MalformedSignedCiphertextError:
-        return False
+    return verify_hybrid_signature(spk_pub, signature, ik_sig_pub)
 
 
 def replenish_one_time_prekeys(
