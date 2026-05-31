@@ -144,85 +144,101 @@ void AuthController::signUp(
     const QString& password,
     const QString& confirmPassword)
 {
-    const QString normalized =
-        username.trimmed();
+    const QString normalized = username.trimmed();
 
-    if (normalized.isEmpty() ||
-        password.isEmpty()) {
-
-        setAuthError(
-            "Username and password are required.");
-
+    if (normalized.isEmpty() || password.isEmpty()) {
+        setAuthError("Username and password are required.");
         emit registrationFailed(m_authError);
-
         return;
     }
 
     if (password != confirmPassword) {
-
-        setAuthError(
-            "Passwords do not match.");
-
+        setAuthError("Passwords do not match.");
         emit registrationFailed(m_authError);
-
         return;
     }
 
-    const QJsonObject bundle =
-        m_crypto->generateIdentityBundle(
-            password);
+    // Step 1: fetch a single-use nonce from the server for proof-of-possession.
+    auto nonceSuccessConn = std::make_shared<QMetaObject::Connection>();
+    auto nonceFailConn    = std::make_shared<QMetaObject::Connection>();
 
-    if (bundle.isEmpty()) {
-
-        const QString reason =
-            m_crypto->lastError().isEmpty()
-                ? "Key generation failed."
-                : m_crypto->lastError();
-
-        setAuthError(reason);
-
-        emit registrationFailed(reason);
-
-        return;
-    }
-
-    auto regSuccessConn = std::make_shared<QMetaObject::Connection>();
-    auto regFailConn    = std::make_shared<QMetaObject::Connection>();
-
-    *regSuccessConn = connect(
+    *nonceSuccessConn = connect(
         m_api,
-        &ApiClient::registerUserSucceeded,
+        &ApiClient::fetchRegistrationNonceSucceeded,
         this,
-        [this, regFailConn]() {
+        [this, normalized, password, nonceFailConn](const QString& nonce) {
 
-            QObject::disconnect(*regFailConn);
+            QObject::disconnect(*nonceFailConn);
 
-            setAuthError(QString());
+            // Step 2: generate all key material including SRP verifier (sync RPC).
+            const QJsonObject bundle =
+                m_crypto->generateIdentityBundle(normalized, password, nonce);
 
-            emit registrationSucceeded();
+            if (bundle.isEmpty()) {
+                const QString reason =
+                    m_crypto->lastError().isEmpty()
+                        ? "Key generation failed."
+                        : m_crypto->lastError();
+                setAuthError(reason);
+                emit registrationFailed(reason);
+                return;
+            }
+
+            // Step 3: register with the server.
+            auto regSuccessConn = std::make_shared<QMetaObject::Connection>();
+            auto regFailConn    = std::make_shared<QMetaObject::Connection>();
+
+            *regSuccessConn = connect(
+                m_api,
+                &ApiClient::registerUserSucceeded,
+                this,
+                [this, regFailConn](const QString& deviceId) {
+
+                    QObject::disconnect(*regFailConn);
+
+                    // Persist device ID for subsequent logins.
+                    m_api->storeDeviceId(deviceId);
+
+                    setAuthError(QString());
+                    emit registrationSucceeded();
+                },
+                Qt::SingleShotConnection);
+
+            *regFailConn = connect(
+                m_api,
+                &ApiClient::registerUserFailed,
+                this,
+                [this, regSuccessConn](const QString& reason) {
+
+                    QObject::disconnect(*regSuccessConn);
+
+                    const QString failureReason =
+                        reason.isEmpty() ? "Registration failed." : reason;
+                    setAuthError(failureReason);
+                    emit registrationFailed(failureReason);
+                },
+                Qt::SingleShotConnection);
+
+            m_api->registerUser(normalized, bundle);
         },
         Qt::SingleShotConnection);
 
-    *regFailConn = connect(
+    *nonceFailConn = connect(
         m_api,
-        &ApiClient::registerUserFailed,
+        &ApiClient::fetchRegistrationNonceFailed,
         this,
-        [this, regSuccessConn](const QString& reason) {
+        [this, nonceSuccessConn](const QString& reason) {
 
-            QObject::disconnect(*regSuccessConn);
+            QObject::disconnect(*nonceSuccessConn);
 
             const QString failureReason =
-                reason.isEmpty()
-                    ? "Registration failed."
-                    : reason;
-
+                reason.isEmpty() ? "Registration failed." : reason;
             setAuthError(failureReason);
-
             emit registrationFailed(failureReason);
         },
         Qt::SingleShotConnection);
 
-    m_api->registerUser(normalized, bundle);
+    m_api->fetchRegistrationNonce();
 }
 
 void AuthController::logout()
