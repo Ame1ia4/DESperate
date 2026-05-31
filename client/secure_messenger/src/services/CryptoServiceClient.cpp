@@ -54,13 +54,58 @@ bool CryptoServiceClient::unlockKeystore(
 
 QJsonObject
 CryptoServiceClient::generateIdentityBundle(
-    const QString& password)
+    const QString& username,
+    const QString& password,
+    const QString& nonce)
 {
     return rpc(
         "generate_identity_bundle",
         {
-            {"password", password}
+            {"username", username},
+            {"password", password},
+            {"nonce",    nonce}
         });
+}
+
+QString CryptoServiceClient::srpStart(
+    const QString& username,
+    const QString& password)
+{
+    const QJsonObject response =
+        rpc("srp_start", {{"username", username}, {"password", password}});
+
+    if (response.isEmpty()) {
+        return {};
+    }
+
+    return response.value("A").toString();
+}
+
+QString CryptoServiceClient::srpChallenge(
+    const QString& saltHex,
+    const QString& bHex)
+{
+    const QJsonObject response =
+        rpc("srp_challenge", {{"salt", saltHex}, {"B", bHex}});
+
+    if (response.isEmpty()) {
+        return {};
+    }
+
+    return response.value("M1").toString();
+}
+
+bool CryptoServiceClient::srpVerify(
+    const QString& m2Hex)
+{
+    const QJsonObject response =
+        rpc("srp_verify", {{"M2", m2Hex}});
+
+    if (response.isEmpty()) {
+        return false;
+    }
+
+    return response.value("authenticated").toBool(false);
 }
 
 QJsonObject
