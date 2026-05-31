@@ -33,10 +33,11 @@
 
     QQmlApplicationEngine engine;
 
-    // Core services
-    ApiClient apiClient;
-
+    // Core services — cryptoClient must be declared before apiClient
+    // so apiClient can hold a pointer to it.
     CryptoServiceClient cryptoClient;
+
+    ApiClient apiClient(&cryptoClient);
 
     // Persistent local stores
     TrustStore trustStore;

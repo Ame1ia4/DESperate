@@ -18,7 +18,22 @@ public:
         const QString& password);
 
     QJsonObject generateIdentityBundle(
+        const QString& username,
+        const QString& password,
+        const QString& nonce);
+
+    // SRP-6a client session (RFC 5054, 3072-bit group, SHA-256).
+    // Call srpStart → srpChallenge → srpVerify in order.
+    QString srpStart(
+        const QString& username,
         const QString& password);
+
+    QString srpChallenge(
+        const QString& saltHex,
+        const QString& bHex);
+
+    bool srpVerify(
+        const QString& m2Hex);
 
     // Synchronous APIs
     QJsonObject encryptMessage(
