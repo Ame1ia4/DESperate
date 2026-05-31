@@ -2,13 +2,11 @@ import { describe, it, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import express from 'express'
-import * as srpClient from 'secure-remote-password/client.js'
-import * as srpServer from 'secure-remote-password/server.js'
+import { createSRPClient, createSRPServer } from 'js-srp6a'
 import { authVerify } from '../../middleware/auth_verify.js'
 import { consumeSessionKey } from '../../state/session_keys.js'
 import {
   SRP_EPHEMERAL_HEX,
-  SRP_EPHEMERAL_HEX_MIN,
   SRP_SESSION_PROOF_HEX,
 } from '../../constants/auth.js'
 
@@ -18,13 +16,16 @@ const USERNAME  = 'testuser'
 const PASSWORD  = 'correct-horse-battery-staple'
 const DEVICE_ID = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
 
+const srpClient = createSRPClient('SHA-256', 3072)
+const srpServer = createSRPServer('SHA-256', 3072)
+
 const salt       = srpClient.generateSalt()
-const privateKey = srpClient.derivePrivateKey(salt, USERNAME, PASSWORD)
+const privateKey = await srpClient.derivePrivateKey(salt, USERNAME, PASSWORD)
 const verifier   = srpClient.deriveVerifier(privateKey)
 
-const serverEphemeral = srpServer.generateEphemeral(verifier)
+const serverEphemeral = await srpServer.generateEphemeral(verifier)
 const clientEphemeral = srpClient.generateEphemeral()
-const clientSession   = srpClient.deriveSession(
+const clientSession   = await srpClient.deriveSession(
   clientEphemeral.secret,
   serverEphemeral.public,
   salt,
@@ -43,7 +44,7 @@ function seqQueryImpl(...responses) {
 }
 
 // Shape from the device+user JOIN in auth_verify
-const knownCreds     = () => ({ srp_salt: salt, srp_verifier: verifier })
+const knownCreds      = () => ({ srp_salt: salt, srp_verifier: verifier })
 const activeChallenge = () => ({ srp_server_secret: serverEphemeral.secret })
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -111,7 +112,7 @@ describe('POST /auth/login', () => {
 
     it('serverSessionProof passes client-side SRP verification (mutual auth)', async () => {
       const res = await post(validBody())
-      assert.doesNotThrow(() =>
+      await assert.doesNotReject(() =>
         srpClient.verifySession(
           clientEphemeral.public,
           clientSession,
@@ -233,9 +234,9 @@ describe('POST /auth/login', () => {
       assert.strictEqual((await post(body)).status, 400)
     })
 
-    it('rejects clientPublicEphemeral below minimum length', async () => {
+    it('rejects empty clientPublicEphemeral', async () => {
       assert.strictEqual(
-        (await post({ ...validBody(), clientPublicEphemeral: 'a'.repeat(SRP_EPHEMERAL_HEX_MIN - 1) })).status,
+        (await post({ ...validBody(), clientPublicEphemeral: '' })).status,
         400
       )
     })

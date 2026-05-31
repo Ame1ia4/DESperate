@@ -11,7 +11,6 @@ export const MLDSA_SIG_BYTES    = ml_dsa87.lengths.signature   // 4627 bytes (ML
 export const MLKEM_PUB_BYTES    = ml_kem1024.lengths.publicKey // 1568 bytes (ML-KEM-1024)
 // Hybrid signing public key: [ed25519_pub (32 B) || ml_dsa87_pub (2592 B)]
 export const SIGNING_PUB_BYTES  = ED25519_PUB_BYTES + MLDSA_PUB_BYTES  // 2624 bytes
-export const SIG_BYTES          = MLDSA_SIG_BYTES                       // ML-DSA-87 signature
 // Dual signature: [ed25519_sig (64 B) || ml_dsa87_sig (4627 B)]
 export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES   // 4691 bytes
 
@@ -23,11 +22,9 @@ export const DUAL_SIG_BYTES     = ED25519_SIG_BYTES + MLDSA_SIG_BYTES   // 4691 
 // Salt: RFC 5054 §2.8.2 allows 1–255 bytes; 64 hex chars (32 bytes) is the
 // secure-remote-password library default, not RFC-mandated.
 
-export const SRP_SALT_HEX          = 64   // library default (32 bytes)
-export const SRP_VERIFIER_HEX      = 512  // RFC 5054 Appendix A §3 — 2048-bit group
-export const SRP_EPHEMERAL_HEX     = 512  // 2048-bit group: A,B = g^x mod N < 2^2048 → ≤256 bytes = 512 hex chars
-export const SRP_EPHEMERAL_HEX_MIN = 256  // lower bound: real 2048-bit group values are always close to 512 chars;
-                                          // 256 tolerates libraries that strip leading zeros without accepting garbage
+export const SRP_SALT_HEX          = 64   // js-srp6a default: hashBytes['SHA-256'] = 32 bytes
+export const SRP_VERIFIER_HEX      = 768  // RFC 5054 Appendix A §3 — 3072-bit group: 384 bytes = 768 hex chars
+export const SRP_EPHEMERAL_HEX     = 768  // 3072-bit group: A,B = g^x mod N < 2^3072 → ≤384 bytes = 768 hex chars
 export const SRP_SESSION_PROOF_HEX = 64   // M1/M2 = SHA-256 output = 32 bytes = 64 hex chars
 
 // ── requireAuth proof ───────────────────────────────────────────────────────

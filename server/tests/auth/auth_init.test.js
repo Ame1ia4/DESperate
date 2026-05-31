@@ -8,7 +8,6 @@ import {
   USERNAME_MAX,
   SRP_SALT_HEX,
   SRP_EPHEMERAL_HEX,
-  SRP_EPHEMERAL_HEX_MIN,
 } from '../../constants/auth.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -16,7 +15,7 @@ import {
 const validEphemeral = () => randomBytes(SRP_EPHEMERAL_HEX / 2).toString('hex')
 
 const FAKE_DB_SALT     = 'b'.repeat(SRP_SALT_HEX)
-const FAKE_DB_VERIFIER = 'a'.repeat(512)
+const FAKE_DB_VERIFIER = 'a'.repeat(768)
 const VALID_DEVICE_ID  = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
 
 // Shape returned by the JOIN query in auth_init
@@ -83,7 +82,7 @@ describe('POST /auth/init', () => {
       assert.strictEqual(res.body.salt, FAKE_DB_SALT)
     })
 
-    it('serverPublicEphemeral is a 512-char hex string (RFC 5054 Appendix A §3)', async () => {
+    it('serverPublicEphemeral is a 768-char hex string (RFC 5054 Appendix A §3, 3072-bit group)', async () => {
       const res = await post(validBody())
       assert.strictEqual(res.body.serverPublicEphemeral.length, SRP_EPHEMERAL_HEX)
       assert.match(res.body.serverPublicEphemeral, /^[0-9a-f]+$/i)
@@ -243,13 +242,13 @@ describe('POST /auth/init', () => {
       assert.strictEqual(res.status, 200)
     })
 
-    it('accepts clientPublicEphemeral at minimum length (SRP_EPHEMERAL_HEX_MIN)', async () => {
-      const res = await post({ ...validBody(), clientPublicEphemeral: 'a'.repeat(SRP_EPHEMERAL_HEX_MIN) })
+    it('accepts a single hex char as clientPublicEphemeral (A mod N ≠ 0 is enforced by the library, not length)', async () => {
+      const res = await post({ ...validBody(), clientPublicEphemeral: 'a' })
       assert.strictEqual(res.status, 200)
     })
 
-    it('rejects clientPublicEphemeral below minimum length', async () => {
-      const res = await post({ ...validBody(), clientPublicEphemeral: 'a'.repeat(SRP_EPHEMERAL_HEX_MIN - 1) })
+    it('rejects empty clientPublicEphemeral', async () => {
+      const res = await post({ ...validBody(), clientPublicEphemeral: '' })
       assert.strictEqual(res.status, 400)
     })
 
@@ -266,20 +265,6 @@ describe('POST /auth/init', () => {
     it('rejects clientPublicEphemeral with non-hex characters', async () => {
       const res = await post({ ...validBody(), clientPublicEphemeral: 'z'.repeat(SRP_EPHEMERAL_HEX) })
       assert.strictEqual(res.status, 400)
-    })
-  })
-
-  describe('SRP ephemeral secret strength', () => {
-    it('returns 500 if the library produces a b shorter than 256 bits (< 64 hex chars)', async () => {
-      const srpModule = await import('secure-remote-password/server.js')
-      const original = srpModule.generateEphemeral
-      srpModule.generateEphemeral = () => ({ secret: 'a'.repeat(63), public: 'b'.repeat(512) })
-      try {
-        const res = await post(validBody())
-        assert.strictEqual(res.status, 500)
-      } finally {
-        srpModule.generateEphemeral = original
-      }
     })
   })
 

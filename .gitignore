@@ -64,6 +64,11 @@ __pycache__/
 logs/
 *.log
 
+# ── Python / PyInstaller ──────────────────────────────────────────
+dist/
+*.spec.bak
+client/cryptography/build/
+
 # ── Test coverage ─────────────────────────────────────────────────
 coverage/
 .nyc_output/

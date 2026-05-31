@@ -258,18 +258,55 @@ Set `HAS_QT` to `true` in GitHub → Settings → Actions → Variables to enabl
 
 ## Cryptography Microservice
 
-### Install
-in the `client/cryptography/` folder first run:
+The crypto service is a Python TCP server (`client/cryptography/main.py`) that handles all E2EE key operations for the Qt client. It needs to be built into a self-contained `.exe` before the Qt app can auto-start it.
 
-python -m venv venv
+### Prerequisites
 
-to create the virtual enviroment
+- Python 3.11+
+- cmake and MinGW gcc — both ship with Qt at `C:\Qt\Tools\CMake_64\bin` and `C:\Qt\Tools\mingw1310_64\bin`
 
-then:
-if on mac/linux: 
-source venv/bin/activate        
-if on windows :
-venv\Scripts\activate           
+### Install dependencies
 
-then: 
+In `client/cryptography/`:
+
+```bash
 pip install -r requirements.txt
+pip install pyinstaller
+```
+
+### Build the executable bundle
+
+Run with cmake and MinGW on your PATH (they come with Qt):
+
+**PowerShell:**
+```powershell
+$env:PATH = "C:\Qt\Tools\CMake_64\bin;C:\Qt\Tools\mingw1310_64\bin;$env:PATH"
+$env:CMAKE_GENERATOR = "MinGW Makefiles"
+python -m PyInstaller crypto_service.spec
+```
+
+**Git Bash / MSYS2:**
+```bash
+export PATH="/c/Qt/Tools/CMake_64/bin:/c/Qt/Tools/mingw1310_64/bin:$PATH"
+export CMAKE_GENERATOR="MinGW Makefiles"
+python -m PyInstaller crypto_service.spec
+```
+
+This produces `dist/crypto_service/crypto_service.exe` with `liboqs.dll` and all other dependencies bundled — no Python required on the end user's machine.
+
+> The first build also compiles liboqs from source into `C:\Users\<you>\_oqs`. This takes a few minutes but only happens once per machine.
+
+### Wire into Qt Creator
+
+After building, rebuild the Qt project in Qt Creator. The CMake post-build step copies `dist/crypto_service/` next to the Qt binary automatically. The Qt app then auto-starts the service on login/signup.
+
+### Rebuild after changes to main.py
+
+Re-run `python -m PyInstaller crypto_service.spec`, then rebuild in Qt Creator.
+
+### Run tests
+
+```bash
+cd client/cryptography
+pytest
+```
