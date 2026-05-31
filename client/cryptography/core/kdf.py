@@ -89,10 +89,15 @@ INFO_LOCAL_KEY_ENC      = b"local-v1-key-encryption"
 # password hash salt.
 INFO_LOCAL_KEY_MASTER   = b"local-v1-master-key"
 
+# SRP synthetic password — derives the password string fed into pysrp so that
+# the SRP verifier is protected by Argon2id rather than only SHA-256.
+# Must differ from INFO_LOCAL_KEY_ENC to ensure key independence.
+INFO_SRP_AUTH           = b"srp-v1-auth"
+
 
 # Argon2id functions have moved to core/password.py.
 # Re-exported here so existing callers importing from core.kdf continue to work.
-from .password import argon2id_hash, argon2id_verify, argon2id_derive_key
+from .password import argon2id_hash, argon2id_verify, argon2id_derive_key, derive_master_components
 
 # Argon2id parameter constants live in core/constants.py.
 # Re-exported here so existing callers importing from core.kdf continue to work

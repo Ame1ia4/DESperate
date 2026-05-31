@@ -15,6 +15,7 @@ Compile to a standalone binary with PyInstaller:
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -31,13 +32,19 @@ import srp as _srp
 
 from core.keys import generate_identity_bundle as _gen_bundle
 from core.srp_session import SrpSession, _SRP_3072_KWARGS
+from core.password import derive_master_components
 
 HOST = "127.0.0.1"
 PORT = 54231
 
+# Persisted Argon2id salt for the master password derivation.
+# Written once at registration; read on every login.
+_MASTER_SALT_PATH = Path.home() / ".desperate" / "master_salt"
+
 # ── In-memory service state ──────────────────────────────────────────────────
 
-_srp_session: SrpSession | None = None
+_srp_session:        SrpSession | None = None
+_cached_keystore_key: bytes | None     = None  # set by srp_start, consumed by unlock_keystore
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -58,6 +65,24 @@ def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
     return salt, verifier
 
 
+def _write_master_salt(salt: bytes) -> None:
+    _MASTER_SALT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _MASTER_SALT_PATH.with_suffix(".tmp")
+    with open(tmp, "wb") as f:
+        f.write(salt)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(_MASTER_SALT_PATH)
+
+
+def _load_master_salt() -> bytes:
+    if not _MASTER_SALT_PATH.exists():
+        raise FileNotFoundError(
+            "Master salt not found — register before logging in."
+        )
+    return _MASTER_SALT_PATH.read_bytes()
+
+
 def _dual_sign(ed25519_priv: Ed25519PrivateKey, mldsa_secret: bytes, message: bytes) -> bytes:
     """
     Produce a dual signature: Ed25519 (64 B) || ML-DSA-87 (4627 B) = 4691 bytes.
@@ -75,12 +100,20 @@ def _dual_sign(ed25519_priv: Ed25519PrivateKey, mldsa_secret: bytes, message: by
 # ── RPC handlers ─────────────────────────────────────────────────────────────
 
 def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global _srp_session
+    global _srp_session, _cached_keystore_key
 
     # ── SRP authentication ────────────────────────────────────────────────────
 
     if method == "srp_start":
-        _srp_session = SrpSession(params["username"], params["password"])
+        # Discard any stale session from a previous incomplete flow.
+        _srp_session = None
+        _cached_keystore_key = None
+        master_salt = _load_master_salt()
+        srp_pass, keystore_key, _ = derive_master_components(
+            params["password"], master_salt
+        )
+        _cached_keystore_key = keystore_key
+        _srp_session = SrpSession(params["username"], srp_pass.hex())
         return {"A": _srp_session.A_hex}
 
     if method == "srp_challenge":
@@ -94,6 +127,8 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("No SRP session active — call srp_start first")
         authenticated = _srp_session.verify_server(params["M2"])
         _srp_session = None
+        if not authenticated:
+            _cached_keystore_key = None
         return {"authenticated": authenticated}
 
     # ── Key bundle generation (registration) ──────────────────────────────────
@@ -117,7 +152,9 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         spk_sig     = _dual_sign(ed25519_priv, bundle.ik_sig.secret_key,
                                  bundle.spk.keypair.public_key_bytes)
 
-        salt_bytes, verifier_bytes = _create_srp_verifier(username, password)
+        srp_pass, _keystore_key, master_salt = derive_master_components(password)
+        _write_master_salt(master_salt)
+        salt_bytes, verifier_bytes = _create_srp_verifier(username, srp_pass.hex())
 
         return {
             "srp_salt":               salt_bytes.hex(),
@@ -134,12 +171,17 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── Keystore ──────────────────────────────────────────────────────────────
 
     if method == "unlock_keystore":
-        # Keystore unlock verifies the password can decrypt local state.
-        # For now, accept any non-empty password — full implementation
-        # requires a persisted encrypted keystore (state_store.py).
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
+        # Use the keystore key cached during srp_start if available;
+        # otherwise re-derive (e.g. unlock without a preceding SRP flow).
+        keystore_key = _cached_keystore_key
+        _cached_keystore_key = None
+        if keystore_key is None:
+            master_salt = _load_master_salt()
+            _, keystore_key, _ = derive_master_components(password, master_salt)
+        # keystore_key is ready — StateStore integration wired when ratchet state is introduced
         return {"success": True}
 
     # ── Message encryption/decryption (Double Ratchet) ────────────────────────
