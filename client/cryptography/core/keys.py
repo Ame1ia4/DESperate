@@ -362,6 +362,11 @@ class IdentityBundle:
             )
             for opk in d["opks_kem"]
         ]
+        spk_pub = bytes.fromhex(d["spk_pub"])
+        spk_sig = bytes.fromhex(d["spk_sig"])
+        ik_sig_pub = bytes.fromhex(d["ik_sig_pub"])
+        if not verify_spk_signature(spk_pub, spk_sig, ik_sig_pub):
+            raise ValueError("SPK signature verification failed — bundle is corrupt or tampered")
         return cls(
             user_id      = d["user_id"],
             ik_kem       = KEMKeypair(
@@ -369,7 +374,7 @@ class IdentityBundle:
                 secret_key = bytes.fromhex(d["ik_kem_sec"]),
             ),
             ik_sig       = SigningKeypair(
-                public_key = bytes.fromhex(d["ik_sig_pub"]),
+                public_key = ik_sig_pub,
                 secret_key = bytes.fromhex(d["ik_sig_sec"]),
             ),
             ik_classical = X25519Keypair(
@@ -380,7 +385,7 @@ class IdentityBundle:
                 keypair   = X25519Keypair(
                     X25519PrivateKey.from_private_bytes(bytes.fromhex(d["spk_sec"]))
                 ),
-                signature = bytes.fromhex(d["spk_sig"]),
+                signature = spk_sig,
             ),
             x25519_opks  = x25519_opks,
             kem_opks     = kem_opks,

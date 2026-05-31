@@ -15,7 +15,6 @@ Compile to a standalone binary with PyInstaller:
 from __future__ import annotations
 
 import json
-import os
 import socket
 import sys
 from pathlib import Path
@@ -79,13 +78,13 @@ def _identity_ad(user_id: str) -> bytes:
 
 
 def _write_master_salt(salt: bytes) -> None:
-    _MASTER_SALT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _MASTER_SALT_PATH.with_suffix(".tmp")
-    with open(tmp, "wb") as f:
-        f.write(salt)
-        f.flush()
-        os.fsync(f.fileno())
-    tmp.replace(_MASTER_SALT_PATH)
+    if _MASTER_SALT_PATH.exists():
+        raise FileExistsError(
+            "Master salt already exists — registration may only run once. "
+            "Delete ~/.desperate/ to start fresh."
+        )
+    _APP_DIR.mkdir(parents=True, exist_ok=True)
+    _atomic_write(_MASTER_SALT_PATH, salt)
 
 
 def _load_master_salt() -> bytes:
@@ -142,6 +141,8 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         _srp_session = None
         if not authenticated:
             _cached_keystore_key = None
+            _identity_bundle = None
+            _ed25519_priv    = None
         return {"authenticated": authenticated}
 
     # ── Key bundle generation (registration) ──────────────────────────────────
@@ -175,6 +176,11 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             Encoding.Raw, PrivateFormat.Raw, NoEncryption()
         ).hex()
         plaintext = json.dumps(private_data, separators=(",", ":")).encode()
+        if _IDENTITY_PATH.exists():
+            raise FileExistsError(
+                "Identity bundle already exists — registration may only run once. "
+                "Delete ~/.desperate/ to start fresh."
+            )
         blob = encrypt_blob(keystore_key, plaintext, _identity_ad(username))
         _atomic_write(_IDENTITY_PATH, blob)
         _atomic_write(_USER_ID_PATH, username.encode())
@@ -195,13 +201,15 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
     if method == "unlock_keystore":
         global _identity_bundle, _ed25519_priv
+        # Consume the cached key immediately so it is cleared regardless of
+        # whether the call succeeds, fails, or returns early.
+        keystore_key = _cached_keystore_key
+        _cached_keystore_key = None
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
-        # Use the keystore key cached during srp_start if available;
+        # Use the key cached during srp_start if available;
         # otherwise re-derive (e.g. unlock called standalone without SRP).
-        keystore_key = _cached_keystore_key
-        _cached_keystore_key = None
         if keystore_key is None:
             master_salt = _load_master_salt()
             _, keystore_key, _ = derive_master_components(password, master_salt)
@@ -209,7 +217,7 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             user_id   = _USER_ID_PATH.read_bytes().decode()
             blob      = _IDENTITY_PATH.read_bytes()
             plaintext = decrypt_blob(keystore_key, blob, _identity_ad(user_id))
-        except (FileNotFoundError, InvalidTag):
+        except (FileNotFoundError, InvalidTag, ValueError):
             return {"success": False, "error": "Keystore unlock failed"}
         private_data     = json.loads(plaintext.decode())
         ed25519_sec_hex  = private_data.pop("ed25519_sec")
