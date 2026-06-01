@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ from core.keys import (
     generate_identity_bundle as _gen_bundle,
     IdentityBundle,
 )
+from core.password import derive_master_components
 from core.srp_session import SrpSession
 from core.pqxdh import (
     initiate  as _pqxdh_initiate,
@@ -78,9 +80,11 @@ def _run(coro: Any) -> Any:
 
 # ── Module-level state ────────────────────────────────────────────────────────
 
-_srp_session:  Optional[SrpSession]   = None
-_store:        Optional[StateStore]   = None
-_local_bundle: Optional[IdentityBundle] = None
+_srp_session:        Optional[SrpSession]    = None
+_store:              Optional[StateStore]    = None
+_local_bundle:       Optional[IdentityBundle] = None
+_cached_srp_pass:    Optional[bytes]         = None   # derived by unlock_keystore; reused by srp_start
+_cached_keystore_key: Optional[bytes]        = None   # retained for future rekey operations
 
 
 @dataclass
@@ -149,12 +153,10 @@ def _require_session(conversation_id: str) -> _SessionEntry:
     )
 
 
-def _open_or_create_store(password: str) -> StateStore:
-    """Load an existing StateStore or create a fresh one."""
+def _load_master_salt() -> Optional[bytes]:
+    """Return the persisted Argon2id salt, or None if no keystore exists yet."""
     salt_path = _STORE_BASE_DIR / "salt"
-    if salt_path.exists():
-        return StateStore.load(_STORE_BASE_DIR, password)
-    return StateStore.create(_STORE_BASE_DIR, password)
+    return salt_path.read_bytes() if salt_path.exists() else None
 
 
 # ── RPC handlers ──────────────────────────────────────────────────────────────
@@ -165,22 +167,49 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── Keystore ──────────────────────────────────────────────────────────────
 
     if method == "unlock_keystore":
+        global _store, _local_bundle, _cached_srp_pass, _cached_keystore_key
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
-        _store = _open_or_create_store(password)
+
+        master_salt = _load_master_salt()
+        if master_salt is None:
+            # No keystore yet — bootstrap an empty store (rare: called before registration).
+            srp_pass, keystore_key, master_salt = derive_master_components(password)
+            _store = StateStore.create_with_key(_STORE_BASE_DIR, keystore_key, master_salt)
+        else:
+            srp_pass, keystore_key, _ = derive_master_components(password, master_salt)
+            _store = StateStore.load_with_key(_STORE_BASE_DIR, keystore_key)
+
+        _cached_srp_pass    = srp_pass
+        _cached_keystore_key = keystore_key
+
         # Load identity bundle if one has been persisted from a previous registration.
+        # InvalidTag here means the derived keystore_key is wrong (wrong password).
         if _store.state_exists(_BUNDLE_KEY):
-            raw = _store.load_state(_BUNDLE_KEY)
-            _local_bundle = IdentityBundle.from_private_bundle(raw)
+            try:
+                raw = _store.load_state(_BUNDLE_KEY)
+                _local_bundle = IdentityBundle.from_private_bundle(raw)
+            except InvalidTag:
+                _store = None
+                _cached_srp_pass    = None
+                _cached_keystore_key = None
+                return {"success": False, "error": "Wrong password"}
+
         return {"success": True}
 
     # ── Key bundle generation (registration) ──────────────────────────────────
 
     if method == "generate_identity_bundle":
+        global _store, _local_bundle, _cached_srp_pass, _cached_keystore_key
         username  = params["username"]
         password  = params["password"]
         nonce_hex = params["nonce"]
+
+        # Derive SRP synthetic password and keystore encryption key from one Argon2id call.
+        srp_pass, keystore_key, master_salt = derive_master_components(password)
+        _cached_srp_pass    = srp_pass
+        _cached_keystore_key = keystore_key
 
         bundle = _gen_bundle(user_id=username)
 
@@ -193,26 +222,19 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         nonce_sig   = bundle.ik_sig.sign(nonce_bytes)             # 4691 bytes
         spk_sig     = bundle.ik_sig.sign(bundle.spk.keypair.public_key_bytes)  # 4691 bytes
 
-        salt_bytes, verifier_bytes = _create_srp_verifier(username, password)
+        # SRP verifier is computed from the derived srp_pass (hex), NOT the raw password.
+        # This matches what srp_start does on every subsequent login.
+        salt_bytes, verifier_bytes = _create_srp_verifier(username, srp_pass.hex())
 
-        # Persist the private bundle so unlock_keystore can restore it on restart.
-        # If the keystore wasn't opened first, bootstrap it with this password.
+        # Persist the private bundle encrypted under keystore_key.
         if _store is None:
-            _store = _open_or_create_store(password)
-            # If an existing keystore was loaded, verify the password by attempting
-            # a test decrypt.  If it fails, the user registered previously with a
-            # different password and we must not silently overwrite with the wrong key.
-            if _store is not None:
-                try:
-                    _store.load_state(_BUNDLE_KEY)
-                except FileNotFoundError:
-                    pass  # first-time registration — no bundle persisted yet, fine
-                except InvalidTag:
-                    _store = None
-                    raise ValueError(
-                        "Keystore exists but password is wrong — delete "
-                        f"{_STORE_BASE_DIR} to start fresh, or use the original password."
-                    )
+            if (_STORE_BASE_DIR / "salt").exists():
+                # Salt file was written by a previous registration attempt that crashed
+                # before save_state completed. Reuse the existing store rather than
+                # failing with FileExistsError.
+                _store = StateStore.load_with_key(_STORE_BASE_DIR, keystore_key)
+            else:
+                _store = StateStore.create_with_key(_STORE_BASE_DIR, keystore_key, master_salt)
         _store.save_state(_BUNDLE_KEY, bundle.to_private_bundle())
         _local_bundle = bundle
 
@@ -231,14 +253,23 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── SRP authentication ─────────────────────────────────────────────────────
 
     if method == "srp_start":
+        global _srp_session, _cached_srp_pass, _cached_keystore_key
         # Discard any stale session from a previous incomplete flow.
         _srp_session = None
-        _cached_keystore_key = None
-        master_salt = _load_master_salt()
-        srp_pass, keystore_key, _ = derive_master_components(
-            params["password"], master_salt
-        )
-        _cached_keystore_key = keystore_key
+
+        # Prefer the srp_pass cached by unlock_keystore to avoid running Argon2id twice.
+        # Fall back to re-deriving if srp_start is called without a prior unlock
+        # (e.g. the keystore doesn't exist yet on a fresh device).
+        if _cached_srp_pass is not None:
+            srp_pass = _cached_srp_pass
+        else:
+            master_salt = _load_master_salt()
+            srp_pass, keystore_key, _ = derive_master_components(
+                params["password"], master_salt
+            )
+            _cached_srp_pass    = srp_pass
+            _cached_keystore_key = keystore_key
+
         _srp_session = SrpSession(params["username"], srp_pass.hex())
         return {"A": _srp_session.A_hex}
 
@@ -257,6 +288,9 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         # session_token (from /auth/login) is used instead.
         session_key = _srp_session.session_key_hex if authenticated else None
         _srp_session = None
+        # srp_pass is no longer needed once authentication completes — clear it to
+        # reduce the window during which it lives in process memory.
+        _cached_srp_pass = None
         return {"authenticated": authenticated, "session_key": session_key}
 
     # ── Session initiation (PQXDH → Double Ratchet) ───────────────────────────
