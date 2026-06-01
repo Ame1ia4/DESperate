@@ -202,11 +202,15 @@ void ApiClient::doSrpVerify(
             return;
         }
 
-        // Mutual authentication: verify the server knows the session key
-        if (!m_crypto->srpVerify(M2)) {
+        // Mutual authentication — verify server's proof and get our session token.
+        const QString sessionKey = m_crypto->srpVerify(M2);
+        if (sessionKey.isEmpty()) {
             emit loginUserFailed(QStringLiteral("Server authentication failed."));
             return;
         }
+
+        // Store session key — sent as Bearer token in all subsequent requests.
+        setAuthToken(sessionKey);
 
         emit loginUserSucceeded();
     });
@@ -222,20 +226,17 @@ void ApiClient::setAuthToken(const QString& token)
 void ApiClient::sendMessage(
     const QJsonObject& encryptedEnvelope)
 {
-    auto request = makeRequest("/messages/send");
+    auto request = makeRequest("/messages");
     auto* reply  = m_network.post(request, QJsonDocument(encryptedEnvelope).toJson());
     connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }
 
 void ApiClient::pullMessages(
-    const QString& deviceId)
+    const QString& /*deviceId*/)
 {
-    auto request = makeRequest("/messages/pull");
-
-    QJsonObject body;
-    body["device_id"] = deviceId;
-
-    auto* reply = m_network.post(request, QJsonDocument(body).toJson());
+    // Device ID is carried in X-Device-ID header; not needed in the body.
+    auto request = makeRequest("/messages/pending");
+    auto* reply  = m_network.get(request);
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         const auto error  = reply->error();
@@ -256,15 +257,11 @@ void ApiClient::pullMessages(
 
 void ApiClient::acknowledgeMessage(
     const QString& messageId,
-    const QString& deviceId)
+    const QString& /*deviceId*/)
 {
-    auto request = makeRequest("/messages/ack");
-
-    QJsonObject body;
-    body["message_id"] = messageId;
-    body["device_id"]  = deviceId;
-
-    auto* reply = m_network.post(request, QJsonDocument(body).toJson());
+    // Device ID is carried in X-Device-ID header.
+    auto request = makeRequest("/messages/" + messageId + "/ack");
+    auto* reply  = m_network.post(request, QByteArray("{}"));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
         const auto error  = reply->error();
@@ -305,6 +302,59 @@ void ApiClient::fetchConversations()
     });
 }
 
+void ApiClient::fetchKeyBundle(const QString& username)
+{
+    auto request = makeRequest("/keys/" + username);
+    auto* reply  = m_network.get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = body.isEmpty()
+                ? QStringLiteral("Failed to fetch key bundle.")
+                : QString::fromUtf8(body);
+            emit fetchKeyBundleFailed(reason);
+            return;
+        }
+
+        const auto bundle = QJsonDocument::fromJson(body).object();
+        emit fetchKeyBundleSucceeded(bundle);
+    });
+}
+
+void ApiClient::createConversation(const QString& otherUsername)
+{
+    auto request = makeRequest("/conversations");
+
+    QJsonObject body;
+    body["other_username"] = otherUsername;
+
+    auto* reply = m_network.post(request, QJsonDocument(body).toJson());
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = body.isEmpty()
+                ? QStringLiteral("Failed to create conversation.")
+                : QString::fromUtf8(body);
+            emit createConversationFailed(reason);
+            return;
+        }
+
+        const auto parsed = QJsonDocument::fromJson(body).object();
+        const auto convId = parsed.value(QStringLiteral("conversationId")).toString();
+        emit createConversationSucceeded(convId);
+    });
+}
+
 // ── Private ───────────────────────────────────────────────────────────────────
 
 QNetworkRequest ApiClient::makeRequest(
@@ -325,6 +375,13 @@ QNetworkRequest ApiClient::makeRequest(
 
     // Always enforce TLS 1.3 with peer certificate verification.
     request.setSslConfiguration(TLSManager::defaultConfig());
+
+    // Session authentication headers — set on every request so protected
+    // routes can verify the device identity and session token.
+    const QString deviceId = storedDeviceId();
+    if (!deviceId.isEmpty()) {
+        request.setRawHeader("X-Device-ID", deviceId.toUtf8());
+    }
 
     if (!m_authToken.isEmpty()) {
         request.setRawHeader(

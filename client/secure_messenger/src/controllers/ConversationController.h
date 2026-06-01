@@ -64,6 +64,9 @@ public slots:
     Q_INVOKABLE QString deviceIdForConversation(
         const QString& conversationId) const;
 
+    Q_INVOKABLE QString participantForConversation(
+        const QString& conversationId) const;
+
 signals:
     void currentConversationIdChanged();
 
@@ -75,6 +78,11 @@ signals:
         QString receivedFingerprint);
 
 private:
+    // Fetch the participant's public key bundle and establish the PQXDH session.
+    void setupSessionAsync(
+        const QString& conversationId,
+        const QString& participant);
+
     bool validateMessage(
         const QString& plaintext) const;
 
@@ -94,6 +102,12 @@ private:
         QVector<DecryptedMessage>>
         m_messagesByConversation;
 
-    QHash<QString, QString>
-        m_deviceIds;
+    // conversationId → other participant's username
+    QHash<QString, QString> m_participants;
+
+    // conversationId → other participant's device ID
+    QHash<QString, QString> m_deviceIds;
+
+    // conversationIds for which a session fetch is already in-flight
+    QSet<QString> m_sessionFetchInFlight;
 };

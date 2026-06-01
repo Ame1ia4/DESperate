@@ -363,6 +363,57 @@ class IdentityBundle:
             ],
         }
 
+    @classmethod
+    def from_private_bundle(cls, d: dict) -> "IdentityBundle":
+        """
+        Reconstruct an IdentityBundle from the dict produced by to_private_bundle().
+        Used to reload private key material from the encrypted keystore.
+        """
+        ik_kem = KEMKeypair(
+            public_key = bytes.fromhex(d["ik_kem_pub"]),
+            secret_key = bytes.fromhex(d["ik_kem_sec"]),
+        )
+        ik_sig = SigningKeypair(
+            public_key         = bytes.fromhex(d["ik_sig_pub"]),
+            secret_key         = bytes.fromhex(d["ik_sig_sec"]),
+            ed25519_secret_key = bytes.fromhex(d["ik_sig_ed25519_sec"]),
+        )
+        ik_classical = X25519Keypair(
+            X25519PrivateKey.from_private_bytes(bytes.fromhex(d["ik_classical_sec"]))
+        )
+        spk = SignedPrekey(
+            spk_id    = d["spk_id"],
+            keypair   = X25519Keypair(
+                X25519PrivateKey.from_private_bytes(bytes.fromhex(d["spk_sec"]))
+            ),
+            signature = bytes.fromhex(d["spk_sig"]),
+        )
+        x25519_opks = [
+            X25519OneTimePrekey(
+                opk_id     = o["opk_id"],
+                public_key = bytes.fromhex(o["opk_pub"]),
+                secret_key = bytes.fromhex(o["opk_sec"]),
+            )
+            for o in d.get("opks_x25519", [])
+        ]
+        kem_opks = [
+            KEMOneTimePrekey(
+                opk_id     = o["opk_id"],
+                public_key = bytes.fromhex(o["opk_pub"]),
+                secret_key = bytes.fromhex(o["opk_sec"]),
+            )
+            for o in d.get("opks_kem", [])
+        ]
+        return cls(
+            user_id      = d.get("user_id", ""),
+            ik_kem       = ik_kem,
+            ik_sig       = ik_sig,
+            ik_classical = ik_classical,
+            spk          = spk,
+            x25519_opks  = x25519_opks,
+            kem_opks     = kem_opks,
+        )
+
     def __repr__(self) -> str:
         return (
             f"IdentityBundle(user_id={self.user_id!r}, "

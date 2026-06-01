@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
 
@@ -69,6 +70,7 @@ void ConversationController::loadConversations()
             items.reserve(data.size());
 
             m_deviceIds.clear();
+            m_participants.clear();
 
             for (const auto& value : data) {
 
@@ -110,12 +112,17 @@ void ConversationController::loadConversations()
                     m_trust->isVerified(
                         item.participant);
 
-                if (!item.conversationId.isEmpty() &&
-                    !item.deviceId.isEmpty()) {
-
-                    m_deviceIds.insert(
-                        item.conversationId,
-                        item.deviceId);
+                if (!item.conversationId.isEmpty()) {
+                    if (!item.deviceId.isEmpty()) {
+                        m_deviceIds.insert(
+                            item.conversationId,
+                            item.deviceId);
+                    }
+                    if (!item.participant.isEmpty()) {
+                        m_participants.insert(
+                            item.conversationId,
+                            item.participant);
+                    }
                 }
 
                 items.push_back(item);
@@ -161,10 +168,6 @@ void ConversationController::openConversation(
 
     m_messageModel->clear();
 
-    // Build the set of IDs already held in the in-memory cache so the
-    // store-replay loop below can skip duplicates.  Without this check
-    // any message added via appendLocalMessage() would appear twice:
-    // once from the cache and once from the persistent store.
     QSet<QString> cachedIds;
 
     const auto cachedMessages =
@@ -179,7 +182,6 @@ void ConversationController::openConversation(
         }
     }
 
-    // Replay from the persistent store, skipping anything already shown.
     const auto storedMessages =
         m_store->messagesForConversation(
             conversationId);
@@ -197,6 +199,60 @@ void ConversationController::openConversation(
             [conversationId]
                 .push_back(message);
     }
+
+    // Kick off PQXDH session setup in the background if not already running.
+    const QString participant =
+        m_participants.value(conversationId);
+
+    if (!participant.isEmpty() &&
+        !m_sessionFetchInFlight.contains(conversationId)) {
+
+        setupSessionAsync(conversationId, participant);
+    }
+}
+
+void ConversationController::setupSessionAsync(
+    const QString& conversationId,
+    const QString& participant)
+{
+    m_sessionFetchInFlight.insert(conversationId);
+
+    auto successConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn    = std::make_shared<QMetaObject::Connection>();
+
+    *successConn = connect(
+        m_apiClient,
+        &ApiClient::fetchKeyBundleSucceeded,
+        this,
+        [this, conversationId, failConn](const QJsonObject& bundle) {
+
+            QObject::disconnect(*failConn);
+            m_sessionFetchInFlight.remove(conversationId);
+
+            // Initiate PQXDH synchronously — this is a short TCP round-trip
+            // to the local Python service.
+            const QByteArray bundleJson =
+                QJsonDocument(bundle).toJson(QJsonDocument::Compact);
+
+            m_cryptoClient->initiateSession(conversationId, bundleJson);
+        },
+        Qt::SingleShotConnection);
+
+    *failConn = connect(
+        m_apiClient,
+        &ApiClient::fetchKeyBundleFailed,
+        this,
+        [this, conversationId, successConn](const QString& reason) {
+
+            QObject::disconnect(*successConn);
+            m_sessionFetchInFlight.remove(conversationId);
+
+            qWarning() << "fetchKeyBundle failed for conversation"
+                       << conversationId << ":" << reason;
+        },
+        Qt::SingleShotConnection);
+
+    m_apiClient->fetchKeyBundle(participant);
 }
 
 void ConversationController::appendLocalMessage(
@@ -232,8 +288,6 @@ bool ConversationController::verifyFingerprint(
             ->fingerprintForConversation(
                 conversationId);
 
-    // TOFU:
-    // First seen fingerprint becomes trusted.
     if (pinned.isEmpty()) {
 
         return m_conversationModel
@@ -279,5 +333,12 @@ QString ConversationController::deviceIdForConversation(
     const QString& conversationId) const
 {
     return m_deviceIds.value(
+        conversationId, QString());
+}
+
+QString ConversationController::participantForConversation(
+    const QString& conversationId) const
+{
+    return m_participants.value(
         conversationId, QString());
 }

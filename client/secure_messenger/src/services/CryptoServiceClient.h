@@ -32,10 +32,19 @@ public:
         const QString& saltHex,
         const QString& bHex);
 
-    bool srpVerify(
+    // Returns the session key hex on success (to be used as Bearer token),
+    // or an empty string on failure.
+    QString srpVerify(
         const QString& m2Hex);
 
-    // Synchronous APIs
+    // Establish a PQXDH session as the initiator.
+    // remoteBundleJson: JSON string returned by GET /keys/:username.
+    // Returns true if the session was established successfully.
+    bool initiateSession(
+        const QString& conversationId,
+        const QByteArray& remoteBundleJson);
+
+    // Synchronous encrypt/decrypt APIs
     QJsonObject encryptMessage(
         const QString& plaintext,
         const QString& recipientDeviceId,
@@ -98,7 +107,7 @@ private:
 
     QString m_lastError;
 
-    int m_rpcTimeoutMs = 3000;
+    int m_rpcTimeoutMs = 5000;
 
     QString m_serviceHost =
         QStringLiteral("127.0.0.1");

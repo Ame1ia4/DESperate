@@ -44,6 +44,12 @@ public:
 
     void fetchConversations();
 
+    // Fetch the public PQXDH key bundle for a username (GET /keys/:username).
+    void fetchKeyBundle(const QString& username);
+
+    // Create a new conversation with another user (POST /conversations).
+    void createConversation(const QString& otherUsername);
+
     QString storedDeviceId() const;
     void    storeDeviceId(const QString& deviceId);
 
@@ -60,6 +66,10 @@ signals:
     void pullMessagesFailed();
     void acknowledgeMessageSucceeded(QString messageId);
     void acknowledgeMessageFailed(QString messageId);
+    void fetchKeyBundleSucceeded(QJsonObject bundle);
+    void fetchKeyBundleFailed(QString reason);
+    void createConversationSucceeded(QString conversationId);
+    void createConversationFailed(QString reason);
 
 private:
     void doSrpInit(
@@ -73,12 +83,12 @@ private:
         const QString& A,
         const QString& M1);
 
+    QNetworkRequest makeRequest(
+        const QString& path
+        );
+
     QNetworkAccessManager m_network;
     CryptoServiceClient*  m_crypto = nullptr;
     QString               m_authToken;
     QSettings             m_settings;
-
-    QNetworkRequest makeRequest(
-        const QString& path
-        );
 };

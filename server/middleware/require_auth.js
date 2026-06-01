@@ -1,40 +1,52 @@
-import { createHmac, createHash, hkdfSync, timingSafeEqual } from 'node:crypto'
+import { timingSafeEqual } from 'node:crypto'
 import { query } from '../database/db.js'
-import { UUID_RE, HMAC_HEX_LEN } from '../constants/auth.js'
-import { consumeSessionKey } from '../state/session_keys.js'
+import { UUID_RE } from '../constants/auth.js'
+import { getSessionKey } from '../state/session_keys.js'
 
+// requireAuth — validates every protected API call.
+//
+// Client sends two headers:
+//   X-Device-ID:    <device UUID registered on this server>
+//   Authorization:  Bearer <session key hex returned by /auth/login>
+//
+// The session key is established by the SRP login flow and stored
+// server-side with a 24-hour TTL (session_keys.js).  The client
+// receives an identical copy via the Python crypto service's
+// srp_verify response and sends it as a static bearer token.
 export async function requireAuth(req, res, next) {
-  const deviceId = req.headers['x-device-id']
-  const proof    = req.headers['x-session-proof']
+  const deviceId   = req.headers['x-device-id']
+  const authHeader = req.headers['authorization'] || ''
 
   if (typeof deviceId !== 'string' || !UUID_RE.test(deviceId))
     return res.status(401).json({ error: 'Authentication required' })
 
-  if (typeof proof !== 'string' || proof.length !== HMAC_HEX_LEN || !/^[0-9a-f]+$/i.test(proof))
+  if (!authHeader.startsWith('Bearer '))
     return res.status(401).json({ error: 'Authentication required' })
 
+  const token = authHeader.slice(7).trim()
+  if (!token || !/^[0-9a-f]+$/i.test(token))
+    return res.status(401).json({ error: 'Authentication required' })
+
+  // Verify device is active and not revoked.
   const { rows } = await query(
     'SELECT 1 FROM devices WHERE id = $1 AND revoked = FALSE',
     [deviceId]
   )
   if (!rows.length) return res.status(401).json({ error: 'Authentication required' })
 
-  const keyHex = consumeSessionKey(deviceId)
-  if (!keyHex) return res.status(401).json({ error: 'Authentication required' })
+  const storedKey = getSessionKey(deviceId)
+  if (!storedKey) return res.status(401).json({ error: 'Authentication required' })
 
-  // auth_key = HKDF-SHA256(K, salt="", info="session-auth", length=32)
-  const authKey = hkdfSync('sha256', Buffer.from(keyHex, 'hex'), '', 'session-auth', 32)
-
-  // proof = HMAC-SHA256(auth_key, method:path:hex(SHA256(body)))
-  const rawBody  = req.body !== undefined ? JSON.stringify(req.body) : ''
-  const bodyHash = createHash('sha256').update(rawBody).digest('hex')
-  const message  = `${req.method}:${req.path}:${bodyHash}`
-  const expected = createHmac('sha256', authKey).update(message).digest('hex')
-
-  const expBuf = Buffer.from(expected, 'hex')
-  const gotBuf = Buffer.from(proof.toLowerCase(), 'hex')
-  if (!timingSafeEqual(expBuf, gotBuf))
+  // Constant-time comparison — session keys are fixed-length SRP-derived hex
+  // strings, so length equality is a necessary pre-condition, not a leak.
+  try {
+    const tokenBuf = Buffer.from(token,     'hex')
+    const keyBuf   = Buffer.from(storedKey, 'hex')
+    if (tokenBuf.length !== keyBuf.length || !timingSafeEqual(tokenBuf, keyBuf))
+      return res.status(401).json({ error: 'Authentication required' })
+  } catch {
     return res.status(401).json({ error: 'Authentication required' })
+  }
 
   req.deviceId = deviceId
   next()

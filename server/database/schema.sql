@@ -37,8 +37,12 @@ CREATE TABLE users (
 
     -- SRP-6a credentials (RFC 5054). The server stores salt + verifier
     -- only — it never sees the plaintext password.
-    srp_salt     VARCHAR(64)  NOT NULL,
-    srp_verifier VARCHAR(512) NOT NULL,
+    -- Salt:     32 bytes = 64 hex chars.
+    -- Verifier: v = g^x mod N for the 3072-bit group (RFC 5054 §A.3).
+    --           N is 384 bytes, so v is at most 384 bytes = 768 hex chars.
+    --           TEXT avoids any length constraint issue.
+    srp_salt     TEXT NOT NULL,
+    srp_verifier TEXT NOT NULL,
 
     created_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
