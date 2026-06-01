@@ -225,6 +225,7 @@ void ApiClient::doSrpVerify(
         reply->deleteLater();
 
         qDebug() << "[LOGIN] Round 2 response: status:" << status;
+        qDebug() << "[LOGIN] Round 2 raw body:" << QString::fromUtf8(body.left(500));
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 2 FAILED";

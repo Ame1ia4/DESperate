@@ -172,8 +172,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         _store = _open_or_create_store(password)
         # Load identity bundle if one has been persisted from a previous registration.
         if _store.state_exists(_BUNDLE_KEY):
-            raw = _store.load_state(_BUNDLE_KEY)
-            _local_bundle = IdentityBundle.from_private_bundle(raw)
+            try:
+                raw = _store.load_state(_BUNDLE_KEY)
+                _local_bundle = IdentityBundle.from_private_bundle(raw)
+            except InvalidTag:
+                _store = None
+                return {
+                    "success": False,
+                    "error": (
+                        f"Wrong password — could not decrypt keystore at {_STORE_BASE_DIR}. "
+                        "If you re-registered, delete that directory and log in again."
+                    ),
+                }
         return {"success": True}
 
     # ── Key bundle generation (registration) ──────────────────────────────────
@@ -439,8 +449,10 @@ def _process_line(line: bytes) -> bytes:
         req_id = req.get("id")
         result = _handle(req["method"], req.get("params") or {})
         resp   = {"id": req_id, **result}
+    except InvalidTag:
+        resp = {"id": req_id, "error": "Decryption failed — wrong password or tampered data"}
     except Exception as exc:
-        resp = {"id": req_id, "error": str(exc)}
+        resp = {"id": req_id, "error": str(exc) or repr(exc)}
     return (json.dumps(resp) + "\n").encode("utf-8")
 
 

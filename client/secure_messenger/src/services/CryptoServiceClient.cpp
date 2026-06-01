@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QThread>
 #include <QUuid>
 
     CryptoServiceClient::CryptoServiceClient(
@@ -346,15 +347,21 @@ bool CryptoServiceClient::ensureConnected()
 
         m_serviceStarted = true;
 
-        // Give the service a moment to bind before connecting.
-        m_socket.connectToHost(
-            m_serviceHost,
-            m_servicePort);
+        // Python needs time to import modules and bind the socket.
+        // ECONNREFUSED returns immediately (not after the timeout), so we
+        // must retry with small delays rather than one long waitForConnected.
+        const int retryIntervalMs = 300;
+        const int maxWaitMs       = 10000;
+        int elapsed               = 0;
+        while (elapsed < maxWaitMs) {
+            QThread::msleep(retryIntervalMs);
+            elapsed += retryIntervalMs;
 
-        if (m_socket.waitForConnected(
-                m_rpcTimeoutMs)) {
-
-            return true;
+            m_socket.abort();
+            m_socket.connectToHost(m_serviceHost, m_servicePort);
+            if (m_socket.waitForConnected(retryIntervalMs)) {
+                return true;
+            }
         }
     }
 
