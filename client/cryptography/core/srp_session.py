@@ -103,13 +103,6 @@ class SrpSession:
         ------
         ValueError : if B is invalid (B mod N == 0) or u == 0
         """
-        print(
-            f"[SRP CHALLENGE] process_challenge called"
-            f" | salt_hex len={len(salt_hex)} value={salt_hex}"
-            f" | B_hex len={len(B_hex)} first16={B_hex[:16]}",
-            flush=True,
-        )
-
         B_bytes = bytes.fromhex(B_hex)      # server sends B padded to 768 hex chars
         B = int.from_bytes(B_bytes, "big")
 
@@ -145,14 +138,6 @@ class SrpSession:
 
         # HAMK = H(A, M, K) — for verifying the server's proof
         self._HAMK = _sha256(A_bytes, M, self._K)
-
-        print(
-            f"[SRP CHALLENGE] computed"
-            f" | salt({len(salt)}B): {salt.hex()}"
-            f" | K: {self._K.hex()}"
-            f" | M1: {M.hex()}",
-            flush=True,
-        )
 
         return M.hex()
 

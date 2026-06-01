@@ -116,12 +116,6 @@ def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
     )
     v = pow(_g, x, _N)
     verifier = v.to_bytes(_N_BYTES, "big")
-    print(
-        f"[SRP VERIFIER] generated for '{username}'"
-        f" | salt({len(salt)}B): {salt.hex()}"
-        f" | verifier({len(verifier)}B): {verifier.hex()[:32]}...",
-        flush=True,
-    )
     return salt, verifier
 
 

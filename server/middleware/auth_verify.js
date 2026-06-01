@@ -32,7 +32,6 @@ export async function authVerify(req, res) {
     [device_id, username]
   )
   const creds = credResult.rows[0]
-  console.warn('creds row 0:', creds)
 
   if (!creds) {
     console.warn('auth_verify: device/user not found', { device_id, username })
@@ -44,7 +43,6 @@ export async function authVerify(req, res) {
     [device_id]
   )
   const challenge = challengeResult.rows[0]
-  console.warn('challenge row 0:', challenge)
 
   if (!challenge) {
     console.warn('auth_verify: no valid challenge for device', { device_id })
@@ -63,7 +61,6 @@ export async function authVerify(req, res) {
     )
   } catch (err) {
     console.warn('auth_verify: SRP proof mismatch', { device_id, username, reason: err?.message })
-    console.warn('auth_verify info:', { challenge: challenge.srp_server_secret, clientPublicEphemeral, srp_salt: creds.srp_salt, srp_verifier: creds.srp_verifier, clientSessionProof })
     return res.status(401).json({ error: 'Authentication failed' })
   }
 

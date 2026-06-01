@@ -178,9 +178,7 @@ void AuthController::signUp(
 
             QObject::disconnect(*nonceFailConn);
 
-            qDebug() << "[REGISTRATION] Step 1 OK: nonce received"
-                     << "| nonce:" << nonce
-                     << "| nonceLen:" << nonce.length();
+            qDebug() << "[REGISTRATION] Step 1 OK: nonce received";
 
             qDebug() << "[REGISTRATION] Step 2: calling generateIdentityBundle";
 
@@ -199,19 +197,7 @@ void AuthController::signUp(
                 return;
             }
 
-            const QString srpSalt     = bundle.value("srp_salt").toString();
-            const QString srpVerifier = bundle.value("srp_verifier").toString();
             qDebug() << "[REGISTRATION] Step 2 OK: bundle generated";
-            qDebug() << "  FULL BUNDLE JSON:" << QString::fromUtf8(QJsonDocument(bundle).toJson(QJsonDocument::Compact));
-            qDebug() << "  srp_salt     len:" << srpSalt.length()
-                     << "| first16:" << srpSalt.left(16)
-                     << "| last16:"  << srpSalt.right(16);
-            qDebug() << "  srp_verifier len:" << srpVerifier.length()
-                     << "| first16:" << srpVerifier.left(16);
-            qDebug() << "  idk_classical_pub len:" << bundle.value("idk_classical_pub").toString().length();
-            qDebug() << "  identity_signing_pub len:" << bundle.value("identity_signing_pub").toString().length();
-            qDebug() << "  signed_prekey_pub len:" << bundle.value("signed_prekey_pub").toString().length();
-            qDebug() << "  nonce_signature len:" << bundle.value("nonce_signature").toString().length();
 
             qDebug() << "[REGISTRATION] Step 3: calling registerUser (POST /auth/register)";
 

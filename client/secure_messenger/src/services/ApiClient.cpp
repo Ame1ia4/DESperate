@@ -79,14 +79,8 @@ void ApiClient::registerUser(
     bodyObject["username"] = username;
     bodyObject["bundle"]   = bundle;
 
-    const QString srpSalt     = bundle.value("srp_salt").toString();
-    const QString srpVerifier = bundle.value("srp_verifier").toString();
     qDebug() << "[REGISTER REQUEST] POST /auth/register"
              << "| username:" << username;
-    qDebug() << "  srp_salt     len:" << srpSalt.length()
-             << "| value:" << srpSalt;
-    qDebug() << "  srp_verifier len:" << srpVerifier.length()
-             << "| first32:" << srpVerifier.left(32);
 
     auto* reply = m_network.post(request, QJsonDocument(bodyObject).toJson());
 
@@ -96,9 +90,7 @@ void ApiClient::registerUser(
         const auto body   = reply->readAll();
         reply->deleteLater();
 
-        qDebug() << "[REGISTER RESPONSE] status:" << status
-                 << "| networkError:" << error
-                 << "| body:" << QString::fromUtf8(body);
+        qDebug() << "[REGISTER RESPONSE] status:" << status;
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             const QString reason = body.isEmpty()
@@ -171,9 +163,7 @@ void ApiClient::doSrpInit(
         const auto body   = reply->readAll();
         reply->deleteLater();
 
-        qDebug() << "[LOGIN] Round 1 response: status:" << status
-                 << "| networkError:" << error
-                 << "| body:" << QString::fromUtf8(body);
+        qDebug() << "[LOGIN] Round 1 response: status:" << status;
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 1 FAILED";
@@ -185,9 +175,7 @@ void ApiClient::doSrpInit(
         const auto salt   = parsed.value(QStringLiteral("salt")).toString();
         const auto B      = parsed.value(QStringLiteral("serverPublicEphemeral")).toString();
 
-        qDebug() << "[LOGIN] Round 1 OK:";
-        qDebug() << "  salt len:" << salt.length() << "| value:" << salt;
-        qDebug() << "  B    len:" << B.length()    << "| first16:" << B.left(16);
+        qDebug() << "[LOGIN] Round 1 OK: salt len:" << salt.length() << "| B len:" << B.length();
 
         if (salt.isEmpty() || B.isEmpty()) {
             qDebug() << "[LOGIN] Round 1 FAILED: salt or B empty";
@@ -200,9 +188,7 @@ void ApiClient::doSrpInit(
         // Compute M1 in the Python service — password never leaves the service
         const QString M1 = m_crypto->srpChallenge(salt, B);
 
-        qDebug() << "[LOGIN] srpChallenge result: M1 len:" << M1.length()
-                 << "| M1:" << M1
-                 << "| cryptoError:" << m_crypto->lastError();
+        qDebug() << "[LOGIN] srpChallenge result: M1 len:" << M1.length();
 
         if (M1.isEmpty()) {
             qDebug() << "[LOGIN] Round 1 FAILED: srpChallenge returned empty M1";
@@ -220,9 +206,7 @@ void ApiClient::doSrpVerify(
     const QString& A,
     const QString& M1)
 {
-    qDebug() << "[LOGIN] Round 2: POST /auth/login"
-             << "| username:" << username
-             << "| M1:" << M1;
+    qDebug() << "[LOGIN] Round 2: POST /auth/login | username:" << username;
 
     auto request = makeRequest("/auth/login");
 
@@ -240,9 +224,7 @@ void ApiClient::doSrpVerify(
         const auto body   = reply->readAll();
         reply->deleteLater();
 
-        qDebug() << "[LOGIN] Round 2 response: status:" << status
-                 << "| networkError:" << error
-                 << "| body:" << QString::fromUtf8(body);
+        qDebug() << "[LOGIN] Round 2 response: status:" << status;
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 2 FAILED";
@@ -254,9 +236,7 @@ void ApiClient::doSrpVerify(
         const auto M2           = parsed.value(QStringLiteral("serverSessionProof")).toString();
         const auto sessionToken = parsed.value(QStringLiteral("session_token")).toString();
 
-        qDebug() << "[LOGIN] Round 2 OK:"
-                 << "| M2 len:" << M2.length()
-                 << "| M2:" << M2
+        qDebug() << "[LOGIN] Round 2 OK: M2 len:" << M2.length()
                  << "| sessionToken len:" << sessionToken.length();
 
         if (M2.isEmpty() || sessionToken.isEmpty()) {
