@@ -31,7 +31,9 @@ export async function authVerify(req, res) {
        AND  u.username = $2`,
     [device_id, username]
   )
+  console.warn('auth_verify: credential query', {credResult: credResult})
   const creds = credResult.rows[0]
+  console.warn('creds row 0:', creds)
 
   if (!creds) {
     console.warn('auth_verify: device/user not found', { device_id, username })
@@ -42,7 +44,9 @@ export async function authVerify(req, res) {
     'DELETE FROM srp_challenges WHERE device_id = $1 AND expires_at > NOW() RETURNING srp_server_secret',
     [device_id]
   )
+  console.warn('auth_verify: challenge query', {challengeResult: challengeResult})
   const challenge = challengeResult.rows[0]
+  console.warn('challenge row 0:', challenge)
 
   if (!challenge) {
     console.warn('auth_verify: no valid challenge for device', { device_id })
