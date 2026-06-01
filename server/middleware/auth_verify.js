@@ -61,6 +61,7 @@ export async function authVerify(req, res) {
     )
   } catch (err) {
     console.warn('auth_verify: SRP proof mismatch', { device_id, username, reason: err?.message })
+    console.warn('auth_verify info:', { challenge: challenge.srp_server_secret, clientPublicEphemeral, srp_salt: creds.srp_salt, srp_verifier: creds.srp_verifier, clientSessionProof })
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
