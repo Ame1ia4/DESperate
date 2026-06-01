@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto'
 import express from 'express'
 import { createSRPClient, createSRPServer } from 'js-srp6a'
 import { authVerify } from '../../middleware/auth_verify.js'
-import { consumeSessionKey } from '../../state/session_keys.js'
+import { getSessionKey, revokeSessionKey } from '../../state/session_keys.js'
 import {
   SRP_EPHEMERAL_HEX,
   SRP_SESSION_PROOF_HEX,
@@ -69,11 +69,13 @@ before(() => new Promise(resolve => {
 after(() => new Promise(resolve => server.close(resolve)))
 
 // Default: valid device+user, challenge consumed atomically
-// Query order: [1] device+user JOIN, [2] DELETE FROM srp_challenges ... RETURNING
+// Query order: [1] device+user JOIN, [2] DELETE FROM srp_challenges ... RETURNING,
+//              [3] INSERT INTO device_sessions (storeSessionKey persistence)
 beforeEach(() => {
   globalThis.__db.queryImpl = seqQueryImpl(
     { rows: [knownCreds()] },      // SELECT device+user JOIN
     { rows: [activeChallenge()] }, // DELETE FROM srp_challenges ... RETURNING
+    { rows: [] },                  // INSERT INTO device_sessions (storeSessionKey)
   )
 })
 
@@ -130,7 +132,7 @@ describe('POST /auth/login', () => {
 
     it('stores session key K in the session key store after successful handshake', async () => {
       await post(validBody())
-      const K = consumeSessionKey(DEVICE_ID)
+      const K = await getSessionKey(DEVICE_ID)
       assert.ok(K !== null)
       assert.match(K, /^[0-9a-f]+$/i)
     })
@@ -150,18 +152,22 @@ describe('POST /auth/login', () => {
     })
 
     it('challenge is consumed even when M1 is wrong — K is NOT stored', async () => {
-      consumeSessionKey(DEVICE_ID) // drain any K left from previous successful test
-      const queries = []
+      // Flexible queryImpl handles all query types including device_sessions
+      let queries = []
       globalThis.__db.queryImpl = async (sql) => {
         queries.push(sql)
         if (sql.includes('srp_verifier'))      return { rows: [knownCreds()] }
         if (sql.includes('srp_challenges'))    return { rows: [activeChallenge()] }
         return { rows: [] }
       }
+      // Keys persist in the new model — revoke explicitly so this test starts clean
+      await revokeSessionKey(DEVICE_ID)
+      queries = [] // reset tracking; revokeSessionKey's DELETE is not part of this test
+
       const wrongM1 = randomBytes(SRP_SESSION_PROOF_HEX / 2).toString('hex')
       await post({ ...validBody(), clientSessionProof: wrongM1 })
       assert.ok(queries.some(q => q.includes('DELETE') && q.includes('srp_challenges')))
-      assert.strictEqual(consumeSessionKey(DEVICE_ID), null)
+      assert.strictEqual(await getSessionKey(DEVICE_ID), null)
     })
   })
 

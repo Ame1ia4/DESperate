@@ -63,5 +63,10 @@ export async function getSessionKey(deviceId) {
   return session_key_hex
 }
 
-// Kept for backward compat with any import that uses the old name.
-export { getSessionKey as consumeSessionKey }
+// Instantly invalidate a device's session: clear the in-process cache AND the
+// durable row so the bearer token is dead on the device's very next request.
+export async function revokeSessionKey(deviceId) {
+  _cache.delete(deviceId)
+  await query('DELETE FROM device_sessions WHERE device_id = $1', [deviceId])
+}
+

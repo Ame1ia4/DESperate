@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # ── Minimal stubs so tests run without liboqs ─────────────────────────────────
@@ -50,11 +50,12 @@ class _StubKEMKeypair:
 
 @dataclass
 class _StubSigningKeypair:
-    public_key: bytes
-    secret_key: bytes
+    public_key:         bytes
+    secret_key:         bytes
+    ed25519_secret_key: bytes = field(default_factory=lambda: b"\x00" * 32)
 
     def sign(self, msg: bytes) -> bytes:
-        return b"\xab" * 4627   # stub signature
+        return b"\xab" * 4691   # stub hybrid signature (64 + 4627 bytes)
 
 
 @dataclass
