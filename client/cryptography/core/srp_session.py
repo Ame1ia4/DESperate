@@ -47,7 +47,7 @@ _SRP_3072_KWARGS: dict = {
     # c_char_p and raises ArgumentError when given a str.  Encode to bytes so
     # both the C extension and the pure-Python fallback accept the values.
     "n_hex":    _N_3072_HEX.encode("ascii"),
-    "g_hex":    b"2",
+    "g_hex":    b"5",  # RFC 5054 Appendix A: 3072-bit group uses g=5, not g=2
 }
 
 
