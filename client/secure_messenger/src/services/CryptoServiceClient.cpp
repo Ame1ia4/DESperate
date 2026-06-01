@@ -377,7 +377,7 @@ bool CryptoServiceClient::startLocalCryptoService()
         return false;
     }
 
-    m_serviceProcess = new QProcess(this);
+    m_serviceProcess = new QProcess();
     m_serviceProcess->start(script);
 
     if (!m_serviceProcess->waitForStarted(3000)) {
