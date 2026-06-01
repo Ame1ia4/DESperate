@@ -32,18 +32,24 @@ export async function requireAuth(req, res, next) {
     'SELECT 1 FROM devices WHERE id = $1 AND revoked = FALSE',
     [deviceId]
   )
-  if (!rows.length) return res.status(401).json({ error: 'Authentication required' })
+  if (!rows.length) {
+    console.warn('requireAuth: device not found/revoked', { deviceId })
+    return res.status(401).json({ error: 'Authentication required' })
+  }
 
   const storedKey = await getSessionKey(deviceId)
-  if (!storedKey) return res.status(401).json({ error: 'Authentication required' })
+  if (!storedKey) {
+    console.warn('requireAuth: no session key for device', { deviceId })
+    return res.status(401).json({ error: 'Authentication required' })
+  }
 
-  // Constant-time comparison — session keys are fixed-length SRP-derived hex
-  // strings, so length equality is a necessary pre-condition, not a leak.
   try {
     const tokenBuf = Buffer.from(token,     'hex')
     const keyBuf   = Buffer.from(storedKey, 'hex')
-    if (tokenBuf.length !== keyBuf.length || !timingSafeEqual(tokenBuf, keyBuf))
+    if (tokenBuf.length !== keyBuf.length || !timingSafeEqual(tokenBuf, keyBuf)) {
+      console.warn('requireAuth: token mismatch', { deviceId, tokenLen: token.length, keyLen: storedKey.length })
       return res.status(401).json({ error: 'Authentication required' })
+    }
   } catch {
     return res.status(401).json({ error: 'Authentication required' })
   }

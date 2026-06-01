@@ -92,7 +92,7 @@ export async function authInit(req, res) {
     )
   })
 
-  console.info('auth_init: challenge issued', { username, device_id })
+  console.info('auth_init: challenge issued (real)', { username, device_id })
   res.json({
     salt: row.srp_salt,
     serverPublicEphemeral: serverEphemeral.public,

@@ -33,11 +33,10 @@ export async function authVerify(req, res) {
   const creds = credResult.rows[0]
 
   if (!creds) {
+    console.warn('auth_verify: device/user not found', { device_id, username })
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
-  // Atomic delete-and-read — single round trip, no race window between
-  // SELECT and DELETE where two concurrent requests could both read the challenge.
   const challengeResult = await query(
     'DELETE FROM srp_challenges WHERE device_id = $1 AND expires_at > NOW() RETURNING srp_server_secret',
     [device_id]
@@ -45,6 +44,7 @@ export async function authVerify(req, res) {
   const challenge = challengeResult.rows[0]
 
   if (!challenge) {
+    console.warn('auth_verify: no valid challenge for device', { device_id })
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
@@ -58,8 +58,8 @@ export async function authVerify(req, res) {
       creds.srp_verifier,
       clientSessionProof
     )
-  } catch {
-    // deriveSession throws for A mod N = 0 or M1 mismatch — both are auth failures.
+  } catch (err) {
+    console.warn('auth_verify: SRP proof mismatch', { device_id, username, reason: err?.message })
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
