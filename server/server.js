@@ -12,7 +12,7 @@ import { register, registrationNonce } from './handlers/auth/index.js'
 import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
 import { requireAuth } from './middleware/require_auth.js'
-import { query, withTransaction } from './database/db.js'
+import { query, withTransaction, registerShutdownSignals } from './database/db.js'
 import { revokeSessionKey } from './state/session_keys.js'
 import { UUID_RE } from './constants/auth.js'
 
@@ -444,4 +444,5 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
-app.listen(80, () => console.log('Server running on :80'))
+const server = app.listen(80, () => console.log('Server running on :80'))
+registerShutdownSignals(server)

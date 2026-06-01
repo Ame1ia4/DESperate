@@ -58,14 +58,20 @@ pool.connect((err, client, release) => {
   release()
 })
 
-// Drain the pool on shutdown so in-flight queries finish cleanly
-async function shutdown(signal) {
-  console.log(`${signal} received — closing DB pool`)
+// Drain the pool on shutdown so in-flight queries finish cleanly.
+// Callers should call registerShutdownSignals(httpServer) so new connections
+// are refused before the pool closes — prevents 57P01 errors on live requests.
+async function shutdown(signal, httpServer) {
+  console.log(`${signal} received — draining`)
+  await new Promise((resolve) => httpServer.close(resolve))
   await pool.end()
   process.exit(0)
 }
-process.once('SIGTERM', () => shutdown('SIGTERM'))
-process.once('SIGINT',  () => shutdown('SIGINT'))
+
+export function registerShutdownSignals(httpServer) {
+  process.once('SIGTERM', () => shutdown('SIGTERM', httpServer))
+  process.once('SIGINT',  () => shutdown('SIGINT',  httpServer))
+}
 
 // Parameterised query — always use this, never string concat
 export const query = (text, params) => pool.query(text, params)

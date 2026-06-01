@@ -242,7 +242,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /path/to/your/project
+            cd ~/DESperate
             git pull origin main
-            npm ci --ignore-scripts --prefix server
-            pm2 restart epic-server || pm2 start server/index.js --name epic-server
+            npm ci --ignore-scripts
+            pm2 restart des-perate || pm2 start server/server.js --name des-perate
