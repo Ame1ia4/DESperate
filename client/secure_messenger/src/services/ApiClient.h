@@ -47,6 +47,7 @@ public:
     // Fetch the public PQXDH key bundle for a username (GET /keys/:username).
     void fetchKeyBundle(const QString& username);
 
+    //meaningless change
     // Create a new conversation with another user (POST /conversations).
     void createConversation(const QString& otherUsername);
 
