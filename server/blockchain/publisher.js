@@ -193,6 +193,8 @@ async function broadcastBuiltRoots(cfg) {
   const ids   = builtRoots.map(r => r.id)
   const roots = builtRoots.map(r => r.merkle_root.trim())
 
+  console.info(`[publisher] dispatching ${roots.length} root(s): ${roots.map(r => r.slice(0, 10) + '…').join(', ')}`)
+
   try {
     const signer   = buildSigner()
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer)
