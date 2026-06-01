@@ -1,5 +1,4 @@
 // Tests for the build phase: pending leaves → built roots.
-// ⚠️  Requires merkletreejs — run `npm install --ignore-scripts` first.
 
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'

@@ -1,5 +1,5 @@
 import { ethers } from 'ethers'
-import { query, withTransaction } from '../database/db.js'
+import { query, withTransaction } from './db.js'
 import { ABI, CONTRACT_ADDRESS } from './contract.js'
 import { buildPendingRoots } from './build-worker.js'
 import { loadMerkleConfig } from './config.js'
@@ -23,17 +23,22 @@ function buildSigner() {
 // from a previous crash.
 
 async function reconcile(provider) {
-  // Case A: broadcasting + tx_hash IS NULL
-  //   We crashed before or while submitting the tx.  Query contract events
-  //   by root value.  If found → confirm.  If not → return to 'built'.
+  console.info('[publisher] reconcile: starting crash-recovery check')
+
+  // Case A: broadcasting + tx_hash IS NULL — crashed before tx submission
   const { rows: nullTxRoots } = await query(
     `SELECT id, merkle_root
      FROM merkle_roots
      WHERE state = 'broadcasting' AND tx_hash IS NULL`
   )
 
+  if (nullTxRoots.length > 0) {
+    console.info(`[publisher] reconcile: ${nullTxRoots.length} root(s) stuck broadcasting with no tx hash — querying chain`)
+  }
+
   for (const row of nullTxRoots) {
     const root = row.merkle_root.trim()
+    console.info(`[publisher] reconcile: checking chain for root id=${row.id} ${root.slice(0, 10)}…`)
     try {
       const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider)
       const logs     = await contract.queryFilter(contract.filters.HashStored(root))
@@ -54,41 +59,50 @@ async function reconcile(provider) {
             [row.id]
           )
         })
-        console.info(`[publisher] reconcile: confirmed root ${root} via HashStored event`)
+        console.info(`[publisher] reconcile: confirmed root id=${row.id} via HashStored event in tx ${log.transactionHash}`)
       } else {
         await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
-        console.info(`[publisher] reconcile: no on-chain event for root ${root} — returned to built`)
+        console.info(`[publisher] reconcile: no on-chain event for root id=${row.id} — returned to built`)
       }
     } catch (err) {
-      console.error(`[publisher] reconcile: error checking root ${root}`, err)
+      console.error(`[publisher] reconcile: error checking root id=${row.id} ${root.slice(0, 10)}…`, err)
     }
   }
 
-  // Case B: broadcasting + tx_hash IS NOT NULL
-  //   Tx was submitted.  Check receipt.
+  // Case B: broadcasting + tx_hash IS NOT NULL — tx was submitted, check receipt
   const { rows: pendingTxRoots } = await query(
     `SELECT id, merkle_root, tx_hash
      FROM merkle_roots
      WHERE state = 'broadcasting' AND tx_hash IS NOT NULL`
   )
 
+  if (pendingTxRoots.length > 0) {
+    console.info(`[publisher] reconcile: ${pendingTxRoots.length} root(s) with pending tx — checking receipts`)
+  }
+
   for (const row of pendingTxRoots) {
+    const txHash = row.tx_hash.trim()
+    console.info(`[publisher] reconcile: fetching receipt for tx ${txHash} (root id=${row.id})`)
     try {
-      const txHash  = row.tx_hash.trim()
       const receipt = await provider.getTransactionReceipt(txHash)
 
       if (receipt && receipt.status === 1) {
+        console.info(`[publisher] reconcile: tx ${txHash} confirmed on-chain (block ${receipt.blockNumber})`)
         await confirmRootsFromReceipt(receipt, [row.id], row.merkle_root.trim())
-        console.info(`[publisher] reconcile: confirmed root via receipt (tx ${txHash})`)
-      } else {
-        // Dropped or unknown — return to built
+        console.info(`[publisher] reconcile: root id=${row.id} marked confirmed`)
+      } else if (receipt && receipt.status !== 1) {
+        console.error(`[publisher] reconcile: tx ${txHash} reverted on-chain — returning root id=${row.id} to built`)
         await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
-        console.info(`[publisher] reconcile: tx ${txHash} not found — returned root to built`)
+      } else {
+        console.warn(`[publisher] reconcile: tx ${txHash} not found (dropped?) — returning root id=${row.id} to built`)
+        await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
       }
     } catch (err) {
-      console.error(`[publisher] reconcile: error for root id=${row.id}`, err)
+      console.error(`[publisher] reconcile: error fetching receipt for tx ${txHash} (root id=${row.id})`, err)
     }
   }
+
+  console.info('[publisher] reconcile: done')
 }
 
 // ── Broadcast helpers ────────────────────────────────────────────────────────
@@ -155,12 +169,16 @@ async function broadcastBuiltRoots(cfg) {
   )
 
   const { cnt, oldest } = summary[0]
+  console.info(`[publisher] tick: ${cnt} built root(s) awaiting broadcast`)
   if (cnt === 0) return
 
-  // Broadcast when min batch is ready OR timeout hit OR tx would be full
-  const ageMs         = oldest ? Date.now() - new Date(oldest).getTime() : 0
+  const ageMs           = oldest ? Date.now() - new Date(oldest).getTime() : 0
   const shouldBroadcast = cnt >= minRoots || ageMs >= broadcastIntervalMs
-  if (!shouldBroadcast) return
+  console.info(`[publisher] broadcast trigger: minBatch=${cnt >= minRoots} (${cnt}/${minRoots}), timedOut=${ageMs >= broadcastIntervalMs} (age=${Math.round(ageMs / 1000)}s / ${broadcastIntervalMs / 1000}s)`)
+  if (!shouldBroadcast) {
+    console.info('[publisher] no broadcast trigger met — waiting')
+    return
+  }
 
   // (a) Mark the group as broadcasting BEFORE submitting to the network.
   //     If we crash between here and the tx submission, reconcile() handles it.
