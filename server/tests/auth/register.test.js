@@ -74,6 +74,7 @@ async function post(body) {
 // test that succeeds or is expected to reach nonce-check must get a new one.
 const validBody = () => {
   const nonce = issueNonce()
+  console.log('nonce: ' + nonce)
   return {
     username: 'testuser',
     bundle: {

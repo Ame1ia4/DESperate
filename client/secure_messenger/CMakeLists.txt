@@ -74,9 +74,88 @@ target_link_libraries(appsecure_messenger
             $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
-# Copy the PyInstaller crypto_service bundle next to the app binary after every build
+# ── crypto_service PyInstaller bundle ─────────────────────────────────────────
 cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH _CLIENT_DIR)
-set(CRYPTO_DIST "${_CLIENT_DIR}/cryptography/dist/crypto_service")
+set(_CRYPTO_DIR  "${_CLIENT_DIR}/cryptography")
+set(CRYPTO_DIST  "${_CRYPTO_DIR}/dist/crypto_service")
+
+if(WIN32)
+    set(_CRYPTO_EXE "crypto_service.exe")
+else()
+    set(_CRYPTO_EXE "crypto_service")
+endif()
+
+# ── Find the Python that has PyInstaller ──────────────────────────────────────
+# Allow an explicit override: cmake -DPYINSTALLER_PYTHON=C:/path/to/python.exe
+if(NOT PYINSTALLER_PYTHON)
+    # 1. Try whatever CMake finds first
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -c "import PyInstaller"
+            RESULT_VARIABLE _pi_rc OUTPUT_QUIET ERROR_QUIET)
+        if(_pi_rc EQUAL 0)
+            set(PYINSTALLER_PYTHON "${Python3_EXECUTABLE}")
+        endif()
+    endif()
+
+    # 2. Fall back to common Windows install locations
+    if(NOT PYINSTALLER_PYTHON AND WIN32)
+        foreach(_hint
+            "$ENV{LOCALAPPDATA}/Python/bin/python.exe"
+            "$ENV{APPDATA}/Python/Scripts/python.exe"
+            "$ENV{LOCALAPPDATA}/Programs/Python/Python312/python.exe"
+            "$ENV{LOCALAPPDATA}/Programs/Python/Python311/python.exe"
+        )
+            if(EXISTS "${_hint}")
+                execute_process(
+                    COMMAND "${_hint}" -c "import PyInstaller"
+                    RESULT_VARIABLE _pi_rc OUTPUT_QUIET ERROR_QUIET)
+                if(_pi_rc EQUAL 0)
+                    set(PYINSTALLER_PYTHON "${_hint}")
+                    break()
+                endif()
+            endif()
+        endforeach()
+    endif()
+
+    if(PYINSTALLER_PYTHON)
+        set(PYINSTALLER_PYTHON "${PYINSTALLER_PYTHON}" CACHE STRING
+            "Python executable used to rebuild the crypto_service bundle" FORCE)
+    endif()
+endif()
+
+# ── Auto-rebuild bundle when Python sources change ────────────────────────────
+if(PYINSTALLER_PYTHON)
+    file(GLOB_RECURSE _CRYPTO_PY_SOURCES
+        "${_CRYPTO_DIR}/crypto_service.py"
+        "${_CRYPTO_DIR}/core/*.py"
+    )
+
+    add_custom_command(
+        OUTPUT  "${CRYPTO_DIST}/${_CRYPTO_EXE}"
+        COMMAND "${PYINSTALLER_PYTHON}" -m PyInstaller
+                    --onedir --name crypto_service -y
+                    "${_CRYPTO_DIR}/crypto_service.py"
+        DEPENDS ${_CRYPTO_PY_SOURCES}
+        WORKING_DIRECTORY "${_CRYPTO_DIR}"
+        COMMENT "Rebuilding crypto_service bundle (PyInstaller)…"
+        VERBATIM
+    )
+
+    add_custom_target(crypto_service_bundle
+        DEPENDS "${CRYPTO_DIST}/${_CRYPTO_EXE}"
+    )
+    add_dependencies(appsecure_messenger crypto_service_bundle)
+
+    message(STATUS "crypto_service auto-rebuild enabled (${PYINSTALLER_PYTHON})")
+else()
+    message(WARNING
+        "PyInstaller not found — crypto_service bundle will NOT be rebuilt automatically.\n"
+        "Start 'python main.py' in client/cryptography manually, or set -DPYINSTALLER_PYTHON=...")
+endif()
+
+# ── Copy bundle next to the app binary after every build ──────────────────────
 add_custom_command(TARGET appsecure_messenger POST_BUILD
     COMMAND ${CMAKE_COMMAND}
         -DSRC_DIR=${CRYPTO_DIST}

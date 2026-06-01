@@ -37,13 +37,11 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import srp as _srp
-
 from core.keys import (
     generate_identity_bundle as _gen_bundle,
     IdentityBundle,
 )
-from core.srp_session import SrpSession, _SRP_3072_KWARGS
+from core.srp_session import SrpSession
 from core.pqxdh import (
     initiate  as _pqxdh_initiate,
     respond   as _pqxdh_respond,
@@ -53,6 +51,7 @@ from core.pqxdh import (
 )
 from core.dh_ratchet.session import RatchetSession
 from core.state_store import StateStore
+from cryptography.exceptions import InvalidTag
 from core.signatures import (
     sign_ciphertext,
     verify_and_extract,
@@ -98,10 +97,25 @@ _sessions: dict[str, _SessionEntry] = {}
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
-    """Derive SRP salt + verifier via pysrp (NG_3072, SHA-256)."""
-    salt, verifier = _srp.create_salted_verification_key(
-        username, password, **_SRP_3072_KWARGS
+    """
+    Derive SRP salt + verifier using the same formula as SrpSession.process_challenge.
+
+    pysrp.create_salted_verification_key uses salt_len=4 (4 bytes) by default and
+    stores the salt as a variable-length BigInteger. Sending that zero-padded to 64
+    hex chars and then decoding it back produces a 32-byte salt that differs from the
+    4-byte salt pysrp used to compute x — causing x (and thus M1) to never match.
+
+    We generate the salt ourselves (always exactly 32 bytes) and compute v directly,
+    so registration and login use identical byte sequences.
+    """
+    from core.srp_session import _sha256, _N, _g, _N_BYTES
+    salt = os.urandom(32)
+    x = int.from_bytes(
+        _sha256(salt, _sha256((username + ":" + password).encode())),
+        "big",
     )
+    v = pow(_g, x, _N)
+    verifier = v.to_bytes(_N_BYTES, "big")
     return salt, verifier
 
 
@@ -186,6 +200,20 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         # If the keystore wasn't opened first, bootstrap it with this password.
         if _store is None:
             _store = _open_or_create_store(password)
+            # If an existing keystore was loaded, verify the password by attempting
+            # a test decrypt.  If it fails, the user registered previously with a
+            # different password and we must not silently overwrite with the wrong key.
+            if _store is not None:
+                try:
+                    _store.load_state(_BUNDLE_KEY)
+                except FileNotFoundError:
+                    pass  # first-time registration — no bundle persisted yet, fine
+                except InvalidTag:
+                    _store = None
+                    raise ValueError(
+                        "Keystore exists but password is wrong — delete "
+                        f"{_STORE_BASE_DIR} to start fresh, or use the original password."
+                    )
         _store.save_state(_BUNDLE_KEY, bundle.to_private_bundle())
         _local_bundle = bundle
 
@@ -217,8 +245,9 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         if _srp_session is None:
             raise ValueError("No SRP session active — call srp_start first")
         authenticated = _srp_session.verify_server(params["M2"])
-        # The SRP session key K is the same value the server stored via storeSessionKey.
-        # Return it so the C++ client can send it as the Authorization: Bearer token.
+        # K is returned so the C++ client can verify mutual auth succeeded,
+        # but it is NOT used as the Bearer token — the server-issued HKDF
+        # session_token (from /auth/login) is used instead.
         session_key = _srp_session.session_key_hex if authenticated else None
         _srp_session = None
         return {"authenticated": authenticated, "session_key": session_key}

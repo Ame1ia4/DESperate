@@ -123,6 +123,12 @@ describe('POST /auth/login', () => {
       )
     })
 
+    it('includes session_token in the response', async () => {
+      const res = await post(validBody())
+      assert.ok('session_token' in res.body, 'session_token must be present for the client to authenticate')
+      assert.match(res.body.session_token, /^[0-9a-f]{64}$/, 'session_token must be a 64-char hex string (HKDF-SHA256)')
+    })
+
     it('does not echo back any credential fields', async () => {
       const res = await post(validBody())
       assert.ok(!('clientPublicEphemeral' in res.body))

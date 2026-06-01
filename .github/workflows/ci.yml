@@ -245,4 +245,5 @@ jobs:
             cd ~/DESperate
             git pull origin main
             npm ci --ignore-scripts
+            npm run migrate
             pm2 restart des-perate || pm2 start server/server.js --name des-perate

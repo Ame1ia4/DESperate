@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QObject>
+#include <QProcess>
 #include <QTcpSocket>
 #include <QHash>
 #include <QJsonObject>
@@ -13,6 +14,8 @@
 public:
     explicit CryptoServiceClient(
         QObject* parent = nullptr);
+
+    ~CryptoServiceClient();
 
     bool unlockKeystore(
         const QString& password);
@@ -100,10 +103,11 @@ private:
     bool writeRequest(
         const QByteArray& payload);
 
-    QJsonObject readResponse();
+    QJsonObject readResponse(const QString& expectedId = {});
 
 private:
     QTcpSocket m_socket;
+    QProcess*  m_serviceProcess = nullptr;
 
     QString m_lastError;
 

@@ -28,7 +28,6 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import srp as _srp_lib
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
@@ -37,7 +36,7 @@ from core.keys import (
     generate_identity_bundle as _gen_bundle,
 )
 from core.pqxdh import initiate as pqxdh_initiate, respond as pqxdh_respond
-from core.srp_session import SrpSession, _SRP_3072_KWARGS
+from core.srp_session import SrpSession, _sha256, _N, _g, _N_BYTES
 from core.state_store import StateStore
 
 HOST = "127.0.0.1"
@@ -151,26 +150,28 @@ async def handle_generate_identity_bundle(params: dict) -> dict:
             _keystore_store  = store
             _keystore_password = password
 
-        # Generate SRP verifier — same group parameters as the server.
-        salt, verifier = await asyncio.to_thread(
-            _srp_lib.create_salted_verification_key,
-            username, password,
-            salt_len=32,
-            **_SRP_3072_KWARGS,
+        # Generate SRP verifier using the same formula as SrpSession.process_challenge
+        # so registration and login always use the same salt bytes.
+        salt = os.urandom(32)
+        x = int.from_bytes(
+            _sha256(salt, _sha256((username + ":" + password).encode())),
+            "big",
         )
-        srp_salt_hex     = salt.hex().zfill(64)      # pad to 64 hex chars (32 bytes)
-        srp_verifier_hex = verifier.hex().zfill(768)  # pad to 768 hex chars (384 bytes)
+        verifier = pow(_g, x, _N).to_bytes(_N_BYTES, "big")
+        srp_salt_hex     = salt.hex()
+        srp_verifier_hex = verifier.hex()
 
-        # Nonce signing is required for server registration but optional in tests
-        # that exercise only the local keystore behaviour.
-        nonce_fields: dict = {}
-        if nonce and len(nonce) == 64:
-            nonce_bytes = bytes.fromhex(nonce)
-            nonce_signature = bundle.ik_sig.sign(nonce_bytes)
-            nonce_fields = {
-                "nonce":           nonce,
-                "nonce_signature": nonce_signature.hex(),
-            }
+        # Nonce signing is required for server registration.
+        # Fail loudly if the nonce is missing or wrong length so the caller
+        # gets a clear error rather than a silent registration failure.
+        if not nonce or len(nonce) != 64:
+            return {"error": f"nonce must be exactly 64 hex chars, got {len(nonce) if nonce else 0}"}
+        nonce_bytes = bytes.fromhex(nonce)
+        nonce_signature = bundle.ik_sig.sign(nonce_bytes)
+        nonce_fields = {
+            "nonce":           nonce,
+            "nonce_signature": nonce_signature.hex(),
+        }
 
         # Spread the public bundle first so caller-facing fields (user_id etc.)
         # are always present; server-registration fields follow and override where names differ.
@@ -245,9 +246,7 @@ async def handle_srp_verify(params: dict) -> dict:
         ok = await asyncio.to_thread(_srp_session.verify_server, M2)
         if not ok:
             return {"authenticated": False, "error": "Server authentication failed."}
-        # The session key K is what the server stores — the client sends it as Bearer.
-        K = _srp_session._user.get_session_key()
-        return {"authenticated": True, "session_key": K.hex()}
+        return {"authenticated": True, "session_key": _srp_session.session_key_hex}
     except Exception:
         log.exception("srp_verify failed")
         return {"authenticated": False, "error": "Verification failed."}

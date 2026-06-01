@@ -12,7 +12,7 @@ Rectangle {
 
         Text {
             Layout.fillWidth: true
-            text: conversationController.currentConversationId === ""
+            text: !conversationController || conversationController.currentConversationId === ""
                   ? "Select a chat to start messaging"
                   : "Conversation: " + conversationController.currentConversationId
             color: "#F5EDD6"
@@ -26,7 +26,7 @@ Rectangle {
             Layout.fillHeight: true
             clip: true
 
-            model: conversationController.messages
+            model: conversationController ? conversationController.messages : null
 
             delegate: MessageDelegate {
                 plaintext: model.plaintext
@@ -44,7 +44,7 @@ Rectangle {
                 Layout.fillWidth: true
                 placeholderText: "Type a message"
                 placeholderTextColor: "#C9D4C5"
-                enabled: conversationController.currentConversationId !== ""
+                enabled: conversationController && conversationController.currentConversationId !== ""
                 background: Rectangle {
                     color: "#2D6944"
                     radius: 10
@@ -56,7 +56,7 @@ Rectangle {
 
             Button {
                 text: "Send"
-                enabled: conversationController.currentConversationId !== ""
+                enabled: conversationController && conversationController.currentConversationId !== ""
                 background: Rectangle {
                     color: "#4FAE7C"
                     radius: 10
