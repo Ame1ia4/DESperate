@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['C:/Users/ameli/Documents/Code/Projects/DESperate/client/cryptography/crypto_service.py'],
+    ['crypto_service.py'],
     pathex=[],
     binaries=[],
     datas=[],
