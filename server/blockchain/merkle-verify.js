@@ -3,12 +3,34 @@ import { ABI, CONTRACT_ADDRESS } from './contract.js';
 
 const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
 
+const CHUNK = 9_000;
+const DEPLOY_BLOCK = process.env.CONTRACT_DEPLOY_BLOCK
+  ? parseInt(process.env.CONTRACT_DEPLOY_BLOCK, 10)
+  : 0;
+
+async function queryFilterChunked(contract, filter, fromBlock, toBlock) {
+  const logs = [];
+  for (let from = fromBlock; from <= toBlock; from += CHUNK) {
+    const to = Math.min(from + CHUNK - 1, toBlock);
+    const chunk = await contract.queryFilter(filter, from, to);
+    logs.push(...chunk);
+    if (logs.length > 0) break; // stop early once found
+  }
+  return logs;
+}
+
 export async function verifyRoot(merkleRoot) {
   if (!CONTRACT_ADDRESS) throw new Error('CONTRACT_ADDRESS not configured');
   const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
   const norm = '0x' + merkleRoot.replace(/^0x/i, '').toLowerCase().padStart(64, '0');
 
-  const logs = await contract.queryFilter(contract.filters.HashStored(norm));
+  const latest = await provider.getBlockNumber();
+  const logs = await queryFilterChunked(
+    contract,
+    contract.filters.HashStored(norm),
+    DEPLOY_BLOCK,
+    latest,
+  );
 
   if (logs.length === 0) return { found: false };
 
