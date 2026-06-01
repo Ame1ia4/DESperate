@@ -43,7 +43,7 @@ from core.keys import (
     generate_identity_bundle as _gen_bundle,
     IdentityBundle,
 )
-from core.srp_session import SrpSession, _SRP_3072_KWARGS
+from core.srp_session import SrpSession
 from core.pqxdh import (
     initiate  as _pqxdh_initiate,
     respond   as _pqxdh_respond,
@@ -99,9 +99,14 @@ _sessions: dict[str, _SessionEntry] = {}
 
 def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
     """Derive SRP salt + verifier via pysrp (NG_3072, SHA-256)."""
-    salt, verifier = _srp.create_salted_verification_key(
-        username, password, **_SRP_3072_KWARGS
-    )
+    from core.srp_session import _N_HEX
+    kwargs = {
+        "hash_alg": _srp.SHA256,
+        "ng_type":  _srp.NG_CUSTOM,
+        "n_hex":    _N_HEX.encode("ascii"),
+        "g_hex":    b"5",
+    }
+    salt, verifier = _srp.create_salted_verification_key(username, password, **kwargs)
     return salt, verifier
 
 
@@ -217,8 +222,9 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         if _srp_session is None:
             raise ValueError("No SRP session active — call srp_start first")
         authenticated = _srp_session.verify_server(params["M2"])
-        # The SRP session key K is the same value the server stored via storeSessionKey.
-        # Return it so the C++ client can send it as the Authorization: Bearer token.
+        # K is returned so the C++ client can verify mutual auth succeeded,
+        # but it is NOT used as the Bearer token — the server-issued HKDF
+        # session_token (from /auth/login) is used instead.
         session_key = _srp_session.session_key_hex if authenticated else None
         _srp_session = None
         return {"authenticated": authenticated, "session_key": session_key}
