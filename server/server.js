@@ -13,6 +13,8 @@ import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
 import { requireAuth } from './middleware/require_auth.js'
 import { query, withTransaction } from './database/db.js'
+import { revokeSessionKey } from './state/session_keys.js'
+import { UUID_RE } from './constants/auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -119,6 +121,7 @@ app.get('/keys/:username', requireAuth, async (req, res) => {
           AND  key_type  = 'x25519'
         ORDER  BY created_at ASC
         LIMIT  1
+        FOR UPDATE SKIP LOCKED
      ),
      mark_used AS (
         UPDATE one_time_prekeys
@@ -298,6 +301,11 @@ app.post('/messages', requireAuth, async (req, res) => {
   if (nonceBuf.length !== 12)
     return res.status(400).json({ error: 'nonce must be 12 bytes' })
 
+  // Match the DB CHECK (octet_length(ciphertext) <= 65536) with a clean 4xx
+  // instead of letting an oversized payload hit the constraint as a 500.
+  if (ciphertextBuf.length > 65536)
+    return res.status(413).json({ error: 'ciphertext exceeds 64 KiB limit' })
+
   // associated_data for AEAD = conversation_id bytes
   const associatedData = Buffer.from(conversation_id)
 
@@ -326,12 +334,13 @@ app.post('/messages', requireAuth, async (req, res) => {
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
 
     for (const r of recipients) {
-      const seq = Date.now() + Math.random()   // rough monotonic sequence
+      // msg_sequence is filled by the message_queue_msg_sequence_seq default —
+      // atomic, strictly increasing, never colliding.
       await client.query(
         `INSERT INTO message_queue
-           (msg_id, recipient_device_id, associated_data, msg_sequence, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [msg.id, r.device_id, queueMeta, seq, expiresAt]
+           (msg_id, recipient_device_id, associated_data, expires_at)
+         VALUES ($1, $2, $3, $4)`,
+        [msg.id, r.device_id, queueMeta, expiresAt]
       )
     }
 
@@ -401,7 +410,30 @@ app.post('/messages/:id/ack', requireAuth, async (req, res) => {
   res.json({ acknowledged: true })
 })
 
-app.post('/devices/revoke', requireAuth, (_, res) => res.json({ revoked: true }))
+// Revoke a device belonging to the authenticated user. device_id is required;
+// the target must share a user with the caller. Revocation is instant: the
+// device is flagged revoked (requireAuth rejects it on its next request) and
+// its session key is purged from cache + DB so the bearer token dies at once.
+app.post('/devices/revoke', requireAuth, async (req, res) => {
+  const { device_id } = req.body
+  if (typeof device_id !== 'string' || !UUID_RE.test(device_id))
+    return res.status(400).json({ error: 'device_id required' })
+
+  // Target must belong to the same user as the caller.
+  const { rows } = await query(
+    `SELECT 1
+     FROM devices target
+     JOIN devices caller ON caller.user_id = target.user_id
+     WHERE target.id = $1 AND caller.id = $2`,
+    [device_id, req.deviceId]
+  )
+  if (!rows.length) return res.status(404).json({ error: 'Device not found' })
+
+  await query('UPDATE devices SET revoked = TRUE WHERE id = $1', [device_id])
+  await revokeSessionKey(device_id)
+
+  res.json({ revoked: true })
+})
 
 // ── 404 ──
 app.use((_, res) => res.status(404).json({ error: 'Not found' }))

@@ -260,7 +260,10 @@ void ApiClient::acknowledgeMessage(
     const QString& /*deviceId*/)
 {
     // Device ID is carried in X-Device-ID header.
-    auto request = makeRequest("/messages/" + messageId + "/ack");
+    // Percent-encode the server-provided messageId so it can't break out of
+    // the path segment (path traversal / URL injection).
+    auto request = makeRequest(
+        "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)) + "/ack");
     auto* reply  = m_network.post(request, QByteArray("{}"));
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
@@ -304,7 +307,9 @@ void ApiClient::fetchConversations()
 
 void ApiClient::fetchKeyBundle(const QString& username)
 {
-    auto request = makeRequest("/keys/" + username);
+    // Percent-encode the username before placing it in the path segment.
+    auto request = makeRequest(
+        "/keys/" + QString::fromUtf8(QUrl::toPercentEncoding(username)));
     auto* reply  = m_network.get(request);
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {

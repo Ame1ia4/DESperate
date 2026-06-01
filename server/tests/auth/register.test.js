@@ -247,7 +247,9 @@ describe('POST /auth/register', () => {
 
     it('rejects a nonce that was never issued', async () => {
       const body = validBody()
-      body.bundle.nonce = randomHex(32)
+      const fakeNonce = randomHex(32) // valid format but never issued by the server
+      body.bundle.nonce           = fakeNonce
+      body.bundle.nonce_signature = signNonce(fakeNonce) // must match nonce or sig check fires first
       const res = await post(body)
       assert.strictEqual(res.status, 400)
       assert.strictEqual(res.body.error, 'Invalid nonce')

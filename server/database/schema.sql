@@ -496,6 +496,11 @@ CREATE INDEX idx_device_sessions_expiry
 -- carries data worth retaining).  The messages row persists.
 -- =========================================================
 
+-- Monotonic, collision-free ordering source for msg_sequence.
+-- nextval() is atomic and strictly increasing, so it replaces any
+-- application-computed sequence value.
+CREATE SEQUENCE message_queue_msg_sequence_seq;
+
 CREATE TABLE message_queue (
     id UUID PRIMARY KEY
         DEFAULT uuid_generate_v4(),
@@ -525,7 +530,8 @@ CREATE TABLE message_queue (
     -- =====================================================
 
     msg_sequence BIGINT
-        NOT NULL,
+        NOT NULL
+        DEFAULT nextval('message_queue_msg_sequence_seq'),
 
     queued_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -550,6 +556,10 @@ CREATE TABLE message_queue (
         )
     )
 );
+
+-- Tie the sequence lifetime to the column so it is dropped with the table.
+ALTER SEQUENCE message_queue_msg_sequence_seq
+    OWNED BY message_queue.msg_sequence;
 
 -- =========================================================
 -- REPLAY PROTECTION
