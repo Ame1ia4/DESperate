@@ -70,5 +70,3 @@ export async function revokeSessionKey(deviceId) {
   await query('DELETE FROM device_sessions WHERE device_id = $1', [deviceId])
 }
 
-// Kept for backward compat with any import that uses the old name.
-export { getSessionKey as consumeSessionKey }

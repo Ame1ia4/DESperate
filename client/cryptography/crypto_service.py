@@ -367,19 +367,30 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
         entry = _sessions[conversation_id]
 
-        # Use the caller-supplied sig pub if provided (refreshes on each message
-        # so key rotation is handled transparently); fall back to stored value.
-        sig_pub = (
-            bytes.fromhex(sender_ik_sig_pub_hex)
-            if sender_ik_sig_pub_hex
-            else entry.remote_ik_sig_pub
-        )
-
-        if not sig_pub:
+        # Resolve which key to verify against. The stored pin is authoritative;
+        # a caller-supplied key is only accepted when the pin is not yet set
+        # (first message on a session restored from disk with no prior contact).
+        # After the pin is set it is never overridden by the caller — that would
+        # allow a compromised server to substitute a rogue key mid-conversation.
+        if entry.remote_ik_sig_pub:
+            sig_pub = entry.remote_ik_sig_pub
+        elif sender_ik_sig_pub_hex:
+            sig_pub = bytes.fromhex(sender_ik_sig_pub_hex)
+            # Pin this key for all subsequent messages.
+            entry.remote_ik_sig_pub = sig_pub
+            store = _require_store()
+            store.save_state(
+                f"{_META_KEY_PREFIX}{conversation_id}",
+                {"remote_ik_sig_pub": sig_pub.hex()},
+            )
+        else:
             raise ValueError("sender_ik_sig_pub is required to verify message signatures")
 
         try:
-            signed = verify_and_extract(data=payload, aad=aad, ik_sig_pub=sig_pub)
+            signed = verify_and_extract(
+                data=payload, aad=aad,
+                ik_sig_pub=sig_pub, expected_pub=entry.remote_ik_sig_pub,
+            )
         except SignatureVerificationError as exc:
             raise ValueError(f"Message signature verification failed: {exc}") from exc
 
