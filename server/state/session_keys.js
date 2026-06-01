@@ -70,3 +70,14 @@ export async function revokeSessionKey(deviceId) {
   await query('DELETE FROM device_sessions WHERE device_id = $1', [deviceId])
 }
 
+// Revoke every session for a user across all their devices.
+// Call this on password change so no stale bearer token survives credential rotation.
+export async function revokeAllUserSessions(userId) {
+  const { rows } = await query('SELECT id FROM devices WHERE user_id = $1', [userId])
+  for (const { id } of rows) _cache.delete(id)
+  await query(
+    'DELETE FROM device_sessions WHERE device_id IN (SELECT id FROM devices WHERE user_id = $1)',
+    [userId]
+  )
+}
+

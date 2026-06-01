@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
 import { register, registrationNonce } from './handlers/auth/index.js'
+import { passwordChangeInit }    from './handlers/auth/password_init.js'
+import { passwordChangeConfirm } from './handlers/auth/password_confirm.js'
 import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
 import { requireAuth } from './middleware/require_auth.js'
@@ -85,6 +87,8 @@ app.get('/auth/nonce',    authLimiter, registrationNonce)
 app.post('/auth/register', authLimiter, register)
 app.post('/auth/init',     authLimiter, authInit)
 app.post('/auth/login',    authLimiter, authVerify)
+app.post('/auth/password/change-init',    authLimiter, requireAuth, passwordChangeInit)
+app.post('/auth/password/change-confirm', authLimiter, requireAuth, passwordChangeConfirm)
 
 // ── Public key bundle fetch (protected) ──
 // Returns the public PQXDH bundle for a username so a peer can initiate a session.
