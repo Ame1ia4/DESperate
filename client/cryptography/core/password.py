@@ -53,6 +53,11 @@ from .constants import (
     ARGON2_SALT_LEN,
 )
 
+# Deferred import to avoid circular dependency (kdf imports from password).
+def _kdf():
+    from . import kdf
+    return kdf
+
 
 # Pre-configured PasswordHasher for server-side password verification.
 # Parameters are defined in constants.py and justified there against OWASP.
@@ -169,3 +174,34 @@ def argon2id_derive_key(
         type        = Type.ID,
     )
     return key, salt
+
+
+def derive_master_components(
+    password: str,
+    salt:     bytes | None = None,
+) -> tuple[bytes, bytes, bytes]:
+    """
+    Derive SRP synthetic password and keystore encryption key from one Argon2id call.
+
+    Run Argon2id once on the master password, then HKDF with distinct info
+    strings to produce two independent sub-keys.  Callers MUST use the same
+    salt on every login (load it from disk after registration).
+
+    Parameters
+    ----------
+    password : the user's master password
+    salt     : 16-byte Argon2id salt. Generated freshly when None (registration).
+               Must be the persisted salt on subsequent calls (login).
+
+    Returns
+    -------
+    (srp_password, keystore_key, master_salt) — all bytes
+        srp_password : 32 bytes; encode as .hex() before passing to pysrp
+        keystore_key : 32 bytes; use directly as ChaCha20-Poly1305 key
+        master_salt  : the salt used — persist this on first call
+    """
+    kdf = _kdf()
+    master_key, master_salt = argon2id_derive_key(password, salt)
+    srp_password = kdf.hkdf_derive(master_key, master_salt, kdf.INFO_SRP_AUTH)
+    keystore_key = kdf.hkdf_derive(master_key, master_salt, kdf.INFO_LOCAL_KEY_ENC)
+    return srp_password, keystore_key, master_salt
