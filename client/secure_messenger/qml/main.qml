@@ -16,7 +16,7 @@ ApplicationWindow {
     property int authScreenIndex: 0 // 0 login, 1 sign up
 
     header: ToolBar {
-        visible: authController.authenticated
+        visible: authController && authController.authenticated
         background: Rectangle { color: "#2B6D45" }
         RowLayout {
             anchors.fill: parent
@@ -41,7 +41,7 @@ ApplicationWindow {
 
     StackLayout {
         anchors.fill: parent
-        currentIndex: authController.authenticated ? 1 : 0
+        currentIndex: authController && authController.authenticated ? 1 : 0
 
         Item {
             property string statusMessage: ""

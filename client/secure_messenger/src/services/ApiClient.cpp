@@ -4,6 +4,7 @@
 
 #include "src/network/TLSManager.h"
 
+#include <QDebug>
 #include <QNetworkRequest>
 #include <QJsonDocument>
 #include <QNetworkReply>
@@ -78,6 +79,15 @@ void ApiClient::registerUser(
     bodyObject["username"] = username;
     bodyObject["bundle"]   = bundle;
 
+    const QString srpSalt     = bundle.value("srp_salt").toString();
+    const QString srpVerifier = bundle.value("srp_verifier").toString();
+    qDebug() << "[REGISTER REQUEST] POST /auth/register"
+             << "| username:" << username;
+    qDebug() << "  srp_salt     len:" << srpSalt.length()
+             << "| value:" << srpSalt;
+    qDebug() << "  srp_verifier len:" << srpVerifier.length()
+             << "| first32:" << srpVerifier.left(32);
+
     auto* reply = m_network.post(request, QJsonDocument(bodyObject).toJson());
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
@@ -85,6 +95,10 @@ void ApiClient::registerUser(
         const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto body   = reply->readAll();
         reply->deleteLater();
+
+        qDebug() << "[REGISTER RESPONSE] status:" << status
+                 << "| networkError:" << error
+                 << "| body:" << QString::fromUtf8(body);
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             const QString reason = body.isEmpty()
@@ -96,6 +110,7 @@ void ApiClient::registerUser(
 
         const auto parsed   = QJsonDocument::fromJson(body).object();
         const auto deviceId = parsed.value(QStringLiteral("deviceId")).toString();
+        qDebug() << "[REGISTER RESPONSE] success | deviceId:" << deviceId;
         emit registerUserSucceeded(deviceId);
     });
 }
@@ -106,18 +121,27 @@ void ApiClient::loginUser(
     const QString& username,
     const QString& password)
 {
+    qDebug() << "[LOGIN] loginUser called | username:" << username;
+
     const QString deviceId = storedDeviceId();
     if (deviceId.isEmpty()) {
+        qDebug() << "[LOGIN] FAILED: no device_id stored";
         emit loginUserFailed(QStringLiteral("No device registered on this device."));
         return;
     }
 
+    qDebug() << "[LOGIN] device_id:" << deviceId;
+    qDebug() << "[LOGIN] Round 0: calling srpStart (generates A)";
+
     // Round 0: compute A via Python crypto service (keeps password out of C++)
     const QString A = m_crypto->srpStart(username, password);
     if (A.isEmpty()) {
+        qDebug() << "[LOGIN] FAILED: srpStart returned empty A | cryptoError:" << m_crypto->lastError();
         emit loginUserFailed(QStringLiteral("SRP initialisation failed."));
         return;
     }
+
+    qDebug() << "[LOGIN] Round 0 OK: A len:" << A.length() << "| first16:" << A.left(16);
 
     doSrpInit(username, deviceId, A);
 }
@@ -127,6 +151,11 @@ void ApiClient::doSrpInit(
     const QString& deviceId,
     const QString& A)
 {
+    qDebug() << "[LOGIN] Round 1: POST /auth/init"
+             << "| username:" << username
+             << "| device_id:" << deviceId
+             << "| A_len:" << A.length();
+
     auto request = makeRequest("/auth/init");
 
     QJsonObject body;
@@ -142,7 +171,12 @@ void ApiClient::doSrpInit(
         const auto body   = reply->readAll();
         reply->deleteLater();
 
+        qDebug() << "[LOGIN] Round 1 response: status:" << status
+                 << "| networkError:" << error
+                 << "| body:" << QString::fromUtf8(body);
+
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            qDebug() << "[LOGIN] Round 1 FAILED";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
@@ -151,14 +185,27 @@ void ApiClient::doSrpInit(
         const auto salt   = parsed.value(QStringLiteral("salt")).toString();
         const auto B      = parsed.value(QStringLiteral("serverPublicEphemeral")).toString();
 
+        qDebug() << "[LOGIN] Round 1 OK:";
+        qDebug() << "  salt len:" << salt.length() << "| value:" << salt;
+        qDebug() << "  B    len:" << B.length()    << "| first16:" << B.left(16);
+
         if (salt.isEmpty() || B.isEmpty()) {
+            qDebug() << "[LOGIN] Round 1 FAILED: salt or B empty";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
 
+        qDebug() << "[LOGIN] Round 1: calling srpChallenge (computes M1)";
+
         // Compute M1 in the Python service — password never leaves the service
         const QString M1 = m_crypto->srpChallenge(salt, B);
+
+        qDebug() << "[LOGIN] srpChallenge result: M1 len:" << M1.length()
+                 << "| M1:" << M1
+                 << "| cryptoError:" << m_crypto->lastError();
+
         if (M1.isEmpty()) {
+            qDebug() << "[LOGIN] Round 1 FAILED: srpChallenge returned empty M1";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
@@ -173,6 +220,10 @@ void ApiClient::doSrpVerify(
     const QString& A,
     const QString& M1)
 {
+    qDebug() << "[LOGIN] Round 2: POST /auth/login"
+             << "| username:" << username
+             << "| M1:" << M1;
+
     auto request = makeRequest("/auth/login");
 
     QJsonObject body;
@@ -189,7 +240,12 @@ void ApiClient::doSrpVerify(
         const auto body   = reply->readAll();
         reply->deleteLater();
 
+        qDebug() << "[LOGIN] Round 2 response: status:" << status
+                 << "| networkError:" << error
+                 << "| body:" << QString::fromUtf8(body);
+
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            qDebug() << "[LOGIN] Round 2 FAILED";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
@@ -198,14 +254,27 @@ void ApiClient::doSrpVerify(
         const auto M2           = parsed.value(QStringLiteral("serverSessionProof")).toString();
         const auto sessionToken = parsed.value(QStringLiteral("session_token")).toString();
 
+        qDebug() << "[LOGIN] Round 2 OK:"
+                 << "| M2 len:" << M2.length()
+                 << "| M2:" << M2
+                 << "| sessionToken len:" << sessionToken.length();
+
         if (M2.isEmpty() || sessionToken.isEmpty()) {
+            qDebug() << "[LOGIN] Round 2 FAILED: M2 or session_token empty";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
 
+        qDebug() << "[LOGIN] Round 2: calling srpVerify (mutual auth check)";
+
         // Mutual authentication — verify server's proof before trusting session token.
         const QString sessionKey = m_crypto->srpVerify(M2);
+
+        qDebug() << "[LOGIN] srpVerify result: sessionKey len:" << sessionKey.length()
+                 << "| cryptoError:" << m_crypto->lastError();
+
         if (sessionKey.isEmpty()) {
+            qDebug() << "[LOGIN] Round 2 FAILED: server proof rejected by client";
             emit loginUserFailed(QStringLiteral("Server authentication failed."));
             return;
         }
@@ -213,6 +282,7 @@ void ApiClient::doSrpVerify(
         // Use the server-issued HKDF-derived token (not raw K) as the Bearer credential.
         setAuthToken(sessionToken);
 
+        qDebug() << "[LOGIN] SUCCESS: session established";
         emit loginUserSucceeded();
     });
 }

@@ -5,6 +5,8 @@
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
 
+#include <QDebug>
+#include <QJsonDocument>
 #include <memory>
 
 AuthController::AuthController(
@@ -146,6 +148,10 @@ void AuthController::signUp(
 {
     const QString normalized = username.trimmed();
 
+    qDebug() << "[REGISTRATION] signUp called"
+             << "| username:" << normalized
+             << "| passwordLen:" << password.length();
+
     if (normalized.isEmpty() || password.isEmpty()) {
         setAuthError("Username and password are required.");
         emit registrationFailed(m_authError);
@@ -157,6 +163,8 @@ void AuthController::signUp(
         emit registrationFailed(m_authError);
         return;
     }
+
+    qDebug() << "[REGISTRATION] Step 1: fetching nonce from server";
 
     // Step 1: fetch a single-use nonce from the server for proof-of-possession.
     auto nonceSuccessConn = std::make_shared<QMetaObject::Connection>();
@@ -170,6 +178,12 @@ void AuthController::signUp(
 
             QObject::disconnect(*nonceFailConn);
 
+            qDebug() << "[REGISTRATION] Step 1 OK: nonce received"
+                     << "| nonce:" << nonce
+                     << "| nonceLen:" << nonce.length();
+
+            qDebug() << "[REGISTRATION] Step 2: calling generateIdentityBundle";
+
             // Step 2: generate all key material including SRP verifier (sync RPC).
             const QJsonObject bundle =
                 m_crypto->generateIdentityBundle(normalized, password, nonce);
@@ -179,10 +193,27 @@ void AuthController::signUp(
                     m_crypto->lastError().isEmpty()
                         ? "Key generation failed."
                         : m_crypto->lastError();
+                qDebug() << "[REGISTRATION] Step 2 FAILED: bundle empty | error:" << reason;
                 setAuthError(reason);
                 emit registrationFailed(reason);
                 return;
             }
+
+            const QString srpSalt     = bundle.value("srp_salt").toString();
+            const QString srpVerifier = bundle.value("srp_verifier").toString();
+            qDebug() << "[REGISTRATION] Step 2 OK: bundle generated";
+            qDebug() << "  FULL BUNDLE JSON:" << QString::fromUtf8(QJsonDocument(bundle).toJson(QJsonDocument::Compact));
+            qDebug() << "  srp_salt     len:" << srpSalt.length()
+                     << "| first16:" << srpSalt.left(16)
+                     << "| last16:"  << srpSalt.right(16);
+            qDebug() << "  srp_verifier len:" << srpVerifier.length()
+                     << "| first16:" << srpVerifier.left(16);
+            qDebug() << "  idk_classical_pub len:" << bundle.value("idk_classical_pub").toString().length();
+            qDebug() << "  identity_signing_pub len:" << bundle.value("identity_signing_pub").toString().length();
+            qDebug() << "  signed_prekey_pub len:" << bundle.value("signed_prekey_pub").toString().length();
+            qDebug() << "  nonce_signature len:" << bundle.value("nonce_signature").toString().length();
+
+            qDebug() << "[REGISTRATION] Step 3: calling registerUser (POST /auth/register)";
 
             // Step 3: register with the server.
             auto regSuccessConn = std::make_shared<QMetaObject::Connection>();
@@ -195,6 +226,8 @@ void AuthController::signUp(
                 [this, regFailConn](const QString& deviceId) {
 
                     QObject::disconnect(*regFailConn);
+
+                    qDebug() << "[REGISTRATION] Step 3 OK: registered | deviceId:" << deviceId;
 
                     // Persist device ID for subsequent logins.
                     m_api->storeDeviceId(deviceId);
@@ -211,6 +244,8 @@ void AuthController::signUp(
                 [this, regSuccessConn](const QString& reason) {
 
                     QObject::disconnect(*regSuccessConn);
+
+                    qDebug() << "[REGISTRATION] Step 3 FAILED: server rejected registration | reason:" << reason;
 
                     const QString failureReason =
                         reason.isEmpty() ? "Registration failed." : reason;
@@ -230,6 +265,8 @@ void AuthController::signUp(
         [this, nonceSuccessConn](const QString& reason) {
 
             QObject::disconnect(*nonceSuccessConn);
+
+            qDebug() << "[REGISTRATION] Step 1 FAILED: nonce fetch failed | reason:" << reason;
 
             const QString failureReason =
                 reason.isEmpty() ? "Registration failed." : reason;

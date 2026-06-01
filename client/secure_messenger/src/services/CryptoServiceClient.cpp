@@ -15,6 +15,20 @@
 {
 }
 
+CryptoServiceClient::~CryptoServiceClient()
+{
+    if (m_serviceProcess &&
+        m_serviceProcess->state() != QProcess::NotRunning)
+    {
+        qDebug() << "[CryptoService] shutting down crypto service (pid"
+                 << m_serviceProcess->processId() << ")";
+        m_serviceProcess->terminate();
+        if (!m_serviceProcess->waitForFinished(3000))
+            m_serviceProcess->kill();
+    }
+    delete m_serviceProcess;
+}
+
 bool CryptoServiceClient::unlockKeystore(
     const QString& password)
 {
@@ -59,13 +73,28 @@ CryptoServiceClient::generateIdentityBundle(
     const QString& password,
     const QString& nonce)
 {
-    return rpc(
+    // Key generation + Argon2id keystore creation + ~100 KB response transfer.
+    // 5 s is not enough on slow hardware; bump to 30 s for this call only.
+    const int saved = m_rpcTimeoutMs;
+    setRpcTimeoutMs(30000);
+
+    const QJsonObject resp = rpc(
         "generate_identity_bundle",
         {
             {"username", username},
             {"password", password},
             {"nonce",    nonce}
         });
+
+    setRpcTimeoutMs(saved);
+
+    if (resp.contains(QStringLiteral("error"))) {
+        // m_lastError already set by readResponse(); return empty so
+        // callers can detect failure via isEmpty() as with other methods.
+        return {};
+    }
+
+    return resp;
 }
 
 QString CryptoServiceClient::srpStart(
@@ -260,16 +289,20 @@ QJsonObject CryptoServiceClient::rpc(
         return {};
     }
 
+    // Drain any bytes left over from a previous timed-out call so they
+    // don't get mistaken for the response to this request.
+    if (m_socket.bytesAvailable() > 0) {
+        qDebug() << "[CryptoService] draining" << m_socket.bytesAvailable()
+                 << "stale bytes before" << method;
+        m_socket.readAll();
+    }
+
+    const QString requestId = QUuid::createUuid().toString();
+
     QJsonObject request;
-
-    request["id"] =
-        QUuid::createUuid().toString();
-
-    request["method"] =
-        method;
-
-    request["params"] =
-        params;
+    request["id"]     = requestId;
+    request["method"] = method;
+    request["params"] = params;
 
     const QByteArray payload =
         QJsonDocument(request)
@@ -280,7 +313,7 @@ QJsonObject CryptoServiceClient::rpc(
         return {};
     }
 
-    return readResponse();
+    return readResponse(requestId);
 }
 
 bool CryptoServiceClient::ensureConnected()
@@ -344,8 +377,19 @@ bool CryptoServiceClient::startLocalCryptoService()
         return false;
     }
 
-    return QProcess::startDetached(
-        script);
+    m_serviceProcess = new QProcess(this);
+    m_serviceProcess->start(script);
+
+    if (!m_serviceProcess->waitForStarted(3000)) {
+        m_lastError = "Crypto service failed to start.";
+        delete m_serviceProcess;
+        m_serviceProcess = nullptr;
+        return false;
+    }
+
+    qDebug() << "[CryptoService] started (pid"
+             << m_serviceProcess->processId() << ")";
+    return true;
 }
 
 QString CryptoServiceClient::locateServiceScript()
@@ -398,44 +442,86 @@ bool CryptoServiceClient::writeRequest(
 }
 
 QJsonObject
-CryptoServiceClient::readResponse()
+CryptoServiceClient::readResponse(const QString& expectedId)
 {
-    if (!m_socket.waitForReadyRead(
-            m_rpcTimeoutMs)) {
+    // JSON-RPC 2.0: clients must correlate responses by "id".
+    // Best practice for a synchronous client is to keep reading lines until
+    // the matching id arrives rather than giving up on the first mismatch:
+    //
+    //   • id=null (empty string in Qt)  — server parse error for a line it
+    //     couldn't decode (e.g. empty line sent during connection setup by
+    //     the asyncio transport).  Per spec: discard, it belongs to no request.
+    //   • id=wrong uuid               — stale response from a prior timed-out
+    //     call whose reply arrived late.  Discard, keep waiting.
+    //   • id=expected uuid            — our response; use it.
+    //
+    // Each waitForReadyRead resets the per-segment deadline; for large
+    // responses (~100 KB identity bundles with ML-KEM OPKs) several TCP
+    // segments arrive before canReadLine() becomes true, so we loop.
+    for (;;) {
+        while (!m_socket.canReadLine()) {
+            if (!m_socket.waitForReadyRead(m_rpcTimeoutMs)) {
+                m_lastError = "Timed out waiting for crypto service response.";
+                qDebug() << "[CryptoService] readResponse timed out after"
+                         << m_rpcTimeoutMs << "ms"
+                         << "(expectedId:" << expectedId << ")";
+                return {};
+            }
+        }
 
-        m_lastError =
-            "Timed out waiting for response.";
+        const QByteArray responseBytes =
+            m_socket.readLine();
 
-        return {};
-    }
+        const auto document =
+            QJsonDocument::fromJson(
+                responseBytes);
 
-    const QByteArray responseBytes =
-        m_socket.readLine();
+        if (!document.isObject()) {
+            m_lastError = "Invalid RPC response (not a JSON object). First 200 bytes: "
+                          + QString::fromUtf8(responseBytes.left(200));
+            qDebug() << "[CryptoService] readResponse: parse error —" << m_lastError;
+            return {};
+        }
 
-    const auto document =
-        QJsonDocument::fromJson(
-            responseBytes);
+        const QJsonObject response =
+            document.object();
 
-    if (!document.isObject()) {
+        if (!expectedId.isEmpty()) {
+            const QString responseId = response.value("id").toString();
+            const bool hasError      = response.contains(QStringLiteral("error"));
 
-        m_lastError =
-            "Invalid RPC response.";
+            if (responseId.isEmpty() && hasError) {
+                // JSON-RPC parse error: server got garbage on the wire
+                // (e.g. an empty line sent by the asyncio transport on connect).
+                // The response for our actual request will arrive next.
+                qDebug() << "[CryptoService] readResponse: discarding null-id error:"
+                         << response.value("error").toString();
+                continue;
+            }
 
-        return {};
-    }
+            if (!responseId.isEmpty() && responseId != expectedId) {
+                // Non-null id that doesn't match — stale response from a
+                // previous timed-out RPC call.
+                qDebug() << "[CryptoService] readResponse: discarding stale response"
+                         << "(got id:" << responseId
+                         << ", expected:" << expectedId << ")";
+                continue;
+            }
 
-    const QJsonObject response =
-        document.object();
+            // Accept: id matches, OR id is null but no error field
+            // (old binary compat — pre-id-field builds omit "id" from results).
+            if (responseId.isEmpty()) {
+                qDebug() << "[CryptoService] readResponse: accepted null-id result"
+                         << "(binary may be stale — rebuild from current crypto_service.py)";
+            }
+        }
 
-    if (response.contains("error")) {
+        if (response.contains("error")) {
+            m_lastError = response.value("error").toString();
+            qDebug() << "[CryptoService] readResponse: service error —" << m_lastError;
+            return response;
+        }
 
-        m_lastError =
-            response.value("error")
-                .toString();
-
-        // Return the response so callers can inspect the error field.
         return response;
     }
-
-    return response;
 }

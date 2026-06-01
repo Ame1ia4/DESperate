@@ -9,7 +9,7 @@ Rectangle {
         spacing: 10
         clip: true
 
-        model: conversationController.conversations
+        model: conversationController ? conversationController.conversations : null
 
         delegate: Rectangle {
             width: parent.width
