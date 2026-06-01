@@ -194,23 +194,24 @@ void ApiClient::doSrpVerify(
             return;
         }
 
-        const auto parsed = QJsonDocument::fromJson(body).object();
-        const auto M2     = parsed.value(QStringLiteral("serverSessionProof")).toString();
+        const auto parsed       = QJsonDocument::fromJson(body).object();
+        const auto M2           = parsed.value(QStringLiteral("serverSessionProof")).toString();
+        const auto sessionToken = parsed.value(QStringLiteral("session_token")).toString();
 
-        if (M2.isEmpty()) {
+        if (M2.isEmpty() || sessionToken.isEmpty()) {
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
 
-        // Mutual authentication — verify server's proof and get our session token.
+        // Mutual authentication — verify server's proof before trusting session token.
         const QString sessionKey = m_crypto->srpVerify(M2);
         if (sessionKey.isEmpty()) {
             emit loginUserFailed(QStringLiteral("Server authentication failed."));
             return;
         }
 
-        // Store session key — sent as Bearer token in all subsequent requests.
-        setAuthToken(sessionKey);
+        // Use the server-issued HKDF-derived token (not raw K) as the Bearer credential.
+        setAuthToken(sessionToken);
 
         emit loginUserSucceeded();
     });
