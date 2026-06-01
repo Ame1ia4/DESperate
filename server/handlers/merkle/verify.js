@@ -1,5 +1,4 @@
 import { query } from '../../database/db.js'
-import { getProof } from '../../blockchain/merkle-core.js'
 import { UUID_RE } from '../../constants/auth.js'
 
 // Compute the three-value client status for a message.
@@ -48,17 +47,6 @@ async function getMessageStatus(msgId, userId, deviceId) {
     return { status: 'pending' }
   }
 
-  // Build inclusion proof — fetch all leaves for this root ordered by index
-  const { rows: allLeaves } = await query(
-    `SELECT leaf_hash FROM merkle_leaves
-     WHERE merkle_root_id = $1
-     ORDER BY leaf_index ASC`,
-    [leaf.root_id]
-  )
-
-  const leafHexes = allLeaves.map(l => l.leaf_hash.trim())
-  const proof     = getProof(leafHexes, leaf.leaf_index)
-
   return {
     status:          'stored-on-blockchain',
     ciphertext:      '0x' + msg.ciphertext_hex,
@@ -67,7 +55,6 @@ async function getMessageStatus(msgId, userId, deviceId) {
     block_timestamp: leaf.block_timestamp,
     leaf_hash:       leaf.leaf_hash?.trim(),
     leaf_index:      leaf.leaf_index,
-    proof,
   }
 }
 

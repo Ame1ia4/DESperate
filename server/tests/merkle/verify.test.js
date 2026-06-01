@@ -5,7 +5,7 @@
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import express from 'express'
-import { computeLeaf, computeRoot, getProof } from '../../blockchain/merkle-core.js'
+import { computeLeaf, computeRoot } from '../../blockchain/merkle-core.js'
 import { verifyHandler } from '../../handlers/merkle/verify.js'
 
 const MSG_ID    = '11111111-1111-1111-1111-111111111111'
@@ -46,11 +46,10 @@ function getVerify(msgId = MSG_ID) {
 
 // Build a confirmed-root fixture for end-to-end tests
 function buildFixture(leafCount = 3, targetIndex = 1) {
-  const cts      = Array.from({ length: leafCount }, (_, i) => Buffer.alloc(32, i + 1))
-  const leaves   = cts.map(computeLeaf)
-  const root     = computeRoot(leaves)
-  const proof    = getProof(leaves, targetIndex)
-  return { cts, leaves, root, proof, targetIndex }
+  const cts    = Array.from({ length: leafCount }, (_, i) => Buffer.alloc(32, i + 1))
+  const leaves = cts.map(computeLeaf)
+  const root   = computeRoot(leaves)
+  return { cts, leaves, root, targetIndex }
 }
 
 // queryImpl call order for verifyHandler:
@@ -58,7 +57,6 @@ function buildFixture(leafCount = 3, targetIndex = 1) {
 // 2. message + deleted_at
 // 3. message_hidden check
 // 4. merkle_leaves + root join
-// 5. all leaves for root (for proof)
 function setupQueries(calls) {
   let i = 0
   globalThis.__db.queryImpl = async (text) => {
@@ -139,7 +137,7 @@ describe('GET /messages/:id/verify', () => {
   })
 
   describe('stored-on-blockchain status (test matrix #9)', () => {
-    it('returns status=stored-on-blockchain with proof when root is confirmed', async () => {
+    it('returns status=stored-on-blockchain when root is confirmed', async () => {
       const fx = buildFixture(3, 1)
 
       setupQueries([
@@ -147,17 +145,17 @@ describe('GET /messages/:id/verify', () => {
         { rows: [{ id: MSG_ID, deleted_at: null, conversation_id: 'x', ciphertext_hex: fx.cts[1].toString('hex') }] },
         { rows: [] },
         { rows: [{ leaf_hash: fx.leaves[1], leaf_index: 1, root_id: 7, merkle_root: fx.root, tx_hash: '0x' + 'cc'.repeat(32), block_timestamp: 1700000000, root_state: 'confirmed', leaf_state: 'confirmed' }] },
-        { rows: fx.leaves.map(l => ({ leaf_hash: l })) },
       ])
 
       const res  = await getVerify()
       assert.strictEqual(res.status, 200)
       const json = await res.json()
       assert.strictEqual(json.status, 'stored-on-blockchain')
-      assert.ok(Array.isArray(json.proof))
-      assert.ok(json.proof.length > 0)
       assert.ok(json.tx_hash)
       assert.ok(json.block_timestamp)
+      assert.ok(json.ciphertext)
+      assert.ok(json.merkle_root)
+      assert.strictEqual(json.proof, undefined)
     })
   })
 

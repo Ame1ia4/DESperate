@@ -65,13 +65,33 @@ const I = {
     </svg>,
 };
 
+// ─── Copy button ─────────────────────────────────────────────────────────────
+
+function CopyBtn({ value }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      className="btn btn-link"
+      onClick={copy}
+      style={{ padding: "0 6px", fontSize: 11, marginLeft: 6, verticalAlign: "middle" }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 // ─── Stepper ─────────────────────────────────────────────────────────────────
 
 function Stepper({ current }) {
   const steps = [
     { n: 1, label: "Root lookup" },
-    { n: 2, label: "Verified" },
-    { n: 3, label: "Inclusion check" },
+    { n: 2, label: "Inclusion check" },
   ];
 
   return (
@@ -189,9 +209,9 @@ function AnchorCard({ onVerified, verified, verify }) {
                 <dt>Block</dt>
                 <dd>#{verified.block.toLocaleString()}</dd>
                 <dt>Transaction</dt>
-                <dd>{verified.txid}</dd>
+                <dd>{verified.txid}<CopyBtn value={verified.txid} /></dd>
                 <dt>Root</dt>
-                <dd>{verified.provided}</dd>
+                <dd>{verified.provided}<CopyBtn value={verified.provided} /></dd>
               </dl>
             </div>
           )}
@@ -343,9 +363,9 @@ function ProofCard({ anchored, locked, onInclusionRan }) {
             <div className="result-body">
               <dl className="kv">
                 <dt>Leaf (keccak256)</dt>
-                <dd>{result.leaf}</dd>
+                <dd>{result.leaf}<CopyBtn value={result.leaf} /></dd>
                 <dt>Root</dt>
-                <dd>{anchored.provided}</dd>
+                <dd>{anchored.provided}<CopyBtn value={anchored.provided} /></dd>
               </dl>
             </div>
           )}
