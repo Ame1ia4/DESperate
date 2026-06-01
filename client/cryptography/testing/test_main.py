@@ -145,6 +145,7 @@ class TestGenerateIdentityBundle:
             result = _run(main.handle_generate_identity_bundle({
                 "keystore_password": "secret",
                 "user_id": "alice",
+                "nonce": "ab" * 32,
             }))
         assert "error" not in result
         assert result["user_id"] == "u1"
@@ -164,6 +165,7 @@ class TestGenerateIdentityBundle:
             result = _run(main.handle_generate_identity_bundle({
                 "keystore_password": password,
                 "user_id": "alice",
+                "nonce": "ab" * 32,
             }))
         assert "error" not in result
 
