@@ -35,7 +35,6 @@ app.use(helmet({
         "'strict-dynamic'",
         (_req, res) => `'nonce-${res.locals.nonce}'`,
         'https:',
-        "'unsafe-inline'",
       ],
       styleSrc:  ["'self'", 'https://fonts.googleapis.com'],
       fontSrc:   ["'self'", 'https://fonts.gstatic.com'],
@@ -94,10 +93,11 @@ app.get('/keys/:username', requireAuth, async (req, res) => {
 
   const { rows } = await query(
     `SELECT
-       encode(d.idk_classical_pub,     'hex') AS ik_classical_pub,
-       encode(d.idk_pq_pub,            'hex') AS ik_kem_pub,
-       encode(d.identity_signing_pub,  'hex') AS ik_sig_pub,
-       encode(d.signed_prekey_pub,     'hex') AS spk_pub,
+       d.id                                    AS device_id,
+       encode(d.idk_classical_pub,     'hex')  AS ik_classical_pub,
+       encode(d.idk_pq_pub,            'hex')  AS ik_kem_pub,
+       encode(d.identity_signing_pub,  'hex')  AS ik_sig_pub,
+       encode(d.signed_prekey_pub,     'hex')  AS spk_pub,
        encode(d.signed_prekey_signature,'hex') AS spk_sig
      FROM devices d
      JOIN users   u ON u.id = d.user_id
@@ -108,16 +108,87 @@ app.get('/keys/:username', requireAuth, async (req, res) => {
   )
   if (!rows.length) return res.status(404).json({ error: 'User not found' })
 
+  // Fetch one unused X25519 + ML-KEM OPK pair (matching opk_id) and mark both as used.
+  // Atomicity prevents two concurrent initiators from claiming the same OPK.
+  const { rows: opkRows } = await query(
+    `WITH chosen AS (
+        SELECT opk_id
+        FROM   one_time_prekeys
+        WHERE  device_id = $1
+          AND  used      = FALSE
+          AND  key_type  = 'x25519'
+        ORDER  BY created_at ASC
+        LIMIT  1
+     ),
+     mark_used AS (
+        UPDATE one_time_prekeys
+        SET    used = TRUE, used_at = NOW()
+        WHERE  device_id = $1
+          AND  opk_id IN (SELECT opk_id FROM chosen)
+        RETURNING opk_id, key_type, encode(opk_pub, 'hex') AS opk_pub
+     )
+     SELECT * FROM mark_used`,
+    [rows[0].device_id]
+  )
+
+  const opks_x25519 = opkRows
+    .filter(r => r.key_type === 'x25519')
+    .map(r => ({ opk_id: r.opk_id, opk_pub: r.opk_pub }))
+  const opks_kem = opkRows
+    .filter(r => r.key_type === 'ml-kem-1024')
+    .map(r => ({ opk_id: r.opk_id, opk_pub: r.opk_pub }))
+
+  const { device_id: _omit, ...bundle } = rows[0]
   res.json({
-    ...rows[0],
-    spk_id:     1,        // SPK ID is always 1 for initial key bundle
-    opks_x25519: [],      // OPKs uploaded separately via POST /keys/opks
-    opks_kem:    [],
+    ...bundle,
+    spk_id:      1,
+    opks_x25519,
+    opks_kem,
   })
 })
 
-// OPK upload (stub — OPK replenishment not yet implemented)
-app.post('/keys/opks', requireAuth, (_, res) => res.json({ uploaded: 0 }))
+// OPK upload — accepts paired X25519 + ML-KEM-1024 one-time prekeys.
+// opks_x25519 and opks_kem must be equal-length arrays with matching opk_ids.
+app.post('/keys/opks', requireAuth, async (req, res) => {
+  const { opks_x25519, opks_kem } = req.body
+
+  if (
+    !Array.isArray(opks_x25519) ||
+    !Array.isArray(opks_kem) ||
+    opks_x25519.length !== opks_kem.length
+  ) return res.status(400).json({ error: 'opks_x25519 and opks_kem must be equal-length arrays' })
+
+  let uploaded = 0
+  await withTransaction(async (client) => {
+    for (let i = 0; i < opks_x25519.length; i++) {
+      const x = opks_x25519[i]
+      const k = opks_kem[i]
+      if (typeof x?.opk_id !== 'number' || x.opk_id !== k?.opk_id)
+        throw new Error(`OPK ID mismatch at index ${i}`)
+      const xBuf = Buffer.from(x.opk_pub, 'hex')
+      const kBuf = Buffer.from(k.opk_pub, 'hex')
+      if (xBuf.length !== 32)
+        throw new Error(`X25519 OPK at index ${i} must be 32 bytes`)
+      if (kBuf.length !== 1568)
+        throw new Error(`ML-KEM-1024 OPK at index ${i} must be 1568 bytes`)
+      await client.query(
+        `INSERT INTO one_time_prekeys (device_id, opk_id, opk_pub, key_type)
+         VALUES ($1, $2, $3, 'x25519')
+         ON CONFLICT (device_id, opk_id, key_type) DO NOTHING`,
+        [req.deviceId, x.opk_id, xBuf]
+      )
+      await client.query(
+        `INSERT INTO one_time_prekeys (device_id, opk_id, opk_pub, key_type)
+         VALUES ($1, $2, $3, 'ml-kem-1024')
+         ON CONFLICT (device_id, opk_id, key_type) DO NOTHING`,
+        [req.deviceId, k.opk_id, kBuf]
+      )
+      uploaded++
+    }
+  })
+
+  res.json({ uploaded })
+})
 
 // ── Conversations ──
 

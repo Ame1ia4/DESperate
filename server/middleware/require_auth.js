@@ -34,7 +34,7 @@ export async function requireAuth(req, res, next) {
   )
   if (!rows.length) return res.status(401).json({ error: 'Authentication required' })
 
-  const storedKey = getSessionKey(deviceId)
+  const storedKey = await getSessionKey(deviceId)
   if (!storedKey) return res.status(401).json({ error: 'Authentication required' })
 
   // Constant-time comparison — session keys are fixed-length SRP-derived hex

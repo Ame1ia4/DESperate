@@ -188,6 +188,16 @@ CREATE TABLE one_time_prekeys (
         REFERENCES devices(id)
         ON DELETE CASCADE,
 
+    -- opk_id ties paired X25519 and ML-KEM OPKs together.
+    -- Both rows for a session initiation share the same opk_id.
+    opk_id INTEGER
+        NOT NULL,
+
+    -- 'x25519'    — 32-byte X25519 public key (classical DH4 leg)
+    -- 'ml-kem-1024' — 1568-byte ML-KEM-1024 public key (PQ encapsulation leg)
+    key_type VARCHAR(20)
+        NOT NULL DEFAULT 'x25519',
+
     opk_pub BYTEA
         NOT NULL,
 
@@ -197,11 +207,16 @@ CREATE TABLE one_time_prekeys (
     used BOOLEAN
         NOT NULL DEFAULT FALSE,
 
-    used_at TIMESTAMP WITH TIME ZONE
+    used_at TIMESTAMP WITH TIME ZONE,
+
+    CHECK (key_type IN ('x25519', 'ml-kem-1024')),
+
+    -- Prevent duplicate OPKs for the same device + id + type.
+    UNIQUE (device_id, opk_id, key_type)
 );
 
 CREATE INDEX idx_opk_lookup
-    ON one_time_prekeys(device_id)
+    ON one_time_prekeys(device_id, key_type)
     WHERE used = FALSE;
 
 -- =========================================================
@@ -423,6 +438,33 @@ CREATE TABLE merkle_roots (
 CREATE INDEX idx_merkle_roots_tx
     ON merkle_roots(tx_hash)
     WHERE tx_hash IS NOT NULL;
+
+-- =========================================================
+-- DEVICE SESSIONS
+--
+-- Persists SRP session keys (K) across server restarts.
+-- The in-process Map in session_keys.js is the primary cache;
+-- this table is the durability layer so users survive a pm2 reload
+-- without being forced to re-authenticate.
+--
+-- One row per device (PRIMARY KEY enforces this).
+-- Rows are upserted on each login and cleaned up by the TTL check.
+-- =========================================================
+
+CREATE TABLE device_sessions (
+    device_id UUID PRIMARY KEY
+        REFERENCES devices(id)
+        ON DELETE CASCADE,
+
+    session_key_hex TEXT
+        NOT NULL,
+
+    expires_at TIMESTAMP WITH TIME ZONE
+        NOT NULL
+);
+
+CREATE INDEX idx_device_sessions_expiry
+    ON device_sessions(expires_at);
 
 -- =========================================================
 -- MESSAGE QUEUE
