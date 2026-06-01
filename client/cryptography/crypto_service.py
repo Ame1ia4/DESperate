@@ -162,12 +162,11 @@ def _load_master_salt() -> Optional[bytes]:
 # ── RPC handlers ──────────────────────────────────────────────────────────────
 
 def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global _srp_session, _store, _local_bundle
+    global _srp_session, _store, _local_bundle, _cached_srp_pass, _cached_keystore_key
 
     # ── Keystore ──────────────────────────────────────────────────────────────
 
     if method == "unlock_keystore":
-        global _store, _local_bundle, _cached_srp_pass, _cached_keystore_key
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
@@ -201,7 +200,6 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── Key bundle generation (registration) ──────────────────────────────────
 
     if method == "generate_identity_bundle":
-        global _store, _local_bundle, _cached_srp_pass, _cached_keystore_key
         username  = params["username"]
         password  = params["password"]
         nonce_hex = params["nonce"]
@@ -253,7 +251,6 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── SRP authentication ─────────────────────────────────────────────────────
 
     if method == "srp_start":
-        global _srp_session, _cached_srp_pass, _cached_keystore_key
         # Discard any stale session from a previous incomplete flow.
         _srp_session = None
 
