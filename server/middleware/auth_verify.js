@@ -1,3 +1,4 @@
+import { hkdfSync } from 'node:crypto'
 import { createSRPServer } from 'js-srp6a'
 import { query } from '../database/db.js'
 import { storeSessionKey } from '../state/session_keys.js'
@@ -63,8 +64,17 @@ export async function authVerify(req, res) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
-  await storeSessionKey(device_id, serverSession.key)
+  // Derive session token from K via HKDF — K itself is never stored or transmitted.
+  const sessionTokenBuf = hkdfSync(
+    'sha256',
+    Buffer.from(serverSession.key, 'hex'),
+    Buffer.alloc(0),
+    'session-token',
+    32
+  )
+  const session_token = Buffer.from(sessionTokenBuf).toString('hex')
+  await storeSessionKey(device_id, session_token)
 
   console.info('auth_login: session established', { username, device_id })
-  res.json({ serverSessionProof: serverSession.proof })
+  res.json({ serverSessionProof: serverSession.proof, session_token })
 }
