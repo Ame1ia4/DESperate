@@ -26,6 +26,7 @@ bool CryptoServiceClient::unlockKeystore(
         return false;
     }
 
+    // Python handler accepts "password" key (matches both old and new handlers).
     const QJsonObject response =
         rpc(
             "unlock_keystore",
@@ -95,33 +96,59 @@ QString CryptoServiceClient::srpChallenge(
     return response.value("M1").toString();
 }
 
-bool CryptoServiceClient::srpVerify(
+// Returns the session key hex on success, or empty string on failure.
+QString CryptoServiceClient::srpVerify(
     const QString& m2Hex)
 {
     const QJsonObject response =
         rpc("srp_verify", {{"M2", m2Hex}});
 
     if (response.isEmpty()) {
+        return {};
+    }
+
+    if (!response.value("authenticated").toBool(false)) {
+        m_lastError = response.value("error").toString("Authentication failed.");
+        return {};
+    }
+
+    return response.value("session_key").toString();
+}
+
+bool CryptoServiceClient::initiateSession(
+    const QString& conversationId,
+    const QByteArray& remoteBundleJson)
+{
+    const QJsonObject response =
+        rpc(
+            "initiate_session",
+            {
+                {"conversation_id", conversationId},
+                {"remote_bundle",   QString::fromUtf8(remoteBundleJson)}
+            });
+
+    if (response.isEmpty()) {
         return false;
     }
 
-    return response.value("authenticated").toBool(false);
+    const bool success = response.value("success").toBool(false);
+    if (!success) {
+        m_lastError = response.value("error").toString("Session initiation failed.");
+    }
+    return success;
 }
 
 QJsonObject
 CryptoServiceClient::encryptMessage(
     const QString& plaintext,
-    const QString& recipientDeviceId,
+    const QString& /*recipientDeviceId*/,
     const QString& conversationId)
 {
     return rpc(
         "encrypt_message",
         {
-            {"plaintext", plaintext},
-            {"recipient_device_id",
-             recipientDeviceId},
-            {"conversation_id",
-             conversationId}
+            {"plaintext",       plaintext},
+            {"conversation_id", conversationId}
         });
 }
 
@@ -134,6 +161,11 @@ QString CryptoServiceClient::decryptMessage(
             {
                 {"envelope", envelope}
             });
+
+    if (response.contains("error")) {
+        m_lastError = response.value("error").toString();
+        return {};
+    }
 
     return response.value("plaintext")
         .toString();
@@ -156,12 +188,13 @@ void CryptoServiceClient::encryptMessageAsync(
                     recipientDeviceId,
                     conversationId);
 
-            if (response.isEmpty()) {
+            if (response.isEmpty() ||
+                response.contains("error")) {
 
                 emit encryptFailed(
                     requestId,
                     m_lastError.isEmpty()
-                        ? "Encryption failed."
+                        ? response.value("error").toString("Encryption failed.")
                         : m_lastError);
 
                 return;
@@ -280,6 +313,7 @@ bool CryptoServiceClient::ensureConnected()
 
         m_serviceStarted = true;
 
+        // Give the service a moment to bind before connecting.
         m_socket.connectToHost(
             m_serviceHost,
             m_servicePort);
@@ -399,7 +433,8 @@ CryptoServiceClient::readResponse()
             response.value("error")
                 .toString();
 
-        return {};
+        // Return the response so callers can inspect the error field.
+        return response;
     }
 
     return response;

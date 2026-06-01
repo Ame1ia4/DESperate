@@ -37,8 +37,12 @@ CREATE TABLE users (
 
     -- SRP-6a credentials (RFC 5054). The server stores salt + verifier
     -- only — it never sees the plaintext password.
-    srp_salt     VARCHAR(64)  NOT NULL,
-    srp_verifier VARCHAR(512) NOT NULL,
+    -- Salt:     32 bytes = 64 hex chars.
+    -- Verifier: v = g^x mod N for the 3072-bit group (RFC 5054 §A.3).
+    --           N is 384 bytes, so v is at most 384 bytes = 768 hex chars.
+    --           TEXT avoids any length constraint issue.
+    srp_salt     TEXT NOT NULL,
+    srp_verifier TEXT NOT NULL,
 
     created_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -184,6 +188,16 @@ CREATE TABLE one_time_prekeys (
         REFERENCES devices(id)
         ON DELETE CASCADE,
 
+    -- opk_id ties paired X25519 and ML-KEM OPKs together.
+    -- Both rows for a session initiation share the same opk_id.
+    opk_id INTEGER
+        NOT NULL,
+
+    -- 'x25519'    — 32-byte X25519 public key (classical DH4 leg)
+    -- 'ml-kem-1024' — 1568-byte ML-KEM-1024 public key (PQ encapsulation leg)
+    key_type VARCHAR(20)
+        NOT NULL DEFAULT 'x25519',
+
     opk_pub BYTEA
         NOT NULL,
 
@@ -193,11 +207,16 @@ CREATE TABLE one_time_prekeys (
     used BOOLEAN
         NOT NULL DEFAULT FALSE,
 
-    used_at TIMESTAMP WITH TIME ZONE
+    used_at TIMESTAMP WITH TIME ZONE,
+
+    CHECK (key_type IN ('x25519', 'ml-kem-1024')),
+
+    -- Prevent duplicate OPKs for the same device + id + type.
+    UNIQUE (device_id, opk_id, key_type)
 );
 
 CREATE INDEX idx_opk_lookup
-    ON one_time_prekeys(device_id)
+    ON one_time_prekeys(device_id, key_type)
     WHERE used = FALSE;
 
 -- =========================================================
@@ -421,6 +440,33 @@ CREATE INDEX idx_merkle_roots_tx
     WHERE tx_hash IS NOT NULL;
 
 -- =========================================================
+-- DEVICE SESSIONS
+--
+-- Persists SRP session keys (K) across server restarts.
+-- The in-process Map in session_keys.js is the primary cache;
+-- this table is the durability layer so users survive a pm2 reload
+-- without being forced to re-authenticate.
+--
+-- One row per device (PRIMARY KEY enforces this).
+-- Rows are upserted on each login and cleaned up by the TTL check.
+-- =========================================================
+
+CREATE TABLE device_sessions (
+    device_id UUID PRIMARY KEY
+        REFERENCES devices(id)
+        ON DELETE CASCADE,
+
+    session_key_hex TEXT
+        NOT NULL,
+
+    expires_at TIMESTAMP WITH TIME ZONE
+        NOT NULL
+);
+
+CREATE INDEX idx_device_sessions_expiry
+    ON device_sessions(expires_at);
+
+-- =========================================================
 -- MESSAGE QUEUE
 --
 -- Per-device delivery routing table.
@@ -449,6 +495,11 @@ CREATE INDEX idx_merkle_roots_tx
 -- After ACK the queue row is deleted immediately (it no longer
 -- carries data worth retaining).  The messages row persists.
 -- =========================================================
+
+-- Monotonic, collision-free ordering source for msg_sequence.
+-- nextval() is atomic and strictly increasing, so it replaces any
+-- application-computed sequence value.
+CREATE SEQUENCE message_queue_msg_sequence_seq;
 
 CREATE TABLE message_queue (
     id UUID PRIMARY KEY
@@ -479,7 +530,8 @@ CREATE TABLE message_queue (
     -- =====================================================
 
     msg_sequence BIGINT
-        NOT NULL,
+        NOT NULL
+        DEFAULT nextval('message_queue_msg_sequence_seq'),
 
     queued_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -504,6 +556,10 @@ CREATE TABLE message_queue (
         )
     )
 );
+
+-- Tie the sequence lifetime to the column so it is dropped with the table.
+ALTER SEQUENCE message_queue_msg_sequence_seq
+    OWNED BY message_queue.msg_sequence;
 
 -- =========================================================
 -- REPLAY PROTECTION

@@ -325,7 +325,7 @@ class RatchetSession:
             ),
             associated_data = ad_with_index,
         )
-        await self._persist()
+        self._persist()
         return plaintext
 
     # ── Persistence ──────────────────────────────────────────────────────

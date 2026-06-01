@@ -113,3 +113,16 @@ class SrpSession:
         except Exception:
             return False
         return self._user.authenticated()
+
+    @property
+    def session_key_hex(self) -> str:
+        """
+        The SRP session key K as a hex string.
+
+        Both client and server independently derive the same K from the SRP
+        exchange (RFC 5054 §2.6). The client uses K as the Bearer token for
+        subsequent API calls; the server stores the same value via storeSessionKey.
+
+        Only valid after a successful verify_server() call.
+        """
+        return self._user.session_key.hex()

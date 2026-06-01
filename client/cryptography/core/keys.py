@@ -363,6 +363,57 @@ class IdentityBundle:
             ],
         }
 
+    @classmethod
+    def from_private_bundle(cls, d: dict) -> "IdentityBundle":
+        """
+        Reconstruct an IdentityBundle from the dict produced by to_private_bundle().
+        Used to reload private key material from the encrypted keystore.
+        """
+        ik_kem = KEMKeypair(
+            public_key = bytes.fromhex(d["ik_kem_pub"]),
+            secret_key = bytes.fromhex(d["ik_kem_sec"]),
+        )
+        ik_sig = SigningKeypair(
+            public_key         = bytes.fromhex(d["ik_sig_pub"]),
+            secret_key         = bytes.fromhex(d["ik_sig_sec"]),
+            ed25519_secret_key = bytes.fromhex(d["ik_sig_ed25519_sec"]),
+        )
+        ik_classical = X25519Keypair(
+            X25519PrivateKey.from_private_bytes(bytes.fromhex(d["ik_classical_sec"]))
+        )
+        spk = SignedPrekey(
+            spk_id    = d["spk_id"],
+            keypair   = X25519Keypair(
+                X25519PrivateKey.from_private_bytes(bytes.fromhex(d["spk_sec"]))
+            ),
+            signature = bytes.fromhex(d["spk_sig"]),
+        )
+        x25519_opks = [
+            X25519OneTimePrekey(
+                opk_id     = o["opk_id"],
+                public_key = bytes.fromhex(o["opk_pub"]),
+                secret_key = bytes.fromhex(o["opk_sec"]),
+            )
+            for o in d.get("opks_x25519", [])
+        ]
+        kem_opks = [
+            KEMOneTimePrekey(
+                opk_id     = o["opk_id"],
+                public_key = bytes.fromhex(o["opk_pub"]),
+                secret_key = bytes.fromhex(o["opk_sec"]),
+            )
+            for o in d.get("opks_kem", [])
+        ]
+        return cls(
+            user_id      = d.get("user_id", ""),
+            ik_kem       = ik_kem,
+            ik_sig       = ik_sig,
+            ik_classical = ik_classical,
+            spk          = spk,
+            x25519_opks  = x25519_opks,
+            kem_opks     = kem_opks,
+        )
+
     def __repr__(self) -> str:
         return (
             f"IdentityBundle(user_id={self.user_id!r}, "
@@ -566,19 +617,20 @@ def verify_hybrid_signature(
 
     elif len(ik_sig_pub) == DSA_PUBLIC_KEY_LEN:
         # Legacy ML-DSA-87-only key — transition window, Ed25519 leg unavailable.
-        if len(signature) == DSA_SIGNATURE_LEN:
-            dsa_sig = signature
-        elif len(signature) == HYBRID_SIGNATURE_LEN:
-            dsa_sig = signature[ED25519_SIGNATURE_LEN:]
-        else:
+        # Only accept the exact ML-DSA-87 signature length. Hybrid-length signatures
+        # against a legacy key are rejected: we cannot verify the Ed25519 half without
+        # the Ed25519 public key, so accepting them would silently drop half the
+        # cryptographic proof (the first 64 bytes could be arbitrary garbage).
+        if len(signature) != DSA_SIGNATURE_LEN:
             raise MalformedSignedCiphertextError(
-                f"signature must be {DSA_SIGNATURE_LEN} or {HYBRID_SIGNATURE_LEN} bytes "
-                f"for a legacy key, got {len(signature)}."
+                f"Legacy key requires a {DSA_SIGNATURE_LEN}-byte ML-DSA-87 signature, "
+                f"got {len(signature)} bytes. Refresh the sender's key bundle to upgrade "
+                f"to the hybrid Ed25519 + ML-DSA-87 format."
             )
 
         try:
             with oqs.Signature(SIG_ALG) as verifier:
-                return verifier.verify(message, dsa_sig, ik_sig_pub)
+                return verifier.verify(message, signature, ik_sig_pub)
         except Exception:
             return False
 

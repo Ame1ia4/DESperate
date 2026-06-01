@@ -63,7 +63,7 @@ export async function authVerify(req, res) {
     return res.status(401).json({ error: 'Authentication failed' })
   }
 
-  storeSessionKey(device_id, serverSession.key)
+  await storeSessionKey(device_id, serverSession.key)
 
   console.info('auth_login: session established', { username, device_id })
   res.json({ serverSessionProof: serverSession.proof })

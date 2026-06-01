@@ -38,23 +38,28 @@ if(NOT EXISTS "${SRC_DIR}/${_EXE}")
         )
     endif()
 
-    message(FATAL_ERROR
+    # In development (Debug builds) warn and skip the copy rather than failing.
+    # The Qt app will connect to a manually-started Python service on port 54231.
+    # For release/distribution builds you MUST build the bundle first.
+    message(WARNING
         "\n"
         "===========================================================\n"
-        " crypto_service bundle not found.\n"
+        " crypto_service bundle not found — skipping copy step.\n"
         "===========================================================\n"
         "\n"
         " Expected: ${SRC_DIR}/${_EXE}\n"
         "\n"
-        " You need to build the Python crypto service first.\n"
-        " Run these commands from the repo root:\n"
+        " DEV MODE: Start the Python crypto service manually before\n"
+        " running the Qt app:\n"
+        "   cd client/cryptography && python main.py\n"
         "\n"
+        " For a distributable build, compile the bundle first:\n"
         ${_BUILD_INSTRUCTIONS}
         "\n"
-        " Then rebuild the Qt project in Qt Creator.\n"
         " See README.md § Cryptography Microservice for details.\n"
         "===========================================================\n"
     )
+    return()   # skip the copy — the app will still build and link
 endif()
 
 file(COPY "${SRC_DIR}/" DESTINATION "${DST_DIR}")
