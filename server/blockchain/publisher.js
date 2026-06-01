@@ -1,11 +1,10 @@
 import { ethers } from 'ethers'
 import { query, withTransaction } from '../database/db.js'
 import { ABI, CONTRACT_ADDRESS } from './contract.js'
+import { buildPendingRoots } from './build-worker.js'
+import { loadMerkleConfig } from './config.js'
+import { MERKLE_ADVISORY_LOCK_KEY } from '../constants/blockchain.js'
 
-const WORKER_INTERVAL_MS = 20 * 60 * 1000
-const BATCH_LIMIT        = 100
-
-// Prevent overlapping runs if a publish takes longer than the interval
 let running = false
 
 function buildSigner() {
@@ -19,47 +18,224 @@ function buildSigner() {
   return new ethers.Wallet(privateKey, provider)
 }
 
-export async function publishPendingRoots() {
-  const { rows } = await query(
+// ── Reconciliation ──────────────────────────────────────────────────────────
+// Called once on worker start.  Fixes any roots left in state='broadcasting'
+// from a previous crash.
+
+async function reconcile(provider) {
+  // Case A: broadcasting + tx_hash IS NULL
+  //   We crashed before or while submitting the tx.  Query contract events
+  //   by root value.  If found → confirm.  If not → return to 'built'.
+  const { rows: nullTxRoots } = await query(
     `SELECT id, merkle_root
      FROM merkle_roots
-     WHERE broadcast_to_chain = FALSE
-     ORDER BY id ASC
-     LIMIT $1`,
-    [BATCH_LIMIT]
+     WHERE state = 'broadcasting' AND tx_hash IS NULL`
   )
 
-  if (rows.length === 0) {
-    console.log('[blockchain-worker] no pending roots')
-    return
+  for (const row of nullTxRoots) {
+    const root = row.merkle_root.trim()
+    try {
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider)
+      const logs     = await contract.queryFilter(contract.filters.HashStored(root))
+      if (logs.length > 0) {
+        const log    = logs[0]
+        const block  = await log.getBlock()
+        await withTransaction(async (client) => {
+          await client.query(
+            `UPDATE merkle_roots
+             SET state = 'confirmed', tx_hash = $1, block_timestamp = $2,
+                 log_index = $3, confirmed_at = now()
+             WHERE id = $4`,
+            [log.transactionHash, Number(block.timestamp), log.index, row.id]
+          )
+          await client.query(
+            `UPDATE merkle_leaves SET state = 'confirmed'
+             WHERE merkle_root_id = $1`,
+            [row.id]
+          )
+        })
+        console.info(`[publisher] reconcile: confirmed root ${root} via HashStored event`)
+      } else {
+        await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
+        console.info(`[publisher] reconcile: no on-chain event for root ${root} — returned to built`)
+      }
+    } catch (err) {
+      console.error(`[publisher] reconcile: error checking root ${root}`, err)
+    }
   }
 
-  const signer   = buildSigner()
-  const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer)
+  // Case B: broadcasting + tx_hash IS NOT NULL
+  //   Tx was submitted.  Check receipt.
+  const { rows: pendingTxRoots } = await query(
+    `SELECT id, merkle_root, tx_hash
+     FROM merkle_roots
+     WHERE state = 'broadcasting' AND tx_hash IS NOT NULL`
+  )
 
-  // merkle_root is CHAR(66) — trim any trailing whitespace from fixed-length DB column
-  const roots = rows.map(r => r.merkle_root.trim())
-  const ids   = rows.map(r => r.id)
+  for (const row of pendingTxRoots) {
+    try {
+      const txHash  = row.tx_hash.trim()
+      const receipt = await provider.getTransactionReceipt(txHash)
 
-  const estimated = await contract.storeBatchHashes.estimateGas(roots)
-  const tx        = await contract.storeBatchHashes(roots, { gasLimit: estimated * 120n / 100n })
-  const receipt   = await tx.wait()
+      if (receipt && receipt.status === 1) {
+        await confirmRootsFromReceipt(receipt, [row.id], row.merkle_root.trim())
+        console.info(`[publisher] reconcile: confirmed root via receipt (tx ${txHash})`)
+      } else {
+        // Dropped or unknown — return to built
+        await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
+        console.info(`[publisher] reconcile: tx ${txHash} not found — returned root to built`)
+      }
+    } catch (err) {
+      console.error(`[publisher] reconcile: error for root id=${row.id}`, err)
+    }
+  }
+}
 
-  if (receipt.status !== 1) throw new Error(`tx reverted: ${receipt.hash}`)
+// ── Broadcast helpers ────────────────────────────────────────────────────────
 
-  const txHash = receipt.hash
+async function confirmRootsFromReceipt(receipt, rootIds, /* optional single root for reconcile */ _singleRoot) {
+  // Parse HashStored events from the receipt; match each root id to its log.
+  const iface = new ethers.Interface(ABI)
+
+  const eventsByRoot = {}
+  for (const log of receipt.logs) {
+    try {
+      const parsed = iface.parseLog(log)
+      if (parsed && parsed.name === 'HashStored') {
+        const rootHex = parsed.args.merkleRoot.toLowerCase()
+        eventsByRoot[rootHex] = { timestamp: Number(parsed.args.timestamp), logIndex: log.index }
+      }
+    } catch (_) { /* not a HashStored log */ }
+  }
+
+  // Load the root values for all ids in this group
+  const { rows } = await query(
+    `SELECT id, merkle_root FROM merkle_roots WHERE id = ANY($1::int[])`,
+    [rootIds]
+  )
 
   await withTransaction(async (client) => {
+    for (const row of rows) {
+      const rootHex = row.merkle_root.trim().toLowerCase()
+      const ev      = eventsByRoot[rootHex]
+      if (!ev) {
+        console.warn(`[publisher] HashStored event not found for root ${rootHex} in tx ${receipt.hash}`)
+        continue
+      }
+
+      await client.query(
+        `UPDATE merkle_roots
+         SET state = 'confirmed', block_timestamp = $1, log_index = $2, confirmed_at = now()
+         WHERE id = $3`,
+        [ev.timestamp, ev.logIndex, row.id]
+      )
+      await client.query(
+        `UPDATE merkle_leaves SET state = 'confirmed'
+         WHERE merkle_root_id = $1`,
+        [row.id]
+      )
+    }
+  })
+}
+
+// ── Broadcast phase ──────────────────────────────────────────────────────────
+
+async function broadcastBuiltRoots(cfg) {
+  const {
+    merkle_broadcast_interval_ms:  broadcastIntervalMs,
+    merkle_broadcast_min_roots:    minRoots,
+    merkle_max_roots_per_tx:       maxRootsPerTx,
+    merkle_max_broadcast_attempts: maxAttempts,
+  } = cfg
+
+  const { rows: summary } = await query(
+    `SELECT COUNT(*)::int AS cnt, MIN(created_at) AS oldest
+     FROM merkle_roots
+     WHERE state = 'built'`
+  )
+
+  const { cnt, oldest } = summary[0]
+  if (cnt === 0) return
+
+  // Broadcast when min batch is ready OR timeout hit OR tx would be full
+  const ageMs         = oldest ? Date.now() - new Date(oldest).getTime() : 0
+  const shouldBroadcast = cnt >= minRoots || ageMs >= broadcastIntervalMs
+  if (!shouldBroadcast) return
+
+  // (a) Mark the group as broadcasting BEFORE submitting to the network.
+  //     If we crash between here and the tx submission, reconcile() handles it.
+  const { rows: builtRoots } = await withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, merkle_root, attempts
+       FROM merkle_roots
+       WHERE state = 'built'
+       ORDER BY created_at ASC
+       LIMIT $1
+       FOR UPDATE SKIP LOCKED`,
+      [maxRootsPerTx]
+    )
+
+    if (rows.length === 0) return { rows: [] }
+
+    const ids = rows.map(r => r.id)
     await client.query(
       `UPDATE merkle_roots
-       SET tx_hash = $1, broadcast_to_chain = TRUE
-       WHERE id = ANY($2::int[])`,
-      [txHash, ids]
+       SET state = 'broadcasting', broadcast_at = now(), attempts = attempts + 1
+       WHERE id = ANY($1::int[])`,
+      [ids]
     )
+
+    return { rows }
   })
 
-  console.log(`[blockchain-worker] published ${rows.length} root(s), tx: ${txHash}`)
+  if (builtRoots.length === 0) return
+
+  const ids   = builtRoots.map(r => r.id)
+  const roots = builtRoots.map(r => r.merkle_root.trim())
+
+  try {
+    const signer   = buildSigner()
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer)
+
+    const estimated = await contract.storeBatchHashes.estimateGas(roots)
+    const tx        = await contract.storeBatchHashes(roots, { gasLimit: estimated * 120n / 100n })
+
+    // (b) Persist tx_hash immediately — BEFORE awaiting confirmation.
+    await query(
+      `UPDATE merkle_roots SET tx_hash = $1 WHERE id = ANY($2::int[])`,
+      [tx.hash, ids]
+    )
+    console.info(`[publisher] tx submitted: ${tx.hash} (${roots.length} roots)`)
+
+    // (c) Wait for confirmation; decode per-root block_timestamp + log_index.
+    const receipt = await tx.wait()
+    if (receipt.status !== 1) throw new Error(`tx reverted: ${receipt.hash}`)
+
+    await confirmRootsFromReceipt(receipt, ids)
+    console.info(`[publisher] confirmed: ${tx.hash}`)
+
+  } catch (err) {
+    console.error('[publisher] broadcast error:', err?.message ?? err)
+
+    // Retry or fail each root individually based on attempts
+    for (const row of builtRoots) {
+      if (row.attempts + 1 >= maxAttempts) {
+        await query(
+          `UPDATE merkle_roots SET state = 'failed' WHERE id = $1`,
+          [row.id]
+        )
+        console.error(`[publisher] root id=${row.id} permanently failed after ${maxAttempts} attempts`)
+      } else {
+        await query(
+          `UPDATE merkle_roots SET state = 'built' WHERE id = $1`,
+          [row.id]
+        )
+      }
+    }
+  }
 }
+
+// ── Combined worker ──────────────────────────────────────────────────────────
 
 export function startBlockchainWorker() {
   if (!CONTRACT_ADDRESS || !process.env.BLOCKCHAIN_PRIVATE_KEY) {
@@ -67,23 +243,49 @@ export function startBlockchainWorker() {
     return
   }
 
+  let cfg = null
+
   async function run() {
     if (running) {
       console.warn('[blockchain-worker] previous run still in progress, skipping')
       return
     }
     running = true
+
     try {
-      await publishPendingRoots()
+      // Acquire advisory lock so concurrent workers never double-anchor
+      await query(`SELECT pg_advisory_lock($1)`, [MERKLE_ADVISORY_LOCK_KEY])
+
+      await buildPendingRoots(cfg)
+      await broadcastBuiltRoots(cfg)
+
     } catch (err) {
-      console.error('[blockchain-worker] publish failed')
+      console.error('[blockchain-worker] tick error:', err?.message ?? err)
       if (process.env.NODE_ENV !== 'production') console.error(err)
     } finally {
+      try {
+        await query(`SELECT pg_advisory_unlock($1)`, [MERKLE_ADVISORY_LOCK_KEY])
+      } catch (_) { /* ignore unlock errors */ }
       running = false
     }
   }
 
-  // Fire immediately on startup, then repeat every 20 minutes
-  run()
-  setInterval(run, WORKER_INTERVAL_MS)
+  async function start() {
+    cfg = await loadMerkleConfig()
+
+    // Reconcile any in-flight roots from a previous crash
+    const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL)
+    await reconcile(provider).catch(err =>
+      console.error('[blockchain-worker] reconcile error:', err?.message ?? err)
+    )
+
+    // Fire immediately, then repeat at the worker tick cadence
+    run()
+    setInterval(run, cfg.merkle_worker_tick_ms)
+  }
+
+  start().catch(err => console.error('[blockchain-worker] start error:', err))
 }
+
+// Export for tests
+export { buildPendingRoots, broadcastBuiltRoots, reconcile }

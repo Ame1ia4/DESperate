@@ -16,6 +16,9 @@ import { requireAuth } from './middleware/require_auth.js'
 import { query, withTransaction, registerShutdownSignals } from './database/db.js'
 import { revokeSessionKey } from './state/session_keys.js'
 import { UUID_RE } from './constants/auth.js'
+import { loadMerkleConfig } from './blockchain/config.js'
+import { verifyHandler } from './handlers/merkle/verify.js'
+import { proofHandler } from './handlers/merkle/proof.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -445,6 +448,12 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
+// app.get('/messages/:id/blockchain-verify', requireSrpSession, verifyHandler)
+app.post('/blockchain/verify-leaf',        proofHandler)
+
 const server = app.listen(80, () => console.log('Server running on :80'))
+
+loadMerkleConfig().catch(err => console.error('[server] failed to load merkle config:', err))
 startBlockchainWorker()
+
 registerShutdownSignals(server)

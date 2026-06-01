@@ -17,8 +17,9 @@ export async function verifyRoot(merkleRoot) {
   const block = await log.getBlock();
 
   return {
-    found: true,
-    txid: log.transactionHash,
+    found:     true,
+    txid:      log.transactionHash,
+    block:     Number(block.number),
     timestamp: new Date(Number(block.timestamp) * 1000).toISOString(),
   };
 }
