@@ -1,6 +1,5 @@
 import { query, withTransaction } from '../database/db.js'
 import { computeRoot } from './merkle-core.js'
-import { MERKLE_ADVISORY_LOCK_KEY } from '../constants/blockchain.js'
 
 // Build phase: turn pending merkle_leaves into built merkle_roots.
 //
@@ -66,15 +65,18 @@ export async function buildPendingRoots(cfg) {
     )
     const rootId = rootRows[0].id
 
-    // Assign each leaf its index and link to the root
-    for (let i = 0; i < leaves.length; i++) {
-      await client.query(
-        `UPDATE merkle_leaves
-         SET merkle_root_id = $1, leaf_index = $2, state = 'batched'
-         WHERE id = $3`,
-        [rootId, i, leaves[i].id]
-      )
-    }
+    // Assign each leaf its index and link to the root in one bulk UPDATE.
+    const ids     = leaves.map(l => l.id)
+    const indexes = leaves.map((_, i) => i)
+    await client.query(
+      `UPDATE merkle_leaves
+       SET merkle_root_id = $1,
+           leaf_index     = t.idx,
+           state          = 'batched'
+       FROM (SELECT unnest($2::int[]) AS id, unnest($3::int[]) AS idx) AS t
+       WHERE merkle_leaves.id = t.id`,
+      [rootId, ids, indexes]
+    )
 
     console.info(`[build-worker] built root ${root} from ${leaves.length} leaves (rootId=${rootId})`)
   })

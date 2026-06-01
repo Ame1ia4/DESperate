@@ -13,7 +13,7 @@ contract MessageIntegrity {
     // =========================================================================
 
     /// @notice The server wallet address authorised to submit Merkle roots.
-    address public immutable owner;
+    address public owner;
 
     /// @notice Address nominated to become the new owner. Must call
     ///         {acceptOwnership} to complete the transfer.

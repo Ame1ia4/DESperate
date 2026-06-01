@@ -13,8 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { query } from '../database/db.js'
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { UUID_RE } from '../constants/auth.js'
 
 export async function requireSrpSession(req, res, next) {
   const deviceId = req.headers['x-device-id']

@@ -1,9 +1,9 @@
 import { withTransaction } from '../../database/db.js'
 import { computeLeaf } from '../../blockchain/merkle-core.js'
+import { UUID_RE } from '../../constants/auth.js'
 
 const HEX_RE         = /^(0x)?[0-9a-f]+$/i
 const LEAF_HEX_RE    = /^(0x)?[0-9a-f]{64}$/i
-const UUID_RE        = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_CIPHERTEXT = 65_536
 const NONCE_BYTES    = 12
 

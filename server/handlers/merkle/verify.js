@@ -1,7 +1,6 @@
 import { query } from '../../database/db.js'
 import { getProof } from '../../blockchain/merkle-core.js'
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { UUID_RE } from '../../constants/auth.js'
 
 // Compute the three-value client status for a message.
 // Returns { status, ...material } where status is one of:

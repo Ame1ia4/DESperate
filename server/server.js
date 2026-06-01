@@ -16,7 +16,7 @@ import { requireAuth } from './middleware/require_auth.js'
 import { query, withTransaction, registerShutdownSignals } from './database/db.js'
 import { revokeSessionKey } from './state/session_keys.js'
 import { UUID_RE } from './constants/auth.js'
-import { loadMerkleConfig } from './blockchain/config.js'
+import { computeLeaf } from './blockchain/merkle-core.js'
 import { verifyHandler } from './handlers/merkle/verify.js'
 import { proofHandler } from './handlers/merkle/proof.js'
 
@@ -322,6 +322,13 @@ app.post('/messages', requireAuth, async (req, res) => {
       [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData]
     )
 
+    // Anchor this message in the merkle leaf set for blockchain verification.
+    const leafHash = computeLeaf(ciphertextBuf)
+    await client.query(
+      `INSERT INTO merkle_leaves (leaf_hash, msg_id, state) VALUES ($1, $2, 'pending')`,
+      [leafHash, msg.id]
+    )
+
     // Find recipient devices (all members except sender).
     const { rows: recipients } = await client.query(
       `SELECT d.id AS device_id
@@ -448,12 +455,11 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
-// app.get('/messages/:id/blockchain-verify', requireSrpSession, verifyHandler)
+app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
 app.post('/blockchain/verify-leaf',        proofHandler)
 
 const server = app.listen(80, () => console.log('Server running on :80'))
 
-loadMerkleConfig().catch(err => console.error('[server] failed to load merkle config:', err))
 startBlockchainWorker()
 
 registerShutdownSignals(server)
