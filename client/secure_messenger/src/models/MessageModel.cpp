@@ -52,6 +52,9 @@ QVariant MessageModel::data(
     case MessageIdRole:
         return msg.id;
 
+    case RevokedRole:
+        return msg.revoked;
+
     default:
         return {};
     }
@@ -67,7 +70,8 @@ MessageModel::roleNames() const
         {PlaintextRole,    "plaintext"},
         {OutgoingRole,     "outgoing"},
         {VerifiedRole,     "verified"},
-        {MessageIdRole,    "messageId"}
+        {MessageIdRole,    "messageId"},
+        {RevokedRole,      "revoked"}
     };
 }
 
@@ -91,4 +95,28 @@ void MessageModel::clear()
     beginResetModel();
     m_messages.clear();
     endResetModel();
+}
+
+void MessageModel::removeMessage(const QString& messageId)
+{
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == messageId) {
+            beginRemoveRows(QModelIndex(), i, i);
+            m_messages.erase(m_messages.begin() + i);
+            endRemoveRows();
+            return;
+        }
+    }
+}
+
+void MessageModel::markRevoked(const QString& messageId)
+{
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == messageId) {
+            m_messages[i].revoked = true;
+            const QModelIndex idx = index(i);
+            emit dataChanged(idx, idx, {RevokedRole});
+            return;
+        }
+    }
 }

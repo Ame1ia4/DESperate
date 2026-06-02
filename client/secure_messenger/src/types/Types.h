@@ -32,6 +32,7 @@ struct DecryptedMessage {
     QDateTime timestamp;
     VerificationState verificationState = VerificationState::Pending;
     bool isDeleted = false;
+    bool revoked = false;
 };
 
 struct Conversation {

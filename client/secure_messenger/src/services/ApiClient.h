@@ -75,6 +75,10 @@ signals:
     void fetchKeyBundleFailed(QString reason);
     void createConversationSucceeded(QString conversationId);
     void createConversationFailed(QString reason);
+    void deleteMessageSucceeded(QString messageId);
+    void deleteMessageFailed(QString messageId);
+    void revokeMessageSucceeded(QString messageId);
+    void revokeMessageFailed(QString messageId);
 
 private:
     void doSrpInit(
