@@ -79,9 +79,10 @@ def _run(coro: Any) -> Any:
 
 # ── Module-level state ────────────────────────────────────────────────────────
 
-_srp_session:  Optional[SrpSession]   = None
-_store:        Optional[StateStore]   = None
-_local_bundle: Optional[IdentityBundle] = None
+_srp_session:    Optional[SrpSession]   = None
+_store:          Optional[StateStore]   = None
+_local_bundle:   Optional[IdentityBundle] = None
+_pending_sessions: dict = {}   # conversation_id → pending PQXDH state (pre-first-message)
 
 
 @dataclass
@@ -184,6 +185,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
                         "If you re-registered, delete that directory and log in again."
                     ),
                 }
+        else:
+            # Keystore exists (password is correct) but the identity bundle was never
+            # saved — this happens when the keystore directory was deleted after
+            # registration and then a new (empty) keystore was created by a later run.
+            _store = None
+            return {
+                "success": False,
+                "error": (
+                    f"Identity keys not found in keystore at {_STORE_BASE_DIR}. "
+                    "Your local keys were lost. Delete that directory and re-register."
+                ),
+            }
         return {"success": True}
 
     # ── Key bundle generation (registration) ──────────────────────────────────
@@ -262,14 +275,29 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         _srp_session = None
         return {"authenticated": authenticated, "session_key": session_key}
 
+    # ── Session existence check ───────────────────────────────────────────────
+
+    if method == "has_session":
+        conversation_id = params["conversation_id"]
+        if conversation_id in _sessions or conversation_id in _pending_sessions:
+            return {"exists": True}
+        try:
+            store    = _require_store()
+            meta_key = f"{_META_KEY_PREFIX}{conversation_id}"
+            exists   = store.state_exists(conversation_id) and store.state_exists(meta_key)
+        except Exception:
+            exists = False
+        return {"exists": exists}
+
     # ── Session initiation (PQXDH → Double Ratchet) ───────────────────────────
 
     if method == "initiate_session":
         conversation_id = params["conversation_id"]
         remote_bundle   = params["remote_bundle"]   # dict from GET /keys/:username
+        if isinstance(remote_bundle, str):
+            remote_bundle = json.loads(remote_bundle)
 
         bundle = _require_bundle()
-        store  = _require_store()
 
         try:
             result = _pqxdh_initiate(bundle, remote_bundle, allow_no_opk=True)
@@ -278,31 +306,19 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         except MalformedBundleError as exc:
             raise ValueError(f"Malformed remote bundle: {exc}") from exc
 
-        # Bob's SPK is his initial Double Ratchet public key (Signal PQXDH spec §4).
-        bob_ratchet_pub = bytes.fromhex(remote_bundle["spk_pub"])
-
-        ratchet = _run(
-            RatchetSession.create_as_initiator(
-                SK              = result.SK,
-                bob_ratchet_pub = bob_ratchet_pub,
-                store           = store,
-                session_id      = conversation_id,
-            )
-        )
-
-        # Persist remote signing public key for later message signature verification.
-        remote_sig_pub = bytes.fromhex(remote_bundle["ik_sig_pub"])
-        store.save_state(
-            f"{_META_KEY_PREFIX}{conversation_id}",
-            {"remote_ik_sig_pub": remote_sig_pub.hex()},
-        )
-
+        bob_ratchet_pub  = bytes.fromhex(remote_bundle["spk_pub"])
+        remote_sig_pub   = bytes.fromhex(remote_bundle["ik_sig_pub"])
         init_bundle_dict = result.bundle.to_dict() if result.bundle else None
-        _sessions[conversation_id] = _SessionEntry(
-            ratchet           = ratchet,
-            remote_ik_sig_pub = remote_sig_pub,
-            init_bundle       = init_bundle_dict,
-        )
+
+        # Defer Double Ratchet creation until the first encrypt_message call —
+        # python-doubleratchet >=1.0 requires the first plaintext to be bundled
+        # with encrypt_initial_message, so we can't create the ratchet here.
+        _pending_sessions[conversation_id] = {
+            "SK":             result.SK,
+            "bob_ratchet_pub": bob_ratchet_pub,
+            "remote_sig_pub":  remote_sig_pub,
+            "init_bundle":     init_bundle_dict,
+        }
 
         return {"success": True, "initiation_bundle": init_bundle_dict}
 
@@ -313,42 +329,62 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         plaintext_str      = params["plaintext"]
         recipient_username = params.get("recipient_username", "")
 
-        entry  = _require_session(conversation_id)
-        bundle = _require_bundle()
-
+        bundle    = _require_bundle()
         plaintext = plaintext_str.encode("utf-8")
         aad       = conversation_id.encode("utf-8")
 
-        # Double Ratchet encrypt — advances the ratchet and persists state atomically.
-        wire_bytes = _run(entry.ratchet.encrypt(plaintext, aad))
+        if conversation_id in _pending_sessions:
+            # First message: create the Double Ratchet session and encrypt together.
+            pending = _pending_sessions.pop(conversation_id)
+            store   = _require_store()
+
+            session, wire_bytes = _run(
+                RatchetSession.create_as_initiator(
+                    SK              = pending["SK"],
+                    bob_ratchet_pub = pending["bob_ratchet_pub"],
+                    plaintext       = plaintext,
+                    associated_data = aad,
+                    store           = store,
+                    session_id      = conversation_id,
+                )
+            )
+            store.save_state(
+                f"{_META_KEY_PREFIX}{conversation_id}",
+                {"remote_ik_sig_pub": pending["remote_sig_pub"].hex()},
+            )
+            _sessions[conversation_id] = _SessionEntry(
+                ratchet           = session,
+                remote_ik_sig_pub = pending["remote_sig_pub"],
+                init_bundle       = None,
+            )
+            init_bundle = pending["init_bundle"]
+        else:
+            entry      = _require_session(conversation_id)
+            wire_bytes = _run(entry.ratchet.encrypt(plaintext, aad))
+            init_bundle       = entry.init_bundle
+            entry.init_bundle = None
 
         # Sign the wire-format ciphertext with the sender's hybrid keypair.
         # Prevents server-injected ciphertexts from being accepted by the recipient.
-        sender_id    = bundle.user_id.encode("utf-8")
-        recipient_id = recipient_username.encode("utf-8")
+        session_entry = _sessions[conversation_id]
+        sender_id     = bundle.user_id.encode("utf-8")
+        recipient_id  = recipient_username.encode("utf-8")
         signed = sign_ciphertext(
             signing_keypair = bundle.ik_sig,
             ciphertext      = wire_bytes,
             aad             = aad,
             sender_id       = sender_id,
             recipient_id    = recipient_id,
-            message_index   = entry.ratchet.message_index,
+            message_index   = session_entry.ratchet.message_index,
         )
-        payload = signed.to_bytes()   # msgpack-encoded signed ciphertext
-
-        # The server schema requires a 12-byte nonce field alongside the ciphertext.
-        # We use the first 12 bytes of the wire header (version + msg_index + pn),
-        # which are strictly unique per message within this session.
+        payload     = signed.to_bytes()
         nonce_bytes = wire_bytes[:12]
-
-        # The PQXDH initiation bundle is included with the first message only.
-        init_bundle       = entry.init_bundle
-        entry.init_bundle = None   # clear after first use
 
         return {
             "ciphertext":        payload.hex(),
             "nonce":             nonce_bytes.hex(),
             "initiation_bundle": init_bundle,
+            "sender_ik_sig_pub": bundle.ik_sig.public_key.hex(),
         }
 
     # ── Message decryption (hybrid verify + Double Ratchet) ───────────────────
@@ -385,37 +421,53 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 local_kem_opks    = {},
             )
 
-            ratchet = _run(
+            # Verify signature first to extract the wire bytes, then use them
+            # with create_as_responder (which needs the actual EncryptedMessage).
+            remote_sig_pub = bytes.fromhex(sender_ik_sig_pub_hex) if sender_ik_sig_pub_hex else b""
+            if not remote_sig_pub:
+                raise ValueError("sender_ik_sig_pub required for first message")
+
+            try:
+                signed_initial = verify_and_extract(
+                    data=payload, aad=aad,
+                    ik_sig_pub=remote_sig_pub, expected_pub=remote_sig_pub,
+                )
+            except SignatureVerificationError as exc:
+                raise ValueError(f"Message signature verification failed: {exc}") from exc
+
+            # Bob's ratchet private key is his SPK private key.
+            own_ratchet_priv = bundle.spk.keypair.private_key_bytes
+
+            session, first_plaintext = _run(
                 RatchetSession.create_as_responder(
-                    SK         = pqxdh_result.SK,
-                    store      = store,
-                    session_id = conversation_id,
+                    SK               = pqxdh_result.SK,
+                    own_ratchet_priv = own_ratchet_priv,
+                    wire_bytes       = signed_initial.ciphertext,
+                    associated_data  = aad,
+                    store            = store,
+                    session_id       = conversation_id,
                 )
             )
 
-            remote_sig_pub = bytes.fromhex(sender_ik_sig_pub_hex) if sender_ik_sig_pub_hex else b""
             store.save_state(
                 f"{_META_KEY_PREFIX}{conversation_id}",
                 {"remote_ik_sig_pub": remote_sig_pub.hex()},
             )
             _sessions[conversation_id] = _SessionEntry(
-                ratchet           = ratchet,
+                ratchet           = session,
                 remote_ik_sig_pub = remote_sig_pub,
                 init_bundle       = None,
             )
 
+            return {"plaintext": first_plaintext.decode("utf-8", errors="replace")}
+
         entry = _sessions[conversation_id]
 
-        # Resolve which key to verify against. The stored pin is authoritative;
-        # a caller-supplied key is only accepted when the pin is not yet set
-        # (first message on a session restored from disk with no prior contact).
-        # After the pin is set it is never overridden by the caller — that would
-        # allow a compromised server to substitute a rogue key mid-conversation.
+        # Resolve which key to verify against.
         if entry.remote_ik_sig_pub:
             sig_pub = entry.remote_ik_sig_pub
         elif sender_ik_sig_pub_hex:
             sig_pub = bytes.fromhex(sender_ik_sig_pub_hex)
-            # Pin this key for all subsequent messages.
             entry.remote_ik_sig_pub = sig_pub
             store = _require_store()
             store.save_state(

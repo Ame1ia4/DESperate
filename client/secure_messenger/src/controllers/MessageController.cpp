@@ -59,6 +59,16 @@ MessageController::MessageController(
         ::handleDecryptFailed);
 }
 
+void MessageController::deleteMessage(const QString& messageId)
+{
+    m_api->deleteMessage(messageId);
+}
+
+void MessageController::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
+{
+    m_api->revokeMessage(messageId, recipientDeviceId);
+}
+
 void MessageController::sendText(
     const QString& conversationId,
     const QString& text)
@@ -150,10 +160,15 @@ void MessageController::handleEncryptCompleted(
         m_pendingMessages.take(
             requestId);
 
-    m_store->storeOutgoingMessage(
-        envelope);
+    // Inject fields the server requires that the crypto service doesn't produce.
+    QJsonObject fullEnvelope = envelope;
+    fullEnvelope["conversation_id"] = pending.conversationId;
 
-    m_api->sendMessage(envelope);
+    qDebug() << "[SEND] encryped OK, posting to server | conv:" << pending.conversationId
+             << "| ciphertext len:" << envelope["ciphertext"].toString().length();
+
+    m_store->storeOutgoingMessage(fullEnvelope);
+    m_api->sendMessage(fullEnvelope);
 
     // Optimistic UI update.
     DecryptedMessage message;

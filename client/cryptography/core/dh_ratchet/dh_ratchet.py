@@ -20,8 +20,6 @@ References:
 
 from __future__ import annotations
 
-from typing import Tuple
-
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
     X25519PublicKey,
@@ -43,18 +41,20 @@ class X25519Ratchet(_BaseDHRatchet):
     """
 
     @staticmethod
-    def _generate_key_pair() -> Tuple[bytes, bytes]:
-        """
-        Generate a fresh X25519 keypair for a ratchet step.
+    def _generate_priv() -> bytes:
+        """Generate a fresh 32-byte X25519 private key for a ratchet step."""
+        return X25519PrivateKey.generate().private_bytes_raw()
 
-        Returns (public_key, private_key) — both 32 bytes.
-        public_key is transmitted in the message header.
-        private_key is stored locally and never transmitted.
-        """
-        priv = X25519PrivateKey.generate()
-        pub_bytes  = priv.public_key().public_bytes_raw()
-        priv_bytes = priv.private_bytes_raw()
-        return pub_bytes, priv_bytes
+    @staticmethod
+    def _derive_pub(priv: bytes) -> bytes:
+        """Derive the 32-byte X25519 public key from a private key."""
+        return X25519PrivateKey.from_private_bytes(priv).public_key().public_bytes_raw()
+
+    @classmethod
+    def _generate_key_pair(cls) -> tuple:
+        """Generate a (pub, priv) keypair — used by tests and legacy callers."""
+        priv = cls._generate_priv()
+        return cls._derive_pub(priv), priv
 
     @staticmethod
     def _perform_diffie_hellman(

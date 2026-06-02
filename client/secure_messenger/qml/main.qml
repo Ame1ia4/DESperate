@@ -129,11 +129,21 @@ ApplicationWindow {
         }
     }
 
+    // Poll for pending messages every 5 seconds while authenticated.
+    Timer {
+        id: messagePollTimer
+        interval: 5000
+        repeat: true
+        running: authController && authController.authenticated
+        onTriggered: messageController.pullAndProcessMessages("")
+    }
+
     Connections {
         target: authController
         function onAuthenticatedChanged() {
             if (authController.authenticated) {
                 conversationController.loadConversations()
+                messageController.pullAndProcessMessages("")
                 root.authScreenIndex = 0
             }
         }

@@ -46,6 +46,8 @@ public:
 
     // Fetch the public PQXDH key bundle for a username (GET /keys/:username).
     void fetchKeyBundle(const QString& username);
+    void deleteMessage(const QString& messageId);
+    void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
 
     //meaningless change
     // Create a new conversation with another user (POST /conversations).

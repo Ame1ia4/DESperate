@@ -281,7 +281,16 @@ void ApiClient::sendMessage(
 {
     auto request = makeRequest("/messages");
     auto* reply  = m_network.post(request, QJsonDocument(encryptedEnvelope).toJson());
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [reply]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status < 200 || status >= 300) {
+            qWarning() << "[SEND] POST /messages failed | status:" << status
+                       << "|" << QString::fromUtf8(reply->readAll().left(200));
+        } else {
+            qDebug() << "[SEND] POST /messages OK | status:" << status;
+        }
+        reply->deleteLater();
+    });
 }
 
 void ApiClient::pullMessages(
@@ -356,6 +365,22 @@ void ApiClient::fetchConversations()
         const auto conversations = response.value("conversations").toArray();
         emit fetchConversationsSucceeded(conversations);
     });
+}
+
+void ApiClient::deleteMessage(const QString& messageId)
+{
+    auto request = makeRequest("/messages/" + messageId);
+    auto* reply  = m_network.deleteResource(request);
+    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+}
+
+void ApiClient::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
+{
+    auto request = makeRequest("/messages/" + messageId + "/revoke");
+    QJsonObject body;
+    body["recipient_device_id"] = recipientDeviceId;
+    auto* reply = m_network.post(request, QJsonDocument(body).toJson());
+    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }
 
 void ApiClient::fetchKeyBundle(const QString& username)

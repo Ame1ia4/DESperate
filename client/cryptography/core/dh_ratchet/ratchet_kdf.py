@@ -44,26 +44,13 @@ class RootChainKDF(KDF):
     """
 
     @staticmethod
-    def calculate(length: int, key: bytes, data: bytes) -> bytes:
-        """
-        Derive `length` bytes from key (root key) and data (DH output).
+    async def derive(key: bytes, data: bytes, length: int) -> bytes:
+        return hkdf_derive(ikm=data, salt=key, info=INFO_ROOT_KDF, length=length)
 
-        Parameters
-        ----------
-        length : number of bytes to derive (python-doubleratchet passes 64)
-        key    : current root key — used as HKDF salt
-        data   : DH/KEM shared secret — used as HKDF IKM
-
-        Returns
-        -------
-        bytes : `length` bytes of derived key material
-        """
-        return hkdf_derive(
-            ikm    = data,   # DH/KEM output is the input key material
-            salt   = key,    # current root key is the salt (Signal spec §3.1)
-            info   = INFO_ROOT_KDF,
-            length = length,
-        )
+    @classmethod
+    def calculate(cls, length: int, key: bytes, data: bytes) -> bytes:
+        """Legacy sync wrapper used by tests."""
+        return hkdf_derive(ikm=data, salt=key, info=INFO_ROOT_KDF, length=length)
 
 
 class MessageChainKDF(KDF):
@@ -86,23 +73,10 @@ class MessageChainKDF(KDF):
     """
 
     @staticmethod
-    def calculate(length: int, key: bytes, data: bytes) -> bytes:
-        """
-        Derive `length` bytes from key (chain key) and data (chain constant).
+    async def derive(key: bytes, data: bytes, length: int) -> bytes:
+        return hkdf_derive(ikm=key, salt=data, info=INFO_CHAIN_KDF, length=length)
 
-        Parameters
-        ----------
-        length : number of bytes to derive (python-doubleratchet passes 64)
-        key    : current chain key — used as HKDF IKM
-        data   : message chain constant — used as HKDF salt
-
-        Returns
-        -------
-        bytes : `length` bytes of derived key material
-        """
-        return hkdf_derive(
-            ikm    = key,    # chain key is the input key material
-            salt   = data,   # chain constant is the salt
-            info   = INFO_CHAIN_KDF,
-            length = length,
-        )
+    @classmethod
+    def calculate(cls, length: int, key: bytes, data: bytes) -> bytes:
+        """Legacy sync wrapper used by tests."""
+        return hkdf_derive(ikm=key, salt=data, info=INFO_CHAIN_KDF, length=length)

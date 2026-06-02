@@ -27,12 +27,9 @@ Rectangle {
             clip: true
 
             model: conversationController ? conversationController.messages : null
+            verticalLayoutDirection: ListView.BottomToTop
 
-            delegate: MessageDelegate {
-                plaintext: model.plaintext
-                outgoing: model.outgoing
-                verified: model.verified
-            }
+            delegate: MessageDelegate {}
         }
 
         Text {

@@ -58,8 +58,12 @@ python-doubleratchet (Syndace):
 """
 from __future__ import annotations
 
+import os
 import struct
-from doubleratchet import DoubleRatchet
+from typing import Tuple
+
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from doubleratchet import AEAD, DoubleRatchet
 from doubleratchet.types import EncryptedMessage, Header
 
 from core.constants              import MAX_SKIP
@@ -90,6 +94,42 @@ _PN_OFFSET:          int = _MSG_INDEX_OFFSET   + _MSG_INDEX_LEN           # 5
 _N_OFFSET:           int = _PN_OFFSET          + _PN_LEN                  # 9
 _RATCHET_PUB_OFFSET: int = _N_OFFSET           + _N_LEN                  # 13
 _WIRE_HEADER_LEN:    int = _RATCHET_PUB_OFFSET + _RATCHET_PUB_LEN        # 45
+
+
+# ── AEAD adapter for python-doubleratchet v1.x ───────────────────────────────
+
+class _RatchetAEAD(AEAD):
+    """ChaCha20-Poly1305 AEAD for the python-doubleratchet library."""
+
+    @staticmethod
+    async def encrypt(plaintext: bytes, key: bytes, associated_data: bytes) -> bytes:
+        nonce = os.urandom(12)
+        return nonce + ChaCha20Poly1305(key).encrypt(nonce, plaintext, associated_data)
+
+    @staticmethod
+    async def decrypt(ciphertext: bytes, key: bytes, associated_data: bytes) -> bytes:
+        return ChaCha20Poly1305(key).decrypt(ciphertext[:12], ciphertext[12:], associated_data)
+
+
+# ── Concrete DoubleRatchet subclass ───────────────────────────────────────────
+
+class _DR(DoubleRatchet):
+    """
+    Concrete DoubleRatchet with _build_associated_data implemented.
+
+    Combines the caller's associated data with a unique, length-prefixed
+    encoding of the message header so the AEAD covers both.
+    """
+
+    @staticmethod
+    def _build_associated_data(associated_data: bytes, header: Header) -> bytes:
+        return (
+            struct.pack(">I", len(associated_data))
+            + associated_data
+            + header.ratchet_pub
+            + struct.pack(">I", header.previous_sending_chain_length)
+            + struct.pack(">I", header.sending_chain_length)
+        )
 
 
 # ── Session ──────────────────────────────────────────────────────────────────
@@ -127,75 +167,116 @@ class RatchetSession:
     @classmethod
     async def create_as_initiator(
         cls,
-        SK:                bytes,
-        bob_ratchet_pub:   bytes,
-        store:             StateStore,
-        session_id:        str,
-    ) -> "RatchetSession":
+        SK:              bytes,
+        bob_ratchet_pub: bytes,
+        plaintext:       bytes,
+        associated_data: bytes,
+        store:           StateStore,
+        session_id:      str,
+    ) -> "Tuple[RatchetSession, bytes]":
         """
-        Build a session as the initiator (Alice). PQXDH must have completed
-        and produced `SK`. `bob_ratchet_pub` is Bob's X25519 ratchet public
-        key (32 bytes) from his key bundle.
+        Build a session as the initiator (Alice) AND encrypt the first message.
+
+        python-doubleratchet >=1.0 bundles the first encrypted message with
+        session creation. Returns (session, wire_bytes).
         """
         if len(SK) != 32:
             raise ValueError(f"SK must be 32 bytes, got {len(SK)}")
         if len(bob_ratchet_pub) != _RATCHET_PUB_LEN:
-            raise ValueError(
-                f"bob_ratchet_pub must be {_RATCHET_PUB_LEN} bytes, "
-                f"got {len(bob_ratchet_pub)}"
-            )
+            raise ValueError(f"bob_ratchet_pub must be {_RATCHET_PUB_LEN} bytes, got {len(bob_ratchet_pub)}")
 
-        ratchet = await DoubleRatchet.encrypt_initial_message(
+        next_index    = 1
+        ad_with_index = struct.pack("<I", next_index) + associated_data
+
+        ratchet, encrypted = await _DR.encrypt_initial_message(
             diffie_hellman_ratchet_class = X25519Ratchet,
             root_chain_kdf               = RootChainKDF,
             message_chain_kdf            = MessageChainKDF,
             message_chain_constant       = _MESSAGE_CHAIN_CONSTANT,
             dos_protection_threshold     = MAX_SKIP,
             max_num_skipped_message_keys = MAX_SKIP,
+            aead                         = _RatchetAEAD,
             shared_secret                = SK,
-            other_ratchet_pub            = bob_ratchet_pub,
+            recipient_ratchet_pub        = bob_ratchet_pub,
+            message                      = plaintext,
+            associated_data              = ad_with_index,
         )
-        if not isinstance(ratchet, DoubleRatchet):
-            raise RuntimeError(
-                f"encrypt_initial_message returned unexpected type "
-                f"{type(ratchet).__name__!r} — check python-doubleratchet API version."
-            )
+
+        ratchet_pub = encrypted.header.ratchet_pub
+        pn          = encrypted.header.previous_sending_chain_length
+        n           = encrypted.header.sending_chain_length
+
+        wire = (
+            _WIRE_VERSION
+            + struct.pack("<I", next_index)
+            + struct.pack("<I", pn)
+            + struct.pack("<I", n)
+            + ratchet_pub
+            + encrypted.ciphertext
+        )
+
         session = cls(ratchet, store, session_id, HeaderCounter(session_id=session_id))
+        session._msg_index = next_index
         session._persist()
-        return session
+        return session, wire
 
     @classmethod
     async def create_as_responder(
         cls,
-        SK:         bytes,
-        store:      StateStore,
-        session_id: str,
-    ) -> "RatchetSession":
+        SK:               bytes,
+        own_ratchet_priv: bytes,
+        wire_bytes:       bytes,
+        associated_data:  bytes,
+        store:            StateStore,
+        session_id:       str,
+    ) -> "Tuple[RatchetSession, bytes]":
         """
-        Build a session as the responder (Bob). PQXDH must have completed
-        and produced `SK`. The first message from Alice will carry her
-        X25519 ratchet public key and trigger Bob's first DH ratchet step.
+        Build a session as the responder (Bob) AND decrypt the first message.
+
+        `own_ratchet_priv` is Bob's SPK private key (32 bytes).
+        Returns (session, plaintext).
         """
         if len(SK) != 32:
             raise ValueError(f"SK must be 32 bytes, got {len(SK)}")
+        if len(wire_bytes) < _WIRE_HEADER_LEN:
+            raise ValueError(f"Wire message too short for initial message")
+        if wire_bytes[0:1] != _WIRE_VERSION:
+            raise ValueError(f"Incompatible wire format version 0x{wire_bytes[0]:02x}")
 
-        ratchet = await DoubleRatchet.decrypt_initial_message(
+        msg_index   = struct.unpack("<I", wire_bytes[_MSG_INDEX_OFFSET:_PN_OFFSET])[0]
+        pn          = struct.unpack("<I", wire_bytes[_PN_OFFSET:_N_OFFSET])[0]
+        n           = struct.unpack("<I", wire_bytes[_N_OFFSET:_RATCHET_PUB_OFFSET])[0]
+        ratchet_pub = wire_bytes[_RATCHET_PUB_OFFSET:_WIRE_HEADER_LEN]
+        ciphertext  = wire_bytes[_WIRE_HEADER_LEN:]
+
+        ad_with_index = struct.pack("<I", msg_index) + associated_data
+
+        encrypted_msg = EncryptedMessage(
+            header=Header(
+                ratchet_pub                   = ratchet_pub,
+                previous_sending_chain_length = pn,
+                sending_chain_length          = n,
+            ),
+            ciphertext=ciphertext,
+        )
+
+        ratchet, plaintext = await _DR.decrypt_initial_message(
             diffie_hellman_ratchet_class = X25519Ratchet,
             root_chain_kdf               = RootChainKDF,
             message_chain_kdf            = MessageChainKDF,
             message_chain_constant       = _MESSAGE_CHAIN_CONSTANT,
             dos_protection_threshold     = MAX_SKIP,
             max_num_skipped_message_keys = MAX_SKIP,
+            aead                         = _RatchetAEAD,
             shared_secret                = SK,
+            own_ratchet_priv             = own_ratchet_priv,
+            message                      = encrypted_msg,
+            associated_data              = ad_with_index,
         )
-        if not isinstance(ratchet, DoubleRatchet):
-            raise RuntimeError(
-                f"decrypt_initial_message returned unexpected type "
-                f"{type(ratchet).__name__!r} — check python-doubleratchet API version."
-            )
+
         session = cls(ratchet, store, session_id, HeaderCounter(session_id=session_id))
         session._persist()
-        return session
+        return session, plaintext
 
     @classmethod
     async def load(
@@ -208,7 +289,7 @@ class RatchetSession:
         StateStore.load_state) if no persisted state exists.
         """
         state = store.load_state(session_id)
-        ratchet = await DoubleRatchet.from_json(
+        ratchet = _DR.from_json(
             serialized                   = state["ratchet"],
             diffie_hellman_ratchet_class = X25519Ratchet,
             root_chain_kdf               = RootChainKDF,
@@ -216,6 +297,7 @@ class RatchetSession:
             message_chain_constant       = _MESSAGE_CHAIN_CONSTANT,
             dos_protection_threshold     = MAX_SKIP,
             max_num_skipped_message_keys = MAX_SKIP,
+            aead                         = _RatchetAEAD,
         )
         counter = HeaderCounter(
             session_id = session_id,

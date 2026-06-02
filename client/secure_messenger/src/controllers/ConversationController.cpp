@@ -205,16 +205,22 @@ void ConversationController::openConversation(
                 .push_back(message);
     }
 
-    // Kick off PQXDH session setup in the background if not already running.
+    // Kick off PQXDH session setup only if no session exists yet.
     const QString participant =
         m_participants.value(conversationId);
 
     if (!participant.isEmpty() &&
         !m_sessionFetchInFlight.contains(conversationId)) {
 
-        m_sessionReady = false;
-        emit sessionReadyChanged();
-        setupSessionAsync(conversationId, participant);
+        if (m_cryptoClient->hasSession(conversationId)) {
+            // Session already on disk — no need to do PQXDH again.
+            m_sessionReady = true;
+            emit sessionReadyChanged();
+        } else {
+            m_sessionReady = false;
+            emit sessionReadyChanged();
+            setupSessionAsync(conversationId, participant);
+        }
     }
 }
 

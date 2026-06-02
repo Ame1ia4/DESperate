@@ -145,6 +145,13 @@ QString CryptoServiceClient::srpVerify(
     return response.value("session_key").toString();
 }
 
+bool CryptoServiceClient::hasSession(const QString& conversationId)
+{
+    const QJsonObject response =
+        rpc("has_session", {{"conversation_id", conversationId}});
+    return response.value("exists").toBool(false);
+}
+
 bool CryptoServiceClient::initiateSession(
     const QString& conversationId,
     const QByteArray& remoteBundleJson)
@@ -189,7 +196,12 @@ QString CryptoServiceClient::decryptMessage(
         rpc(
             "decrypt_message",
             {
-                {"envelope", envelope}
+                {"conversation_id",   envelope["conversation_id"]},
+                {"ciphertext",        envelope["ciphertext"]},
+                {"nonce",             envelope["nonce"]},
+                {"initiation_bundle", envelope["initiation_bundle"]},
+                {"sender_ik_sig_pub", envelope["sender_ik_sig_pub"]},
+                {"sender_device_id",  envelope["sender_device_id"]},
             });
 
     if (response.contains("error")) {
