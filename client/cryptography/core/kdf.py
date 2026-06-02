@@ -94,6 +94,15 @@ INFO_LOCAL_KEY_MASTER   = b"local-v1-master-key"
 # INFO_* constants to ensure key independence.
 INFO_SRP_AUTH           = b"srp-v1-auth"
 
+# Fail-fast: every INFO_* string must be unique — a collision means two keys
+# share the same derivation and are cryptographically identical.
+_ALL_INFO = [
+    INFO_PQXDH_SK, INFO_ROOT_KDF, INFO_CHAIN_KDF, INFO_HEADER_KEY,
+    INFO_LOCAL_KEY_ENC, INFO_LOCAL_KEY_MASTER, INFO_SRP_AUTH,
+]
+assert len(_ALL_INFO) == len(set(_ALL_INFO)), "Duplicate HKDF INFO constant — keys are not independent"
+del _ALL_INFO
+
 
 # Argon2id functions have moved to core/password.py.
 # Re-exported here so existing callers importing from core.kdf continue to work.

@@ -82,11 +82,12 @@ def _run(coro: Any) -> Any:
 
 # ── Module-level state ────────────────────────────────────────────────────────
 
-_srp_session:      Optional[SrpSession]    = None
-_store:            Optional[StateStore]    = None
-_local_bundle:     Optional[IdentityBundle] = None
-_pending_password: Optional[str]           = None  # raw password cached between srp_start and srp_challenge
-_cached_keystore_key: Optional[bytes]      = None  # derived in srp_challenge, used by unlock_keystore
+_srp_session:         Optional[SrpSession]    = None
+_store:               Optional[StateStore]    = None
+_local_bundle:        Optional[IdentityBundle] = None
+_pending_password:    Optional[str]           = None  # raw password cached between srp_start and srp_challenge
+_pending_keystore_key: Optional[bytes]        = None  # derived in srp_challenge; promoted to _cached only after srp_verify succeeds
+_cached_keystore_key:  Optional[bytes]        = None  # set only after confirmed mutual auth (or post-register); used by unlock_keystore
 _pending_sessions: dict = {}   # conversation_id → pending PQXDH state (pre-first-message)
 
 
@@ -194,7 +195,7 @@ def _load_master_salt() -> Optional[bytes]:
 # ── RPC handlers ──────────────────────────────────────────────────────────────
 
 def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global _srp_session, _store, _local_bundle, _pending_password, _cached_keystore_key
+    global _srp_session, _store, _local_bundle, _pending_password, _pending_keystore_key, _cached_keystore_key
 
     # ── Keystore ──────────────────────────────────────────────────────────────
 
@@ -259,7 +260,6 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         # srp_salt and returned on every /auth/init — no client-side salt file needed.
         srp_salt = os.urandom(ARGON2_SALT_LEN)
         srp_pass, keystore_key, _ = derive_master_components(password, srp_salt)
-        _cached_keystore_key = keystore_key
 
         bundle = _gen_bundle(user_id=username)
 
@@ -271,13 +271,15 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
         verifier_bytes = _create_srp_verifier(username, srp_pass.hex(), srp_salt)
 
-        # Create keystore encrypted under keystore_key. Remove any stale salt file
-        # first (e.g. leftover from a prior aborted registration) so create_with_key
-        # can write the new srp_salt.
-        salt_path = _STORE_BASE_DIR / "salt"
-        if salt_path.exists():
-            salt_path.unlink()
-        _store = StateStore.create_with_key(_STORE_BASE_DIR, keystore_key, srp_salt)
+        try:
+            _store = StateStore.create_with_key(_STORE_BASE_DIR, keystore_key, srp_salt)
+        except FileExistsError:
+            return {
+                "error": (
+                    f"A keystore already exists at {_STORE_BASE_DIR}. "
+                    "Delete that directory to re-register."
+                )
+            }
         _store.save_state(_BUNDLE_KEY, bundle.to_private_bundle())
         _local_bundle = bundle
 
@@ -298,9 +300,10 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     if method == "srp_start":
         # Cache the raw password — srp_salt arrives from /auth/init and is only
         # available in srp_challenge, where we run Argon2id and inject srp_pass.
-        _srp_session      = None
-        _pending_password = params["password"]
-        _cached_keystore_key = None
+        _srp_session          = None
+        _pending_password     = params["password"]
+        _pending_keystore_key = None
+        _cached_keystore_key  = None
         _srp_session = SrpSession(params["username"], "")  # password injected in srp_challenge
         return {"A": _srp_session.A_hex}
 
@@ -312,9 +315,15 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         # Now we have the server's srp_salt — use it as the Argon2id salt to derive
         # srp_pass and keystore_key from one Argon2id call.
         srp_salt_bytes = bytes.fromhex(params["salt"])
-        srp_pass, keystore_key, _ = derive_master_components(_pending_password, srp_salt_bytes)
-        _cached_keystore_key = keystore_key
-        _pending_password    = None
+        try:
+            srp_pass, keystore_key, _ = derive_master_components(_pending_password, srp_salt_bytes)
+        finally:
+            # Clear plaintext password from memory regardless of success or failure.
+            _pending_password = None
+        # Key is staged here; promoted to _cached_keystore_key only after srp_verify
+        # confirms mutual authentication — preventing the keystore from being opened
+        # before the server is verified.
+        _pending_keystore_key = keystore_key
         _srp_session.set_password(srp_pass.hex())
         M1 = _srp_session.process_challenge(params["salt"], params["B"])
         return {"M1": M1}
@@ -325,8 +334,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         authenticated = _srp_session.verify_server(params["M2"])
         session_key = _srp_session.session_key_hex if authenticated else None
         _srp_session = None
-        if not authenticated:
-            _cached_keystore_key = None  # discard — unlock_keystore won't be called
+        if authenticated:
+            # Promote the staged key — unlock_keystore may now use it.
+            _cached_keystore_key  = _pending_keystore_key
+            _pending_keystore_key = None
+        else:
+            # Auth failed: discard staged key and evict any keystore state that may
+            # have been loaded before this verification (e.g. unlock_keystore called
+            # out of order).
+            _pending_keystore_key = None
+            _cached_keystore_key  = None
+            _store                = None
+            _local_bundle         = None
         return {"authenticated": authenticated, "session_key": session_key}
 
     # ── Session existence check ───────────────────────────────────────────────
