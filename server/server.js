@@ -541,7 +541,8 @@ app.get('/messages/:id', requireAuth, async (req, res) => {
   res.json(message)
 })
 
-// Soft-delete a message — only the sender may delete.
+// Soft-delete a message for everyone — only the original sender may delete.
+// Sets deleted_at so the message is excluded from all subsequent queries for all participants.
 app.delete('/messages/:id', requireAuth, async (req, res) => {
   const messageId = req.params.id
   if (!UUID_RE.test(messageId))
@@ -552,13 +553,13 @@ app.delete('/messages/:id', requireAuth, async (req, res) => {
      SET deleted_at           = NOW(),
          deleted_by_device_id = $2
      WHERE id               = $1
+       AND deleted_at IS NULL
        AND sender_device_id IN (
              SELECT id FROM devices
              WHERE user_id = (
                SELECT user_id FROM devices WHERE id = $2
              )
-           )
-       AND deleted_at IS NULL`,
+           )`,
     [messageId, req.deviceId]
   )
 

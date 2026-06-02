@@ -193,8 +193,7 @@ void ConversationController::openConversation(
 
     for (const auto& message : storedMessages) {
 
-        if (message.isDeleted ||
-            cachedIds.contains(message.id)) {
+        if (cachedIds.contains(message.id)) {
             continue;
         }
 
@@ -381,6 +380,56 @@ void ConversationController::reinitiateSession(const QString& conversationId)
     const QString participant = m_participants.value(conversationId);
     if (!participant.isEmpty())
         setupSessionAsync(conversationId, participant);
+}
+
+void ConversationController::updateMessageId(const QString& oldId, const QString& newId)
+{
+    if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
+    for (auto& msgList : m_messagesByConversation) {
+        for (auto& msg : msgList) {
+            if (msg.id == oldId) {
+                msg.id = newId;
+                return;
+            }
+        }
+    }
+}
+
+void ConversationController::removeLocalMessage(const QString& messageId)
+{
+    for (auto it = m_messagesByConversation.begin(); it != m_messagesByConversation.end(); ++it) {
+        auto& msgList = it.value();
+        for (auto msgIt = msgList.begin(); msgIt != msgList.end(); ++msgIt) {
+            if (msgIt->id == messageId) {
+                msgList.erase(msgIt);
+                return;
+            }
+        }
+    }
+}
+
+void ConversationController::markLocalRevoked(const QString& messageId)
+{
+    for (auto& msgList : m_messagesByConversation) {
+        for (auto& msg : msgList) {
+            if (msg.id == messageId) {
+                msg.revoked = true;
+                return;
+            }
+        }
+    }
+}
+
+void ConversationController::markLocalDeleted(const QString& messageId)
+{
+    for (auto& msgList : m_messagesByConversation) {
+        for (auto& msg : msgList) {
+            if (msg.id == messageId) {
+                msg.isDeleted = true;
+                return;
+            }
+        }
+    }
 }
 
 void ConversationController::createChat(const QString& username)
