@@ -40,9 +40,6 @@ app.use(helmet({
       scriptSrc: [
         "'strict-dynamic'",
         (_req, res) => `'nonce-${res.locals.nonce}'`,
-        // NOTE: 'https:' removed — it is a legacy fallback that allows scripts
-        // from any HTTPS origin in browsers that do not support strict-dynamic.
-        // With strict-dynamic, nonce-based trust propagation is sufficient.
       ],
       styleSrc:  ["'self'", 'https://fonts.googleapis.com'],
       fontSrc:   ["'self'", 'https://fonts.gstatic.com'],
