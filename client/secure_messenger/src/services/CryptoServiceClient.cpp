@@ -152,6 +152,13 @@ bool CryptoServiceClient::hasSession(const QString& conversationId)
     return response.value("exists").toBool(false);
 }
 
+bool CryptoServiceClient::resetSession(const QString& conversationId)
+{
+    const QJsonObject response =
+        rpc("reset_session", {{"conversation_id", conversationId}});
+    return !response.contains("error");
+}
+
 bool CryptoServiceClient::initiateSession(
     const QString& conversationId,
     const QByteArray& remoteBundleJson)

@@ -413,6 +413,15 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             except Exception:
                 pass
 
+        # Only try disk recovery for subsequent messages (no initiation_bundle).
+        # When initiation_bundle is present the peer is establishing a new session
+        # — loading an old session from disk would use the wrong ratchet state.
+        if conversation_id not in _sessions and not initiation_bundle:
+            try:
+                _require_session(conversation_id)
+            except (ValueError, FileNotFoundError, KeyError, InvalidTag):
+                pass
+
         if conversation_id not in _sessions:
             if not initiation_bundle:
                 raise ValueError(
@@ -498,6 +507,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         plaintext = _run(entry.ratchet.decrypt(signed, aad))
 
         return {"plaintext": plaintext.decode("utf-8", errors="replace")}
+
+    if method == "reset_session":
+        conversation_id = params["conversation_id"]
+        _sessions.pop(conversation_id, None)
+        _pending_sessions.pop(conversation_id, None)
+        try:
+            store = _require_store()
+            store.delete_session(conversation_id)
+            store.delete_session(f"{_META_KEY_PREFIX}{conversation_id}")
+        except Exception:
+            pass
+        return {"success": True}
 
     raise ValueError(f"Unknown method: {method!r}")
 

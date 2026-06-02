@@ -315,6 +315,16 @@ void MessageController::handleDecryptFailed(
                 messageId,
                 recipientDeviceId);
         }
+
+        // The sender's session is stale — their first message (with the
+        // initiation_bundle) never reached us. Reset our state and re-initiate
+        // so the next outgoing message carries a fresh bundle.
+        if (reason.contains(QStringLiteral("no initiation_bundle"))) {
+            const QString conversationId =
+                envelope.value(QStringLiteral("conversation_id")).toString();
+            if (!conversationId.isEmpty())
+                m_conversations->reinitiateSession(conversationId);
+        }
     }
 
     emit messageReceiveFailed(
