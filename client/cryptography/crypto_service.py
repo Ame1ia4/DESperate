@@ -413,10 +413,13 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             except Exception:
                 pass
 
-        if conversation_id not in _sessions:
+        # Only try disk recovery for subsequent messages (no initiation_bundle).
+        # When initiation_bundle is present the peer is establishing a new session
+        # — loading an old session from disk would use the wrong ratchet state.
+        if conversation_id not in _sessions and not initiation_bundle:
             try:
                 _require_session(conversation_id)
-            except (ValueError, FileNotFoundError, KeyError):
+            except (ValueError, FileNotFoundError, KeyError, InvalidTag):
                 pass
 
         if conversation_id not in _sessions:
