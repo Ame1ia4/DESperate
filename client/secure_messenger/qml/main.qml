@@ -35,6 +35,20 @@ ApplicationWindow {
             Button {
                 text: "Logout"
                 onClicked: authController.logout()
+                implicitWidth: 80
+                implicitHeight: 32
+                background: Rectangle {
+                    color: "#C0392B"
+                    radius: 6
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: "#FFFFFF"
+                    font.pixelSize: 13
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
         }
     }
