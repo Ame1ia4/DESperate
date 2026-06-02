@@ -404,11 +404,6 @@ class IdentityBundle:
             )
             for o in d.get("opks_kem", [])
         ]
-        spk_pub = bytes.fromhex(d["spk_pub"])
-        spk_sig = bytes.fromhex(d["spk_sig"])
-        ik_sig_pub = bytes.fromhex(d["ik_sig_pub"])
-        if not verify_spk_signature(spk_pub, spk_sig, ik_sig_pub):
-            raise ValueError("SPK signature verification failed — bundle is corrupt or tampered")
         return cls(
             user_id      = d.get("user_id", ""),
             ik_kem       = ik_kem,

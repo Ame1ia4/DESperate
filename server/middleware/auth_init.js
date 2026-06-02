@@ -1,5 +1,5 @@
+import { createSRPServer } from 'js-srp6a'
 import { createHmac, hkdfSync } from 'node:crypto'
-import { srp } from '../lib/srp.js'
 import { query, withTransaction } from '../database/db.js'
 import { isValidUsername, isValidUUID, isValidClientPublicEphemeral } from '../utils/validate.js'
 import { SRP_VERIFIER_HEX } from '../constants/auth.js'
@@ -10,6 +10,8 @@ if (!process.env.AUTH_FAKE_SECRET) {
   throw new Error('AUTH_FAKE_SECRET environment variable is required')
 }
 const SERVER_SECRET = process.env.AUTH_FAKE_SECRET
+
+const srp = createSRPServer('SHA-256', 3072)
 
 // Both are keyed to AUTH_FAKE_SECRET so an external attacker cannot pre-compute
 // the mapping even if they observe many responses for the same username.
@@ -59,7 +61,7 @@ export async function authInit(req, res) {
     // fake path runs a no-op DELETE so both paths pay similar DB round-trip cost.
     await withTransaction(async (client) => {
       await client.query(
-        "DELETE FROM srp_challenges WHERE device_id = $1 AND flow = 'login'",
+        'DELETE FROM srp_challenges WHERE device_id = $1',
         ['00000000-0000-0000-0000-000000000000']
       )
     })
@@ -79,13 +81,13 @@ export async function authInit(req, res) {
   // ensures a retrying client always starts a fresh handshake.
   await withTransaction(async (client) => {
     await client.query(
-      "DELETE FROM srp_challenges WHERE device_id = $1 AND flow = 'login'",
+      'DELETE FROM srp_challenges WHERE device_id = $1',
       [row.device_id]
     )
     // Store only b (serverEphemeral.secret) — B is sent to the client and
     // discarded; A is re-sent by the client in round 2 (RFC 5054 §2.5.3).
     await client.query(
-      "INSERT INTO srp_challenges (device_id, srp_server_secret, flow) VALUES ($1, $2, 'login')",
+      'INSERT INTO srp_challenges (device_id, srp_server_secret) VALUES ($1, $2)',
       [row.device_id, serverEphemeral.secret]
     )
   })

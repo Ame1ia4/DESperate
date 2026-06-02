@@ -1,9 +1,11 @@
 import { hkdfSync } from 'node:crypto'
-import { srp } from '../lib/srp.js'
+import { createSRPServer } from 'js-srp6a'
 import { query } from '../database/db.js'
 import { storeSessionKey } from '../state/session_keys.js'
 import { isValidUsername, isValidUUID, isValidClientPublicEphemeral } from '../utils/validate.js'
 import { HEX_RE, SRP_SESSION_PROOF_HEX } from '../constants/auth.js'
+
+const srp = createSRPServer('SHA-256', 3072)
 
 export async function authVerify(req, res) {
   const { username, device_id, clientPublicEphemeral, clientSessionProof } = req.body
@@ -37,7 +39,7 @@ export async function authVerify(req, res) {
   }
 
   const challengeResult = await query(
-    "DELETE FROM srp_challenges WHERE device_id = $1 AND flow = 'login' AND expires_at > NOW() RETURNING srp_server_secret",
+    'DELETE FROM srp_challenges WHERE device_id = $1 AND expires_at > NOW() RETURNING srp_server_secret',
     [device_id]
   )
   const challenge = challengeResult.rows[0]
