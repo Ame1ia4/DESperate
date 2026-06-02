@@ -63,8 +63,8 @@ OPK_COUNT: int = 20
 # actively used) and argon2id_hash/argon2id_verify (server-side password
 # hashing, currently dead code — the server authenticates via SRP, not Argon2).
 
-ARGON2_TIME_COST: int    = 3        # iterations  (OWASP preferred minimum)
-ARGON2_MEMORY_COST: int  = 65536   # KiB = 64 MiB (OWASP preferred minimum)
-ARGON2_PARALLELISM: int  = 4       # threads      (OWASP preferred minimum)
+ARGON2_TIME_COST: int    = 1        # iterations  (OWASP preferred minimum)
+ARGON2_MEMORY_COST: int  = 47104   # KiB = 64 MiB (OWASP preferred minimum)
+ARGON2_PARALLELISM: int  = 1       # threads      (OWASP preferred minimum)
 ARGON2_HASH_LEN: int     = 32      # bytes — 256-bit output
 ARGON2_SALT_LEN: int     = 16      # bytes — 128-bit random salt per hash
