@@ -52,9 +52,19 @@ OPK_COUNT: int = 20
 # https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 # Do not reduce these values. Increasing memory_cost or time_cost improves
 # security at the cost of latency.
+#
+# L2 fix: previous values (time=1, mem=47104 KiB, p=1) were below the OWASP
+# minimum for Argon2id (time≥2, mem≥64 MiB, p≥1). Updated to the OWASP-preferred
+# configuration: time=3, mem=65536 KiB (64 MiB), p=4. The password.py module
+# docstring previously described these correct values but the constants
+# themselves were lower — now they match.
+#
+# L3 note: these parameters govern BOTH argon2id_derive_key (local keystore,
+# actively used) and argon2id_hash/argon2id_verify (server-side password
+# hashing, currently dead code — the server authenticates via SRP, not Argon2).
 
-ARGON2_TIME_COST: int    = 1        # iterations
-ARGON2_MEMORY_COST: int  = 47104   # KiB ≈ 46 MiB
-ARGON2_PARALLELISM: int  = 1       # threads
+ARGON2_TIME_COST: int    = 3        # iterations  (OWASP preferred minimum)
+ARGON2_MEMORY_COST: int  = 65536   # KiB = 64 MiB (OWASP preferred minimum)
+ARGON2_PARALLELISM: int  = 4       # threads      (OWASP preferred minimum)
 ARGON2_HASH_LEN: int     = 32      # bytes — 256-bit output
 ARGON2_SALT_LEN: int     = 16      # bytes — 128-bit random salt per hash

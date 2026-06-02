@@ -44,7 +44,7 @@ This is an E2EE system — security correctness is critical.
 - **No secrets in code**: CI scans for `private_key=`, `password=`, `secret=`, `api_key=` patterns with 8+ char values. Pre-commit hook also blocks `.env` files and PEM private keys.
 - **Keccak256 only**: Merkle tree hashing on the server side MUST use keccak256 (not SHA-256) to match on-chain Solidity verification.
 - **No hardcoded IVs**: C++ code is scanned for `iv = {` patterns.
-- **Argon2id**: Password hashing uses Argon2id — do not substitute other hash functions.
+- **Argon2id**: The local keystore key derivation uses Argon2id (`argon2id_derive_key` in `core/password.py`). Server authentication uses SRP-6a — the server does NOT store or verify Argon2 hashes. `argon2id_hash`/`argon2id_verify` in `password.py` are present but currently unused server-side. Do not substitute other KDFs for local key derivation.
 - **No plaintext or private keys ever stored in the database**.
 - CI runs `npm audit --audit-level=high` for the server; fix or justify any high/critical findings before merging.
 

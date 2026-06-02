@@ -63,6 +63,16 @@ bool ConversationController::sessionReady() const noexcept
     return m_sessionReady;
 }
 
+bool ConversationController::identityMismatch() const noexcept
+{
+    return m_identityMismatch;
+}
+
+int ConversationController::peerDeviceCount() const noexcept
+{
+    return m_peerDeviceCount;
+}
+
 void ConversationController::loadConversations()
 {
     connect(
@@ -280,6 +290,13 @@ void ConversationController::setupSessionAsync(
                 // the mismatch in VerifyDialog.
                 m_sessionReady = ok && trusted;
                 emit sessionReadyChanged();
+
+                // C1 fix: drive identityMismatch so the QML banner can bind to it.
+                if (m_identityMismatch != !trusted) {
+                    m_identityMismatch = !trusted;
+                    emit identityMismatchChanged();
+                }
+
                 if (!ok)
                     qWarning() << "initiateSession failed for conversation" << conversationId
                                << ":" << m_cryptoClient->lastError();
@@ -347,11 +364,18 @@ bool ConversationController::verifyFingerprint(
 
     if (pinned.isEmpty()) {
 
-        return m_conversationModel
+        const bool ok = m_conversationModel
             ->setFingerprintForConversation(
                 conversationId,
                 fingerprint,
                 true);
+
+        // First contact — pin accepted, clear any stale mismatch state.
+        if (ok && m_identityMismatch) {
+            m_identityMismatch = false;
+            emit identityMismatchChanged();
+        }
+        return ok;
     }
 
     if (QString::compare(
@@ -372,6 +396,11 @@ bool ConversationController::verifyFingerprint(
         return false;
     }
 
+    // Fingerprints match — ensure mismatch flag is cleared.
+    if (m_identityMismatch) {
+        m_identityMismatch = false;
+        emit identityMismatchChanged();
+    }
     return true;
 }
 
@@ -408,6 +437,72 @@ void ConversationController::reinitiateSession(const QString& conversationId)
     const QString participant = m_participants.value(conversationId);
     if (!participant.isEmpty())
         setupSessionAsync(conversationId, participant);
+}
+
+void ConversationController::fetchPeerDevices(
+    const QString& conversationId)
+{
+    // H4 fix: fetch all active devices for the peer and compare the count
+    // against the single device_id the conversation list returned.
+    //
+    // A server that has inserted a ghost device row will return >1 device
+    // here. We surface the count to the user via peerDeviceCount so they
+    // can notice and investigate out-of-band.
+    //
+    // Note: a fully compromised server can suppress ghost devices from this
+    // response too. This is a best-effort detection mechanism, not a
+    // cryptographic guarantee — it is documented as a known limitation.
+    const QString participant =
+        m_participants.value(conversationId);
+    if (participant.isEmpty())
+        return;
+
+    connect(
+        m_apiClient,
+        &ApiClient::fetchUserDevicesSucceeded,
+        this,
+        [this, conversationId](const QJsonArray& devices) {
+
+            QStringList fingerprints;
+            for (const auto& v : devices) {
+                const QString fp =
+                    v.toObject()
+                     .value(QStringLiteral("fingerprint"))
+                     .toString();
+                if (!fp.isEmpty())
+                    fingerprints.append(fp);
+            }
+
+            m_peerDeviceFingerprints[conversationId] = fingerprints;
+
+            const int count = fingerprints.size();
+            if (count != m_peerDeviceCount) {
+                m_peerDeviceCount = count;
+                emit peerDeviceCountChanged();
+            }
+
+            // Warn if the server is reporting more than one active device.
+            // A legitimately multi-device user would have one pinned device
+            // per conversation; >1 here means either the peer registered a
+            // new device or a ghost device was injected.
+            if (count > 1) {
+                qWarning() << "H4: peer for conversation" << conversationId
+                           << "has" << count << "active devices — possible ghost device.";
+                emit ghostDeviceDetected(conversationId, count);
+            }
+        },
+        Qt::SingleShotConnection);
+
+    connect(
+        m_apiClient,
+        &ApiClient::fetchUserDevicesFailed,
+        this,
+        [this](const QString& reason) {
+            qWarning() << "fetchPeerDevices failed:" << reason;
+        },
+        Qt::SingleShotConnection);
+
+    m_apiClient->fetchUserDevices(participant);
 }
 
 void ConversationController::createChat(const QString& username)

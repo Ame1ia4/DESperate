@@ -108,11 +108,12 @@ export async function register(req, res) {
     return res.status(400).json({ error: 'Invalid nonce' })
   }
 
-  const { rows: taken } = await query('SELECT 1 FROM users WHERE username = $1', [username])
-  if (taken.length > 0) {
-    return res.status(409).json({ error: 'Registration failed' })
-  }
-
+  // M3 fix: the pre-check SELECT was a username enumeration oracle — a 409
+  // response arrived measurably faster for taken usernames because it short-
+  // circuited the INSERT. Removed entirely: the INSERT below enforces the
+  // unique constraint at the DB level and the err.cause?.code === '23505'
+  // catch already returns the same uniform 409 { error: 'Registration failed' }.
+  // Both paths now take the same code route; timing is equalized.
   let deviceId
   try {
     deviceId = await withTransaction(async (client) => {

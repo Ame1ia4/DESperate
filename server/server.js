@@ -73,6 +73,13 @@ app.use(helmet({
   },
 }))
 app.set('trust proxy', 1)
+// L1 fix: fail fast if SUBDOMAIN is unset rather than silently producing
+// origin 'https://undefined', which would reject all cross-origin requests
+// or (if misconfigured upstream) allow everything.
+if (!process.env.SUBDOMAIN) {
+  console.error('FATAL: SUBDOMAIN environment variable is not set')
+  process.exit(1)
+}
 app.use(cors({ origin: `https://${process.env.SUBDOMAIN}` }))
 app.use(express.json({ limit: '2mb' }))
 
@@ -374,6 +381,13 @@ app.post('/messages', requireAuth, async (req, res) => {
     )
 
     // Fan out to each recipient device.
+    // L5 note: initiation_bundle is stored here as unauthenticated queue
+    // metadata. A tampering server could alter it, which would cause the
+    // recipient's PQXDH response to fail (wrong SK) rather than silently
+    // accepting a forged session — the AEAD tag would not verify. This means
+    // tampering causes a detectable failure rather than a MITM. A full fix
+    // would have the sender sign the initiation_bundle under ik_sig, but that
+    // requires client changes. Documented as a known limitation.
     const queueMeta = Buffer.from(JSON.stringify({ initiation_bundle: initiation_bundle ?? null }))
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
 
@@ -672,8 +686,41 @@ app.post('/devices/revoke', requireAuth, async (req, res) => {
   res.json({ revoked: true })
 })
 
+// M2 fix: proofHandler was missing requireAuth — any unauthenticated caller
+// could query the Merkle proof endpoint. Added requireAuth to both routes.
 app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
-app.post('/blockchain/verify-leaf',        proofHandler)
+app.post('/blockchain/verify-leaf',        requireAuth, proofHandler)
+
+// H4 fix: return all active (non-revoked) devices for a user so the
+// client can detect ghost devices injected by a compromised server.
+//
+// Returns an array of { device_id, fingerprint } objects — one per
+// non-revoked device. The client compares this list against the single
+// device_id it received in the conversation list; more than one entry
+// is surfaced as a warning in the UI.
+//
+// Known limitation: a fully compromised server can suppress ghost
+// devices from this response. This is best-effort detection, not a
+// cryptographic guarantee, and is documented as such.
+app.get('/users/:username/devices', requireAuth, async (req, res) => {
+  const { username } = req.params
+  if (!username || username.length > 50)
+    return res.status(400).json({ error: 'Invalid username' })
+
+  const { rows } = await query(
+    `SELECT
+       d.id                                   AS device_id,
+       encode(d.identity_signing_pub, 'hex')  AS fingerprint
+     FROM devices d
+     JOIN users   u ON u.id = d.user_id
+     WHERE u.username = $1
+       AND d.revoked  = FALSE
+     ORDER BY d.created_at ASC`,
+    [username]
+  )
+
+  res.json({ devices: rows })
+})
 
 // ── 404 ──
 app.use((_, res) => res.status(404).json({ error: 'Not found' }))

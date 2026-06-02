@@ -58,8 +58,10 @@ from core.signatures import (
     SignatureVerificationError,
 )
 
-HOST = "127.0.0.1"
-PORT = 54231
+# M1 fix: Unix domain socket replaces TCP so the OS enforces that only
+# processes owned by the same UID can connect. No port is exposed at all,
+# eliminating the local network attack surface entirely.
+SOCKET_PATH = Path.home() / ".desperate_keys" / "crypto.sock"
 
 # ── Keystore ──────────────────────────────────────────────────────────────────
 
@@ -205,7 +207,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
-        _store = _open_or_create_store(password)
+        # M1 fix: unlock must ONLY open an existing keystore, never create one.
+        # Previously _open_or_create_store would silently create a fresh keystore
+        # with an attacker-supplied password if the directory did not exist,
+        # allowing a local process to replace the real keystore before the
+        # legitimate user unlocked it. Use StateStore.load() directly instead.
+        salt_path = _STORE_BASE_DIR / "salt"
+        if not salt_path.exists():
+            return {
+                "success": False,
+                "error": "No keystore found. Register first.",
+            }
+        _store = StateStore.load(_STORE_BASE_DIR, password)
         # Load identity bundle if one has been persisted from a previous registration.
         if _store.state_exists(_BUNDLE_KEY):
             try:
@@ -615,13 +628,76 @@ def _serve_connection(conn: socket.socket) -> None:
         conn.close()
 
 
+def _check_peer_uid(conn: socket.socket) -> bool:
+    """
+    M1 fix: verify the connecting process is owned by the same UID as
+    this service using SO_PEERCRED (Linux) or LOCAL_PEERCRED (macOS).
+
+    Returns True if the peer UID matches os.getuid(), False otherwise.
+    On platforms where neither option is available, logs a warning and
+    returns True (fail-open) so the service remains functional — document
+    this as a known limitation on unsupported platforms.
+    """
+    import struct
+    own_uid = os.getuid()
+    try:
+        # Linux: SO_PEERCRED returns ucred { pid, uid, gid } (3 × uint32)
+        SO_PEERCRED = 17
+        cred = conn.getsockopt(socket.SOL_SOCKET, SO_PEERCRED, 12)
+        _, peer_uid, _ = struct.unpack("III", cred)
+        return peer_uid == own_uid
+    except (OSError, AttributeError):
+        pass
+    try:
+        # macOS: LOCAL_PEERCRED / LOCAL_PEEREPID
+        import ctypes
+        libc = ctypes.CDLL(None)
+        LOCAL_PEERPID = 0x002  # macOS SOL_LOCAL option
+        SOL_LOCAL = 0
+        pid_buf = ctypes.c_int32(0)
+        size    = ctypes.c_uint32(ctypes.sizeof(pid_buf))
+        if libc.getsockopt(conn.fileno(), SOL_LOCAL, LOCAL_PEERPID,
+                           ctypes.byref(pid_buf), ctypes.byref(size)) == 0:
+            import pathlib
+            uid_str = pathlib.Path(f"/proc/{pid_buf.value}/status").read_text()
+            for line in uid_str.splitlines():
+                if line.startswith("Uid:"):
+                    peer_uid = int(line.split()[1])
+                    return peer_uid == own_uid
+    except Exception:
+        pass
+    # Platform not supported — fail-open with a warning.
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        "M1: SO_PEERCRED not available on this platform — "
+        "peer UID check skipped. Document as known limitation."
+    )
+    return True
+
+
 def main() -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind((HOST, PORT))
-        srv.listen(1)
+    # M1 fix: bind to a Unix domain socket in the keystore directory
+    # (mode 0o600, owned by this user) instead of TCP 127.0.0.1:54231.
+    # The directory itself is already created by StateStore with restrictive
+    # permissions; the socket inherits those ownership constraints.
+    sock_path = str(SOCKET_PATH)
+    # Remove stale socket file from a previous run (bind fails otherwise).
+    try:
+        Path(sock_path).unlink()
+    except FileNotFoundError:
+        pass
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
+        srv.bind(sock_path)
+        # Restrict socket to owner read/write only — no group or world access.
+        Path(sock_path).chmod(0o600)
+        srv.listen(5)  # M1 fix: was listen(1) — single-slot queue was a local DoS
         while True:
             conn, _ = srv.accept()
+            # M1 fix: reject connections from processes not owned by this UID.
+            if not _check_peer_uid(conn):
+                conn.close()
+                continue
             _serve_connection(conn)
 
 

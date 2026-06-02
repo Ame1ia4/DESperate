@@ -97,7 +97,10 @@ Rectangle {
 
             delegate: Rectangle {
                 width: ListView.view.width - 16
-                height: 72
+
+                // H4 fix: expand to show ghost-device warning when needed
+                height: ghostWarning.visible ? 92 : 72
+
                 color: verified ? "#305C40" : "#264F3B"
                 radius: 12
                 border.color: verified ? "#83CAA4" : "#3F7A56"
@@ -105,7 +108,13 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: conversationController.openConversation(conversationId)
+                    onClicked: {
+                        conversationController.openConversation(conversationId)
+                        // H4 fix: fetch the full device list every time a
+                        // conversation is opened so ghost devices are detected
+                        // promptly rather than only at first open.
+                        conversationController.fetchPeerDevices(conversationId)
+                    }
                 }
 
                 Column {
@@ -113,13 +122,42 @@ Rectangle {
                     anchors.margins: 10
                     spacing: 2
 
-                    Text {
-                        text: participant
-                        color: "#F5EDD6"
-                        font.bold: true
-                        font.pixelSize: 14
-                        elide: Text.ElideRight
+                    RowLayout {
                         width: parent.width
+                        spacing: 4
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: participant
+                            color: "#F5EDD6"
+                            font.bold: true
+                            font.pixelSize: 14
+                            elide: Text.ElideRight
+                        }
+
+                        // H4 fix: device count badge — amber when >1 device
+                        // is active for this peer, indicating a possible
+                        // ghost device injected by a compromised server.
+                        Rectangle {
+                            visible: conversationController
+                                     && conversationController.peerDeviceCount > 0
+                                     && conversationId === conversationController.currentConversationId
+                            width: deviceCountLabel.implicitWidth + 10
+                            height: 18
+                            radius: 9
+                            color: conversationController.peerDeviceCount > 1
+                                   ? "#C07000" : "#2D6944"
+
+                            Text {
+                                id: deviceCountLabel
+                                anchors.centerIn: parent
+                                text: conversationController.peerDeviceCount + " device"
+                                      + (conversationController.peerDeviceCount !== 1 ? "s" : "")
+                                color: "#F5EDD6"
+                                font.pixelSize: 9
+                                font.bold: true
+                            }
+                        }
                     }
 
                     Text {
@@ -135,6 +173,20 @@ Rectangle {
                         color: "#B3E3B7"
                         font.pixelSize: 10
                         elide: Text.ElideRight
+                        width: parent.width
+                    }
+
+                    // H4 fix: ghost device warning row
+                    Text {
+                        id: ghostWarning
+                        visible: conversationController
+                                 && conversationController.peerDeviceCount > 1
+                                 && conversationId === conversationController.currentConversationId
+                        text: "⚠️ " + conversationController.peerDeviceCount
+                              + " active devices — verify out-of-band"
+                        color: "#FFB347"
+                        font.pixelSize: 10
+                        wrapMode: Text.Wrap
                         width: parent.width
                     }
                 }

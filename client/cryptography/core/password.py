@@ -26,11 +26,18 @@ WHY SEPARATE FROM SERVER-SIDE HASHING
       - The derivation paths use different info strings in the HKDF step
         that follows (INFO_LOCAL_KEY_ENC vs the server hash has no HKDF step).
 
-Parameters follow the OWASP Password Storage Cheat Sheet recommendation:
+Parameters follow the OWASP Password Storage Cheat Sheet recommendation
+(now correctly reflected in constants.py after L2 fix):
     time_cost   = 3        iterations
-    memory_cost = 65536    KiB (64 MB)
+    memory_cost = 65536    KiB (64 MiB)
     parallelism = 4        threads
     hash_len    = 32       bytes
+
+L3 note: argon2id_hash() and argon2id_verify() are currently DEAD CODE.
+The server authenticates users via SRP-6a and never calls these functions.
+Only argon2id_derive_key() is on the live path (local keystore encryption).
+If server-side password hashing is ever needed, these functions are ready
+to use — but do not confuse them with SRP credential storage.
 
 References:
     RFC 9106  Argon2:        https://www.rfc-editor.org/rfc/rfc9106
@@ -70,6 +77,11 @@ _password_hasher = PasswordHasher(
 def argon2id_hash(password: str) -> str:
     """
     Hash a password for server-side storage using Argon2id.
+
+    L3 note: this function is NOT called anywhere in the current codebase.
+    The server uses SRP-6a for authentication; it never stores or verifies
+    an Argon2 hash. This function exists for future use or if the auth
+    scheme is extended to include direct password hashing.
 
     Returns an encoded hash string that includes the salt, parameters, and
     hash — everything needed for future verification. Store this string
