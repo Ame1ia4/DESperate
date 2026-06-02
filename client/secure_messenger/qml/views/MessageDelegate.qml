@@ -14,6 +14,8 @@ Item {
     width:  ListView.view ? ListView.view.width : 0
     height: bubble.height + 16
 
+    
+
     // ── Bubble ────────────────────────────────────────────────────────────────
     Rectangle {
         id: bubble
@@ -35,6 +37,8 @@ Item {
         border.color: outgoing ? "#1DA851" : "#D6D6D6"
         border.width: 1
 
+        clip: true
+
         // Message text
         Text {
             id: msgText
@@ -49,9 +53,8 @@ Item {
             wrapMode:  Text.WordWrap
             color:     outgoing ? "#FFFFFF" : "#0B0B0B"
             font.pixelSize: 14
-            // Flexible width: prefer natural width but wrap at contentMaxWidth
-            // Reserve space for the top-right menu button so text doesn't get overlapped
-            width: Math.min(Math.max(contentMaxWidth - 36, 40), implicitWidth)
+            // Flexible width: wrap at contentMaxWidth minus reserved paddings
+            width: Math.min(Math.max(60, contentMaxWidth - 48), implicitWidth)
         }
 
         // Footer: timestamp + ticks
@@ -98,6 +101,7 @@ Item {
             anchors.rightMargin: 6
             implicitWidth: 28
             implicitHeight: 28
+            z: 3
             background: Rectangle { color: "transparent" }
             contentItem: Rectangle {
                 width: parent.implicitWidth
@@ -126,8 +130,8 @@ Item {
         }
 
         // Bubble width depends on text width + padding
-        width: Math.min(msgText.width + 28, root.width * 0.75)
-        height: msgText.height + footer.height + 32
+        width: Math.min(msgText.width + 48, root.width * 0.75)
+        height: msgText.height + footer.implicitHeight + 32
     }
 
     // ── Action menu ───────────────────────────────────────────────────────────
@@ -136,7 +140,7 @@ Item {
 
         MenuItem {
             text: "Copy"
-            onTriggered: Qt.copyToClipboard(plaintext)
+            onTriggered: clipboardHelper.copyText(plaintext)
         }
 
         MenuItem {

@@ -27,6 +27,7 @@ qt_add_executable(appsecure_messenger
     src/network/TLSManager.cpp
     src/network/TrustStore.cpp
     src/storage/LocalMessageStore.cpp
+    src/utils/ClipboardHelper.cpp
 )
 
 qt_add_qml_module(appsecure_messenger

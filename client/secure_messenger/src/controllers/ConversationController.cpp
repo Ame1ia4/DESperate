@@ -222,6 +222,8 @@ void ConversationController::openConversation(
             setupSessionAsync(conversationId, participant);
         }
     }
+    // Notify others (MessageController) that conversation was opened so history can be fetched
+    emit conversationOpened(conversationId);
 }
 
 void ConversationController::setupSessionAsync(

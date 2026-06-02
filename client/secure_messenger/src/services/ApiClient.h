@@ -43,6 +43,7 @@ public:
     void setAuthToken(const QString& token);
 
     void fetchConversations();
+    void fetchConversationMessages(const QString& conversationId);
 
     // Fetch the public PQXDH key bundle for a username (GET /keys/:username).
     void fetchKeyBundle(const QString& username);
@@ -65,6 +66,8 @@ signals:
     void fetchRegistrationNonceFailed(QString reason);
     void fetchConversationsSucceeded(QJsonArray conversations);
     void fetchConversationsFailed(QString reason);
+    void fetchConversationMessagesSucceeded(QJsonArray messages);
+    void fetchConversationMessagesFailed(QString reason);
     void pullMessagesSucceeded(QJsonArray envelopes);
     void pullMessagesFailed();
     void acknowledgeMessageSucceeded(QString messageId);

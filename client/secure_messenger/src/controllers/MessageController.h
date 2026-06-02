@@ -62,6 +62,9 @@ public slots:
     void pullAndProcessMessages(
         QString deviceId);
 
+    // Fetch historical messages for a conversation and decrypt them.
+    void fetchConversationHistory(const QString& conversationId);
+
 signals:
     void messageSent();
 

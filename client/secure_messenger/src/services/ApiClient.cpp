@@ -168,7 +168,11 @@ void ApiClient::doSrpInit(
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 1 FAILED";
-            emit loginUserFailed(QStringLiteral("Authentication failed."));
+            if (status == 429) {
+                emit loginUserFailed(QStringLiteral("Too many authentication attempts — please wait and try again."));
+            } else {
+                emit loginUserFailed(QStringLiteral("Authentication failed."));
+            }
             return;
         }
 
@@ -230,7 +234,11 @@ void ApiClient::doSrpVerify(
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 2 FAILED";
-            emit loginUserFailed(QStringLiteral("Authentication failed."));
+            if (status == 429) {
+                emit loginUserFailed(QStringLiteral("Too many authentication attempts — please wait and try again."));
+            } else {
+                emit loginUserFailed(QStringLiteral("Authentication failed."));
+            }
             return;
         }
 
@@ -364,6 +372,33 @@ void ApiClient::fetchConversations()
         const auto response      = QJsonDocument::fromJson(body).object();
         const auto conversations = response.value("conversations").toArray();
         emit fetchConversationsSucceeded(conversations);
+    });
+}
+
+void ApiClient::fetchConversationMessages(const QString& conversationId)
+{
+    // percent-encode conversation id into path
+    auto request = makeRequest(
+        "/conversations/" + QString::fromUtf8(QUrl::toPercentEncoding(conversationId)) + "/messages");
+    auto* reply = m_network.get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = body.isEmpty()
+                ? QStringLiteral("Failed to fetch conversation messages.")
+                : QString::fromUtf8(body);
+            emit fetchConversationMessagesFailed(reason);
+            return;
+        }
+
+        const auto response = QJsonDocument::fromJson(body).object();
+        const auto messages = response.value("messages").toArray();
+        emit fetchConversationMessagesSucceeded(messages);
     });
 }
 

@@ -88,4 +88,6 @@ private:
     QString m_authError;
 
     QString m_currentUserId;
+
+    bool m_loginInProgress = false;
 };

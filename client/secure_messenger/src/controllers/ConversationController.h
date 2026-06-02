@@ -81,6 +81,9 @@ signals:
 
     void sessionReadyChanged();
 
+    // Emitted after a conversation is opened (id set and messages cleared/loaded)
+    void conversationOpened(QString conversationId);
+
     void errorOccurred(
         QString reason);
 

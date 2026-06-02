@@ -343,3 +343,32 @@ void MessageController::pullAndProcessMessages(
 
     m_api->pullMessages(deviceId);
 }
+
+void MessageController::fetchConversationHistory(const QString& conversationId)
+{
+    connect(
+        m_api,
+        &ApiClient::fetchConversationMessagesSucceeded,
+        this,
+        [this](const QJsonArray& messages) {
+            for (const auto& value : messages) {
+                const auto envelope = value.toObject();
+                if (!envelope.isEmpty()) {
+                    receiveEnvelope(envelope);
+                }
+            }
+        },
+        Qt::SingleShotConnection);
+
+    connect(
+        m_api,
+        &ApiClient::fetchConversationMessagesFailed,
+        this,
+        [this](const QString& reason) {
+            Q_UNUSED(reason)
+            emit messageReceiveFailed(QStringLiteral("Failed to fetch conversation history."));
+        },
+        Qt::SingleShotConnection);
+
+    m_api->fetchConversationMessages(conversationId);
+}

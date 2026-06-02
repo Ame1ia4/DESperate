@@ -17,6 +17,7 @@
 #include "src/services/CryptoServiceClient.h"
 
 #include "src/storage/LocalMessageStore.h"
+#include "src/utils/ClipboardHelper.h"
 
     int main(
         int argc,
@@ -70,6 +71,14 @@
             &trustStore,
             &sessionStore);
 
+    // When a conversation is opened, fetch its server-side history and decrypt.
+    QObject::connect(
+        &conversationController,
+        &ConversationController::conversationOpened,
+        &messageController,
+        &MessageController::fetchConversationHistory,
+        Qt::QueuedConnection);
+
     // QML context exposure
     engine.rootContext()->setContextProperty(
         "conversationController",
@@ -82,6 +91,10 @@
     engine.rootContext()->setContextProperty(
         "messageController",
         &messageController);
+
+    // Clipboard helper for QML (avoid depending on Qt.labs.platform)
+    ClipboardHelper clipboardHelper;
+    engine.rootContext()->setContextProperty("clipboardHelper", &clipboardHelper);
 
     // Load QML module
     engine.loadFromModule(
