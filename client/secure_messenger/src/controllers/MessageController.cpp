@@ -88,8 +88,17 @@ MessageController::MessageController(
         m_model->removeMessage(messageId);
     });
 
+    // Revoke: mark the sender's own bubble with a small indicator, persist the state,
+    // but keep the original message text visible (only the recipient lost access).
     connect(m_api, &ApiClient::revokeMessageSucceeded, this, [this](const QString& messageId) {
         m_model->markRevoked(messageId);
+        m_store->markMessageRevoked(messageId);
+        m_conversations->markLocalRevoked(messageId);
+        emit messageRevokeSucceeded();
+    });
+
+    connect(m_api, &ApiClient::revokeMessageFailed, this, [this](const QString&) {
+        emit messageRevokeFailed();
     });
 
     connect(m_conversations, &ConversationController::sessionReadyChanged, this, [this]() {
