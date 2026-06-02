@@ -611,19 +611,27 @@ def verify_hybrid_signature(
     ed_sig        = signature[:ED25519_SIGNATURE_LEN]
     dsa_sig       = signature[ED25519_SIGNATURE_LEN:]
 
+    # Timing fix: always run BOTH verifications before returning, regardless
+    # of whether either fails. Early return on Ed25519 failure leaks a
+    # timing oracle — an attacker can distinguish "Ed25519 failed" (fast,
+    # Python exception) from "ML-DSA failed" (slower, liboqs C call) by
+    # measuring response time. Running both unconditionally removes that
+    # distinguisher. Results are combined only after both have completed.
+    ed_ok = False
     try:
         Ed25519PublicKey.from_public_bytes(ed_pub_bytes).verify(ed_sig, message)
+        ed_ok = True
     except Exception:
-        return False
+        pass
 
+    dsa_ok = False
     try:
         with oqs.Signature(SIG_ALG) as verifier:
-            if not verifier.verify(message, dsa_sig, dsa_pub_bytes):
-                return False
+            dsa_ok = verifier.verify(message, dsa_sig, dsa_pub_bytes)
     except Exception:
-        return False
+        pass
 
-    return True
+    return ed_ok and dsa_ok
 
 def verify_spk_signature(
     spk_pub:    bytes,
