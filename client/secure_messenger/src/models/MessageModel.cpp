@@ -140,9 +140,11 @@ void MessageModel::markDeleted(const QString& messageId)
 void MessageModel::updateMessageId(const QString& oldId, const QString& newId)
 {
     if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
-    for (auto& msg : m_messages) {
-        if (msg.id == oldId) {
-            msg.id = newId;
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == oldId) {
+            m_messages[i].id = newId;
+            const QModelIndex idx = index(i);
+            emit dataChanged(idx, idx, {MessageIdRole});
             return;
         }
     }

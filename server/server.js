@@ -548,20 +548,37 @@ app.delete('/messages/:id', requireAuth, async (req, res) => {
   if (!UUID_RE.test(messageId))
     return res.status(400).json({ error: 'Invalid message id' })
 
-  const { rowCount } = await query(
-    `UPDATE messages
-     SET deleted_at           = NOW(),
-         deleted_by_device_id = $2
-     WHERE id               = $1
-       AND deleted_at IS NULL
-       AND sender_device_id IN (
-             SELECT id FROM devices
-             WHERE user_id = (
-               SELECT user_id FROM devices WHERE id = $2
-             )
-           )`,
-    [messageId, req.deviceId]
-  )
+  const { rowCount } = await withTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE messages
+       SET deleted_at           = NOW(),
+           deleted_by_device_id = $2
+       WHERE id               = $1
+         AND deleted_at IS NULL
+         AND sender_device_id IN (
+               SELECT id FROM devices
+               WHERE user_id = (
+                 SELECT user_id FROM devices WHERE id = $2
+               )
+             )`,
+      [messageId, req.deviceId]
+    )
+    if (result.rowCount === 0) return result
+
+    // Hide the message from every other participant's history so they
+    // cannot see it even if they already received it.
+    await client.query(
+      `INSERT INTO message_hidden (msg_id, user_id)
+       SELECT $1, cm.user_id
+       FROM   conversation_members cm
+       JOIN   messages m ON m.id = $1
+       WHERE  cm.conversation_id = m.conversation_id
+         AND  cm.user_id != (SELECT user_id FROM devices WHERE id = $2)
+       ON CONFLICT (msg_id, user_id) DO NOTHING`,
+      [messageId, req.deviceId]
+    )
+    return result
+  })
 
   if (rowCount === 0)
     return res.status(403).json({ error: 'Not the sender or message already deleted' })
