@@ -50,6 +50,8 @@ public slots:
 
     Q_INVOKABLE void deleteMessage(const QString& messageId);
     Q_INVOKABLE void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
+    Q_INVOKABLE void forwardMessage(const QString& toUsername, const QString& plaintext);
+    Q_INVOKABLE void downloadMessage(const QString& messageId, const QString& plaintext);
 
     void sendMessage(
         QString conversationId,
@@ -75,6 +77,9 @@ signals:
 
     void messageReceiveFailed(
         QString reason);
+
+    void messageDownloaded(QString path);
+    void messageDownloadFailed(QString reason);
 
 private slots:
     void handleEncryptCompleted(
@@ -114,4 +119,7 @@ private:
 
     QHash<QString, QJsonObject>
         m_pendingDecryptions;
+
+    QHash<QString, QString>
+        m_pendingForwards;
 };
