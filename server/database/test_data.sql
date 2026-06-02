@@ -18,8 +18,12 @@ INSERT INTO conversation_members (conversation_id, user_id) VALUES
 
 INSERT INTO messages (id, conversation_id, sender_device_id, ciphertext, nonce, associated_data) VALUES
   ('dddddddd-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000001', decode('deadbeef01', 'hex'), decode('010203040506070809101112', 'hex'), decode('cccccccc00000000000000000000000000000001', 'hex')),
-  ('dddddddd-0000-0000-0000-000000000002', 'cccccccc-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000002', decode('deadbeef02', 'hex'), decode('020304050607080910111213', 'hex'), decode('cccccccc00000000000000000000000000000001', 'hex'));
+  ('dddddddd-0000-0000-0000-000000000002', 'cccccccc-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000002', decode('deadbeef02', 'hex'), decode('020304050607080910111213', 'hex'), decode('cccccccc00000000000000000000000000000001', 'hex')),
+  ('dddddddd-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000001', decode('deadbeef03', 'hex'), decode('030405060708091011121314', 'hex'), decode('cccccccc00000000000000000000000000000001', 'hex')),
+  ('dddddddd-0000-0000-0000-000000000004', 'cccccccc-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000002', decode('deadbeef04', 'hex'), decode('040506070809101112131415', 'hex'), decode('cccccccc00000000000000000000000000000001', 'hex'));
 
 INSERT INTO merkle_leaves (leaf_hash, msg_id, state) VALUES
   ('0xdeadbeef01deadbeef01deadbeef01deadbeef01deadbeef01deadbeef010001', 'dddddddd-0000-0000-0000-000000000001', 'pending'),
-  ('0xdeadbeef02deadbeef02deadbeef02deadbeef02deadbeef02deadbeef020002', 'dddddddd-0000-0000-0000-000000000002', 'pending');
+  ('0xdeadbeef02deadbeef02deadbeef02deadbeef02deadbeef02deadbeef020002', 'dddddddd-0000-0000-0000-000000000002', 'pending'),
+  ('0xdeadbeef03deadbeef03deadbeef03deadbeef03deadbeef03deadbeef030003', 'dddddddd-0000-0000-0000-000000000003', 'pending'),
+  ('0xdeadbeef04deadbeef04deadbeef04deadbeef04deadbeef04deadbeef040004', 'dddddddd-0000-0000-0000-000000000004', 'pending');
