@@ -50,7 +50,6 @@ public:
     void deleteMessage(const QString& messageId);
     void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
 
-    //meaningless change
     // Create a new conversation with another user (POST /conversations).
     void createConversation(const QString& otherUsername);
 

@@ -404,14 +404,16 @@ void ApiClient::fetchConversationMessages(const QString& conversationId)
 
 void ApiClient::deleteMessage(const QString& messageId)
 {
-    auto request = makeRequest("/messages/" + messageId);
+    auto request = makeRequest(
+        "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)));
     auto* reply  = m_network.deleteResource(request);
     connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }
 
 void ApiClient::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
 {
-    auto request = makeRequest("/messages/" + messageId + "/revoke");
+    auto request = makeRequest(
+        "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)) + "/revoke");
     QJsonObject body;
     body["recipient_device_id"] = recipientDeviceId;
     auto* reply = m_network.post(request, QJsonDocument(body).toJson());
