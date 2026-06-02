@@ -20,7 +20,8 @@ public:
         VerificationRole,
         PlaintextRole,
         OutgoingRole,
-        VerifiedRole
+        VerifiedRole,
+        MessageIdRole
     };
 
     int rowCount(

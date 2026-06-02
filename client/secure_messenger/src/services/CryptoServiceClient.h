@@ -67,6 +67,10 @@ public:
         const QString& requestId,
         const QJsonObject& envelope);
 
+    bool hasSession(const QString& conversationId);
+
+    bool resetSession(const QString& conversationId);
+
     QString lastError() const;
 
     void setRpcTimeoutMs(

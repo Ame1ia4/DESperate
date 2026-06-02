@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QThread>
 #include <QUuid>
 
     CryptoServiceClient::CryptoServiceClient(
@@ -144,6 +145,20 @@ QString CryptoServiceClient::srpVerify(
     return response.value("session_key").toString();
 }
 
+bool CryptoServiceClient::hasSession(const QString& conversationId)
+{
+    const QJsonObject response =
+        rpc("has_session", {{"conversation_id", conversationId}});
+    return response.value("exists").toBool(false);
+}
+
+bool CryptoServiceClient::resetSession(const QString& conversationId)
+{
+    const QJsonObject response =
+        rpc("reset_session", {{"conversation_id", conversationId}});
+    return !response.contains("error");
+}
+
 bool CryptoServiceClient::initiateSession(
     const QString& conversationId,
     const QByteArray& remoteBundleJson)
@@ -188,7 +203,12 @@ QString CryptoServiceClient::decryptMessage(
         rpc(
             "decrypt_message",
             {
-                {"envelope", envelope}
+                {"conversation_id",   envelope["conversation_id"]},
+                {"ciphertext",        envelope["ciphertext"]},
+                {"nonce",             envelope["nonce"]},
+                {"initiation_bundle", envelope["initiation_bundle"]},
+                {"sender_ik_sig_pub", envelope["sender_ik_sig_pub"]},
+                {"sender_device_id",  envelope["sender_device_id"]},
             });
 
     if (response.contains("error")) {
@@ -346,15 +366,21 @@ bool CryptoServiceClient::ensureConnected()
 
         m_serviceStarted = true;
 
-        // Give the service a moment to bind before connecting.
-        m_socket.connectToHost(
-            m_serviceHost,
-            m_servicePort);
+        // Python needs time to import modules and bind the socket.
+        // ECONNREFUSED returns immediately (not after the timeout), so we
+        // must retry with small delays rather than one long waitForConnected.
+        const int retryIntervalMs = 300;
+        const int maxWaitMs       = 10000;
+        int elapsed               = 0;
+        while (elapsed < maxWaitMs) {
+            QThread::msleep(retryIntervalMs);
+            elapsed += retryIntervalMs;
 
-        if (m_socket.waitForConnected(
-                m_rpcTimeoutMs)) {
-
-            return true;
+            m_socket.abort();
+            m_socket.connectToHost(m_serviceHost, m_servicePort);
+            if (m_socket.waitForConnected(retryIntervalMs)) {
+                return true;
+            }
         }
     }
 

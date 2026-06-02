@@ -2,12 +2,106 @@
 #include "LocalMessageStore.h"
 
 #include <QDateTime>
+#include <QSettings>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QJsonDocument>
 
     LocalMessageStore::LocalMessageStore(
         QObject* parent)
     : QObject(parent)
 {
+        // Load persisted messages and envelopes (if any)
+        QSettings settings;
+
+        const QByteArray decryptedJson = settings.value("local_store/decryptedMessages").toByteArray();
+        if (!decryptedJson.isEmpty()) {
+            const auto doc = QJsonDocument::fromJson(decryptedJson);
+            if (doc.isArray()) {
+                const QJsonArray arr = doc.array();
+                for (const auto& v : arr) {
+                    if (!v.isObject()) continue;
+                    const auto obj = v.toObject();
+                    DecryptedMessage m;
+                    m.id = obj.value("id").toString();
+                    m.conversationId = obj.value("conversationId").toString();
+                    m.senderDeviceId = obj.value("senderDeviceId").toString();
+                    m.plaintext = obj.value("plaintext").toString();
+                    m.timestamp = QDateTime::fromString(obj.value("timestamp").toString(), Qt::ISODateWithMs);
+                    m.verificationState = static_cast<VerificationState>(obj.value("verificationState").toInt(0));
+                    m.isDeleted = obj.value("isDeleted").toBool(false);
+                    const int index = m_decryptedMessages.size();
+                    m_messageIndex.insert(m.id, index);
+                    m_decryptedMessages.push_back(m);
+                }
+            }
+        }
+
+        const QByteArray envelopesJson = settings.value("local_store/envelopes").toByteArray();
+        if (!envelopesJson.isEmpty()) {
+            const auto doc = QJsonDocument::fromJson(envelopesJson);
+            if (doc.isArray()) {
+                const QJsonArray arr = doc.array();
+                for (const auto& v : arr) {
+                    if (!v.isObject()) continue;
+                    const auto obj = v.toObject();
+                    MessageEnvelope e;
+                    e.id = obj.value("id").toString();
+                    e.conversationId = obj.value("conversationId").toString();
+                    e.senderDeviceId = obj.value("senderDeviceId").toString();
+                    e.ciphertext = QByteArray::fromBase64(obj.value("ciphertext").toString().toUtf8());
+                    e.nonce = QByteArray::fromBase64(obj.value("nonce").toString().toUtf8());
+                    e.associatedData = QByteArray::fromBase64(obj.value("associatedData").toString().toUtf8());
+                    e.txHash = obj.value("txHash").toString();
+                    e.merkleRoot = obj.value("merkleRoot").toString();
+                    e.timestamp = QDateTime::fromString(obj.value("timestamp").toString(), Qt::ISODateWithMs);
+                    e.verificationState = static_cast<VerificationState>(obj.value("verificationState").toInt(0));
+                    e.isDeleted = obj.value("isDeleted").toBool(false);
+                    m_envelopes.push_back(e);
+                }
+            }
+        }
 }
+
+    static QJsonObject decryptedMessageToJson(const DecryptedMessage& m) {
+        QJsonObject obj;
+        obj["id"] = m.id;
+        obj["conversationId"] = m.conversationId;
+        obj["senderDeviceId"] = m.senderDeviceId;
+        obj["plaintext"] = m.plaintext;
+        obj["timestamp"] = m.timestamp.toString(Qt::ISODateWithMs);
+        obj["verificationState"] = static_cast<int>(m.verificationState);
+        obj["isDeleted"] = m.isDeleted;
+        return obj;
+    }
+
+    static QJsonObject envelopeToJson(const MessageEnvelope& e) {
+        QJsonObject obj;
+        obj["id"] = e.id;
+        obj["conversationId"] = e.conversationId;
+        obj["senderDeviceId"] = e.senderDeviceId;
+        obj["ciphertext"] = QString::fromLatin1(e.ciphertext.toBase64());
+        obj["nonce"] = QString::fromLatin1(e.nonce.toBase64());
+        obj["associatedData"] = QString::fromLatin1(e.associatedData.toBase64());
+        obj["txHash"] = e.txHash;
+        obj["merkleRoot"] = e.merkleRoot;
+        obj["timestamp"] = e.timestamp.toString(Qt::ISODateWithMs);
+        obj["verificationState"] = static_cast<int>(e.verificationState);
+        obj["isDeleted"] = e.isDeleted;
+        return obj;
+    }
+
+    void LocalMessageStore::saveState() const {
+        QSettings settings;
+
+        QJsonArray decArr;
+        for (const auto& m : m_decryptedMessages) decArr.push_back(decryptedMessageToJson(m));
+        settings.setValue("local_store/decryptedMessages", QJsonDocument(decArr).toJson());
+
+        QJsonArray envArr;
+        for (const auto& e : m_envelopes) envArr.push_back(envelopeToJson(e));
+        settings.setValue("local_store/envelopes", QJsonDocument(envArr).toJson());
+    }
 
 void LocalMessageStore::storeOutgoingMessage(
     const QJsonObject& envelope)
@@ -29,21 +123,21 @@ void LocalMessageStore::storeOutgoingMessage(
             .toString();
 
     typedEnvelope.ciphertext =
-        QByteArray::fromBase64(
+        QByteArray::fromHex(
             envelope.value(
                         "ciphertext")
                 .toString()
                 .toUtf8());
 
     typedEnvelope.nonce =
-        QByteArray::fromBase64(
+        QByteArray::fromHex(
             envelope.value(
                         "nonce")
                 .toString()
                 .toUtf8());
 
     typedEnvelope.associatedData =
-        QByteArray::fromBase64(
+        QByteArray::fromHex(
             envelope.value(
                         "associated_data")
                 .toString()
@@ -87,6 +181,8 @@ void LocalMessageStore::storeOutgoingEnvelope(
     // Plaintext is never persisted here.
     m_envelopes.push_back(
         envelope);
+
+    saveState();
 }
 
 QVector<MessageEnvelope>
@@ -138,6 +234,8 @@ void LocalMessageStore::storeDecryptedMessage(
 
     m_decryptedMessages.push_back(
         message);
+
+    saveState();
 }
 
 QVector<DecryptedMessage>
@@ -224,6 +322,8 @@ void LocalMessageStore::clearConversation(
 
     m_envelopes =
         retainedEnvelopes;
+
+    saveState();
 }
 
 void LocalMessageStore::clearAll()
@@ -233,4 +333,5 @@ void LocalMessageStore::clearAll()
     m_decryptedMessages.clear();
 
     m_messageIndex.clear();
+    saveState();
 }

@@ -279,7 +279,7 @@ app.post('/conversations', requireAuth, async (req, res) => {
 
 // Send an encrypted message — stores it and fans out to recipient devices.
 app.post('/messages', requireAuth, async (req, res) => {
-  const { conversation_id, ciphertext, nonce, initiation_bundle } = req.body
+  const { conversation_id, ciphertext, nonce, initiation_bundle, sender_ik_sig_pub } = req.body
 
   if (!conversation_id || !ciphertext || !nonce)
     return res.status(400).json({ error: 'conversation_id, ciphertext, and nonce required' })
@@ -316,10 +316,10 @@ app.post('/messages', requireAuth, async (req, res) => {
   const messageId = await withTransaction(async (client) => {
     const { rows: [msg] } = await client.query(
       `INSERT INTO messages
-         (conversation_id, sender_device_id, ciphertext, nonce, associated_data)
-       VALUES ($1, $2, $3, $4, $5)
+         (conversation_id, sender_device_id, ciphertext, nonce, associated_data, sender_ik_sig_pub)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, created_at`,
-      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData]
+      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null]
     )
 
     const leafHash = computeLeaf(ciphertextBuf)
@@ -369,6 +369,7 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
        m.sender_device_id,
        encode(m.ciphertext, 'hex')             AS ciphertext,
        encode(m.nonce,      'hex')             AS nonce,
+       m.sender_ik_sig_pub,
        mq.id                                   AS queue_id,
        mq.associated_data,
        m.created_at
@@ -397,6 +398,7 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
       recipient_device_id: req.deviceId,
       ciphertext:        r.ciphertext,
       nonce:             r.nonce,
+      sender_ik_sig_pub: r.sender_ik_sig_pub,
       initiation_bundle: initiationBundle,
       created_at:        r.created_at,
     }
@@ -418,6 +420,197 @@ app.post('/messages/:id/ack', requireAuth, async (req, res) => {
     [messageId, req.deviceId]
   )
   res.json({ acknowledged: true })
+})
+
+// Conversation message history — returns messages in a conversation, oldest-first.
+// Supports cursor-based pagination via ?before=<message_id>.
+app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
+  const conversationId = req.params.id
+  if (!UUID_RE.test(conversationId))
+    return res.status(400).json({ error: 'Invalid conversation_id' })
+
+  // Verify requesting device is a member of this conversation.
+  const memberCheck = await query(
+    `SELECT 1 FROM conversation_members cm
+     JOIN devices d ON d.user_id = cm.user_id
+     WHERE cm.conversation_id = $1 AND d.id = $2`,
+    [conversationId, req.deviceId]
+  )
+  if (!memberCheck.rows.length)
+    return res.status(403).json({ error: 'Not a member of this conversation' })
+
+  const { before } = req.query
+  let rows
+
+  if (before) {
+    if (!UUID_RE.test(before))
+      return res.status(400).json({ error: 'Invalid before cursor' })
+
+    const result = await query(
+      `SELECT
+         m.id,
+         m.sender_device_id,
+         encode(m.ciphertext, 'hex') AS ciphertext,
+         encode(m.nonce,      'hex') AS nonce,
+         m.created_at,
+         (m.sender_device_id = $3)   AS is_mine
+       FROM messages m
+       WHERE m.conversation_id = $1
+         AND m.deleted_at IS NULL
+         AND m.created_at < (
+           SELECT created_at FROM messages WHERE id = $2
+         )
+       ORDER BY m.created_at ASC
+       LIMIT 50`,
+      [conversationId, before, req.deviceId]
+    )
+    rows = result.rows
+  } else {
+    const result = await query(
+      `SELECT
+         m.id,
+         m.sender_device_id,
+         encode(m.ciphertext, 'hex') AS ciphertext,
+         encode(m.nonce,      'hex') AS nonce,
+         m.created_at,
+         (m.sender_device_id = $2)   AS is_mine
+       FROM messages m
+       WHERE m.conversation_id = $1
+         AND m.deleted_at IS NULL
+       ORDER BY m.created_at ASC
+       LIMIT 50`,
+      [conversationId, req.deviceId]
+    )
+    rows = result.rows
+  }
+
+  res.json({ messages: rows })
+})
+
+// Download a single message by ID.
+app.get('/messages/:id', requireAuth, async (req, res) => {
+  const messageId = req.params.id
+  if (!UUID_RE.test(messageId))
+    return res.status(400).json({ error: 'Invalid message id' })
+
+  const { rows } = await query(
+    `SELECT
+       m.id,
+       m.conversation_id,
+       m.sender_device_id,
+       encode(m.ciphertext, 'hex') AS ciphertext,
+       encode(m.nonce,      'hex') AS nonce,
+       m.created_at,
+       m.deleted_at
+     FROM messages m
+     WHERE m.id = $1`,
+    [messageId]
+  )
+  if (!rows.length) return res.status(404).json({ error: 'Message not found' })
+  if (rows[0].deleted_at) return res.status(410).json({ error: 'Message has been deleted' })
+
+  // Verify device is a member of this conversation.
+  const memberCheck = await query(
+    `SELECT 1 FROM conversation_members cm
+     JOIN devices d ON d.user_id = cm.user_id
+     WHERE cm.conversation_id = $1 AND d.id = $2`,
+    [rows[0].conversation_id, req.deviceId]
+  )
+  if (!memberCheck.rows.length)
+    return res.status(403).json({ error: 'Not a member of this conversation' })
+
+  const { deleted_at: _omit, ...message } = rows[0]
+  res.json(message)
+})
+
+// Soft-delete a message — only the sender may delete.
+app.delete('/messages/:id', requireAuth, async (req, res) => {
+  const messageId = req.params.id
+  if (!UUID_RE.test(messageId))
+    return res.status(400).json({ error: 'Invalid message id' })
+
+  const { rowCount } = await query(
+    `UPDATE messages
+     SET deleted_at           = NOW(),
+         deleted_by_device_id = $2
+     WHERE id               = $1
+       AND sender_device_id IN (
+             SELECT id FROM devices
+             WHERE user_id = (
+               SELECT user_id FROM devices WHERE id = $2
+             )
+           )
+       AND deleted_at IS NULL`,
+    [messageId, req.deviceId]
+  )
+
+  if (rowCount === 0)
+    return res.status(403).json({ error: 'Not the sender or message already deleted' })
+
+  res.json({ deleted: true })
+})
+
+// Revoke a pending queue entry so a recipient cannot receive the message.
+app.post('/messages/:id/revoke', requireAuth, async (req, res) => {
+  const messageId = req.params.id
+  if (!UUID_RE.test(messageId))
+    return res.status(400).json({ error: 'Invalid message id' })
+
+  const { recipient_device_id } = req.body
+  if (typeof recipient_device_id !== 'string' || !UUID_RE.test(recipient_device_id))
+    return res.status(400).json({ error: 'recipient_device_id required' })
+
+  // Verify the caller is the sender of this message.
+  const senderCheck = await query(
+    `SELECT 1 FROM messages
+     WHERE id = $1
+       AND sender_device_id IN (
+             SELECT id FROM devices
+             WHERE user_id = (
+               SELECT user_id FROM devices WHERE id = $2
+             )
+           )`,
+    [messageId, req.deviceId]
+  )
+  if (!senderCheck.rows.length)
+    return res.status(403).json({ error: 'Not the sender of this message' })
+
+  const { rowCount } = await query(
+    `DELETE FROM message_queue
+     WHERE msg_id              = $1
+       AND recipient_device_id = $2
+       AND delivery_state      = 'pending'`,
+    [messageId, recipient_device_id]
+  )
+
+  if (rowCount > 0) {
+    res.json({ revoked: true, already_delivered: false })
+  } else {
+    res.json({ revoked: false, already_delivered: true })
+  }
+})
+
+// Change SRP credentials (salt + verifier) for the authenticated user.
+app.patch('/auth/password', authLimiter, requireAuth, async (req, res) => {
+  const { new_salt, new_verifier } = req.body
+
+  if (typeof new_salt !== 'string' || !/^[0-9a-f]{64}$/i.test(new_salt))
+    return res.status(400).json({ error: 'new_salt must be 64 hex characters' })
+  if (typeof new_verifier !== 'string' || !/^[0-9a-f]{1,768}$/i.test(new_verifier))
+    return res.status(400).json({ error: 'new_verifier must be up to 768 hex characters' })
+
+  const userResult = await query(
+    'SELECT user_id FROM devices WHERE id = $1',
+    [req.deviceId]
+  )
+  if (!userResult.rows.length) return res.status(401).json({ error: 'Device not found' })
+
+  await query(
+    'UPDATE users SET srp_salt = $1, srp_verifier = decode($2, \'hex\') WHERE id = $3',
+    [new_salt, new_verifier, userResult.rows[0].user_id]
+  )
+
+  res.json({ updated: true })
 })
 
 // Revoke a device belonging to the authenticated user. device_id is required;

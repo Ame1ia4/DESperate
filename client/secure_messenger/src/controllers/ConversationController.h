@@ -34,6 +34,11 @@ class ConversationController : public QObject
             READ currentConversationId
                 NOTIFY currentConversationIdChanged)
 
+    Q_PROPERTY(
+        bool sessionReady
+            READ sessionReady
+                NOTIFY sessionReadyChanged)
+
 public:
     explicit ConversationController(
         ApiClient* api,
@@ -47,6 +52,8 @@ public:
     MessageModel* messages() noexcept;
 
     QString currentConversationId() const noexcept;
+
+    bool sessionReady() const noexcept;
 
 public slots:
     void loadConversations();
@@ -67,11 +74,22 @@ public slots:
     Q_INVOKABLE QString participantForConversation(
         const QString& conversationId) const;
 
+    Q_INVOKABLE void createChat(const QString& username);
+
+    void reinitiateSession(const QString& conversationId);
+
 signals:
     void currentConversationIdChanged();
 
+    void sessionReadyChanged();
+
+    // Emitted after a conversation is opened (id set and messages cleared/loaded)
+    void conversationOpened(QString conversationId);
+
     void errorOccurred(
         QString reason);
+
+    void createChatFailed(QString reason);
 
     void fingerprintMismatch(
         QString expectedFingerprint,
@@ -96,6 +114,8 @@ private:
     MessageModel* m_messageModel = nullptr;
 
     QString m_currentConversationId;
+
+    bool m_sessionReady = true;
 
     QHash<
         QString,

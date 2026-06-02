@@ -43,16 +43,18 @@ public:
     void setAuthToken(const QString& token);
 
     void fetchConversations();
+    void fetchConversationMessages(const QString& conversationId);
 
     // Fetch the public PQXDH key bundle for a username (GET /keys/:username).
     void fetchKeyBundle(const QString& username);
+    void deleteMessage(const QString& messageId);
+    void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
 
-    //meaningless change
     // Create a new conversation with another user (POST /conversations).
     void createConversation(const QString& otherUsername);
 
-    QString storedDeviceId() const;
-    void    storeDeviceId(const QString& deviceId);
+    QString storedDeviceId(const QString& username) const;
+    void    storeDeviceId(const QString& username, const QString& deviceId);
 
 signals:
     void registerUserSucceeded(QString deviceId);
@@ -63,6 +65,8 @@ signals:
     void fetchRegistrationNonceFailed(QString reason);
     void fetchConversationsSucceeded(QJsonArray conversations);
     void fetchConversationsFailed(QString reason);
+    void fetchConversationMessagesSucceeded(QJsonArray messages);
+    void fetchConversationMessagesFailed(QString reason);
     void pullMessagesSucceeded(QJsonArray envelopes);
     void pullMessagesFailed();
     void acknowledgeMessageSucceeded(QString messageId);
@@ -91,5 +95,6 @@ private:
     QNetworkAccessManager m_network;
     CryptoServiceClient*  m_crypto = nullptr;
     QString               m_authToken;
+    QString               m_activeDeviceId;
     QSettings             m_settings;
 };

@@ -62,4 +62,6 @@ private:
 
     QHash<QString, int>
         m_messageIndex;
+
+    void saveState() const;
 };

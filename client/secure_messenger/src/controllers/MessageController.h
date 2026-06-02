@@ -48,6 +48,9 @@ public slots:
         const QString& conversationId,
         const QString& text);
 
+    Q_INVOKABLE void deleteMessage(const QString& messageId);
+    Q_INVOKABLE void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
+
     void sendMessage(
         QString conversationId,
         QString recipientDeviceId,
@@ -58,6 +61,9 @@ public slots:
 
     void pullAndProcessMessages(
         QString deviceId);
+
+    // Fetch historical messages for a conversation and decrypt them.
+    void fetchConversationHistory(const QString& conversationId);
 
 signals:
     void messageSent();

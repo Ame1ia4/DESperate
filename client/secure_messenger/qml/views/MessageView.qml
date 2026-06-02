@@ -22,29 +22,49 @@ Rectangle {
         }
 
         ListView {
+            id: messageList
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
 
             model: conversationController ? conversationController.messages : null
+            verticalLayoutDirection: ListView.TopToBottom
 
-            delegate: MessageDelegate {
-                plaintext: model.plaintext
-                outgoing: model.outgoing
-                verified: model.verified
+            delegate: MessageDelegate {}
+
+            onCountChanged: {
+                if (count > 0) {
+                    // keep view scrolled to the most recent message (bottom)
+                    positionViewAtIndex(count - 1, ListView.End)
+                }
             }
+        }
+
+        Text {
+            Layout.fillWidth: true
+            visible: conversationController
+                     && conversationController.currentConversationId !== ""
+                     && !conversationController.sessionReady
+            text: "Establishing secure channel…"
+            color: "#A0C8B0"
+            font.pixelSize: 12
+            horizontalAlignment: Text.AlignHCenter
         }
 
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
 
+            property bool canSend: conversationController
+                                   && conversationController.currentConversationId !== ""
+                                   && conversationController.sessionReady
+
             TextField {
                 id: messageField
                 Layout.fillWidth: true
                 placeholderText: "Type a message"
                 placeholderTextColor: "#C9D4C5"
-                enabled: conversationController && conversationController.currentConversationId !== ""
+                enabled: parent.canSend
                 background: Rectangle {
                     color: "#2D6944"
                     radius: 10
@@ -56,9 +76,9 @@ Rectangle {
 
             Button {
                 text: "Send"
-                enabled: conversationController && conversationController.currentConversationId !== ""
+                enabled: parent.canSend
                 background: Rectangle {
-                    color: "#4FAE7C"
+                    color: enabled ? "#4FAE7C" : "#3A5A47"
                     radius: 10
                 }
                 onClicked: {

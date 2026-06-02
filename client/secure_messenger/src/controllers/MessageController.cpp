@@ -59,6 +59,16 @@ MessageController::MessageController(
         ::handleDecryptFailed);
 }
 
+void MessageController::deleteMessage(const QString& messageId)
+{
+    m_api->deleteMessage(messageId);
+}
+
+void MessageController::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
+{
+    m_api->revokeMessage(messageId, recipientDeviceId);
+}
+
 void MessageController::sendText(
     const QString& conversationId,
     const QString& text)
@@ -150,10 +160,15 @@ void MessageController::handleEncryptCompleted(
         m_pendingMessages.take(
             requestId);
 
-    m_store->storeOutgoingMessage(
-        envelope);
+    // Inject fields the server requires that the crypto service doesn't produce.
+    QJsonObject fullEnvelope = envelope;
+    fullEnvelope["conversation_id"] = pending.conversationId;
 
-    m_api->sendMessage(envelope);
+    qDebug() << "[SEND] encryped OK, posting to server | conv:" << pending.conversationId
+             << "| ciphertext len:" << envelope["ciphertext"].toString().length();
+
+    m_store->storeOutgoingMessage(fullEnvelope);
+    m_api->sendMessage(fullEnvelope);
 
     // Optimistic UI update.
     DecryptedMessage message;
@@ -181,6 +196,8 @@ void MessageController::handleEncryptCompleted(
 
     m_conversations
         ->appendLocalMessage(message);
+
+    m_store->storeDecryptedMessage(message);
 
     emit messageSent();
 }
@@ -265,8 +282,6 @@ void MessageController::handleDecryptCompleted(
     m_store->storeDecryptedMessage(
         message);
 
-    m_model->addMessage(message);
-
     m_conversations
         ->appendLocalMessage(message);
 
@@ -283,8 +298,37 @@ void MessageController::handleDecryptFailed(
     QString requestId,
     QString reason)
 {
-    m_pendingDecryptions.remove(
-        requestId);
+    const QJsonObject envelope =
+        m_pendingDecryptions.take(
+            requestId);
+
+    // Acknowledge undecryptable messages so they clear from the server queue.
+    // Without this they re-appear on every poll, looping forever.
+    if (!envelope.isEmpty()) {
+        const QString messageId =
+            envelope.value("id").toString();
+        const QString recipientDeviceId =
+            envelope.value("recipient_device_id").toString();
+        if (!messageId.isEmpty() &&
+            !recipientDeviceId.isEmpty()) {
+            m_api->acknowledgeMessage(
+                messageId,
+                recipientDeviceId);
+        }
+
+        // The sender's session is stale — their first message (with the
+        // initiation_bundle) never reached us. Re-initiate, but only if we
+        // have no session of our own: if we already have a pending or active
+        // session we are the initiator and re-initiating would create a
+        // competing session that neither side can decrypt.
+        if (reason.contains(QStringLiteral("no initiation_bundle"))) {
+            const QString conversationId =
+                envelope.value(QStringLiteral("conversation_id")).toString();
+            if (!conversationId.isEmpty() &&
+                !m_crypto->hasSession(conversationId))
+                m_conversations->reinitiateSession(conversationId);
+        }
+    }
 
     emit messageReceiveFailed(
         reason.isEmpty()
@@ -327,4 +371,33 @@ void MessageController::pullAndProcessMessages(
         Qt::SingleShotConnection);
 
     m_api->pullMessages(deviceId);
+}
+
+void MessageController::fetchConversationHistory(const QString& conversationId)
+{
+    connect(
+        m_api,
+        &ApiClient::fetchConversationMessagesSucceeded,
+        this,
+        [this](const QJsonArray& messages) {
+            for (const auto& value : messages) {
+                const auto envelope = value.toObject();
+                if (!envelope.isEmpty()) {
+                    receiveEnvelope(envelope);
+                }
+            }
+        },
+        Qt::SingleShotConnection);
+
+    connect(
+        m_api,
+        &ApiClient::fetchConversationMessagesFailed,
+        this,
+        [this](const QString& reason) {
+            Q_UNUSED(reason)
+            emit messageReceiveFailed(QStringLiteral("Failed to fetch conversation history."));
+        },
+        Qt::SingleShotConnection);
+
+    m_api->fetchConversationMessages(conversationId);
 }

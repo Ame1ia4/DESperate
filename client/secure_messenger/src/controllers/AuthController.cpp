@@ -68,6 +68,7 @@ void AuthController::login(
         return;
     }
 
+    m_loginInProgress = true;
     // Use shared connection handles so each lambda can disconnect the
     // other.  Qt::SingleShotConnection only disconnects the connection
     // whose signal fired; without this, the unused handler would leak
@@ -97,6 +98,8 @@ void AuthController::login(
 
                 emit loginFailed(reason);
 
+                m_loginInProgress = false;
+
                 return;
             }
 
@@ -115,6 +118,8 @@ void AuthController::login(
                 emit authenticatedChanged();
             }
 
+            m_loginInProgress = false;
+
             emit loginSucceeded();
         },
         Qt::SingleShotConnection);
@@ -131,6 +136,8 @@ void AuthController::login(
                 reason.isEmpty()
                     ? "Authentication failed."
                     : reason;
+
+            m_loginInProgress = false;
 
             setAuthError(failureReason);
 
@@ -209,14 +216,13 @@ void AuthController::signUp(
                 m_api,
                 &ApiClient::registerUserSucceeded,
                 this,
-                [this, regFailConn](const QString& deviceId) {
+                [this, normalized, regFailConn](const QString& deviceId) {
 
                     QObject::disconnect(*regFailConn);
 
                     qDebug() << "[REGISTRATION] Step 3 OK: registered | deviceId:" << deviceId;
 
-                    // Persist device ID for subsequent logins.
-                    m_api->storeDeviceId(deviceId);
+                    m_api->storeDeviceId(normalized, deviceId);
 
                     setAuthError(QString());
                     emit registrationSucceeded();

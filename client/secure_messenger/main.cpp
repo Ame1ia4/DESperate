@@ -17,6 +17,7 @@
 #include "src/services/CryptoServiceClient.h"
 
 #include "src/storage/LocalMessageStore.h"
+#include "src/utils/ClipboardHelper.h"
 
     int main(
         int argc,
@@ -70,6 +71,16 @@
             &trustStore,
             &sessionStore);
 
+    // NOTE: Disabled fetchConversationHistory because /conversations/:id/messages
+    // doesn't include initiation_bundle (PQXDH key material).
+    // Use pullMessages timer instead, which fetches from /messages/pending with full envelope.
+    // QObject::connect(
+    //     &conversationController,
+    //     &ConversationController::conversationOpened,
+    //     &messageController,
+    //     &MessageController::fetchConversationHistory,
+    //     Qt::QueuedConnection);
+
     // QML context exposure
     engine.rootContext()->setContextProperty(
         "conversationController",
@@ -82,6 +93,10 @@
     engine.rootContext()->setContextProperty(
         "messageController",
         &messageController);
+
+    // Clipboard helper for QML (avoid depending on Qt.labs.platform)
+    ClipboardHelper clipboardHelper;
+    engine.rootContext()->setContextProperty("clipboardHelper", &clipboardHelper);
 
     // Load QML module
     engine.loadFromModule(

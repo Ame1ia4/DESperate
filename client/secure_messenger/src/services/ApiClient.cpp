@@ -28,14 +28,14 @@ ApiClient::ApiClient(CryptoServiceClient* crypto, QObject* parent)
 
 // ── Device ID persistence ─────────────────────────────────────────────────────
 
-QString ApiClient::storedDeviceId() const
+QString ApiClient::storedDeviceId(const QString& username) const
 {
-    return m_settings.value(QStringLiteral("auth/deviceId")).toString();
+    return m_settings.value(QStringLiteral("auth/deviceId/") + username).toString();
 }
 
-void ApiClient::storeDeviceId(const QString& deviceId)
+void ApiClient::storeDeviceId(const QString& username, const QString& deviceId)
 {
-    m_settings.setValue(QStringLiteral("auth/deviceId"), deviceId);
+    m_settings.setValue(QStringLiteral("auth/deviceId/") + username, deviceId);
 }
 
 // ── Registration ──────────────────────────────────────────────────────────────
@@ -115,12 +115,13 @@ void ApiClient::loginUser(
 {
     qDebug() << "[LOGIN] loginUser called | username:" << username;
 
-    const QString deviceId = storedDeviceId();
+    const QString deviceId = storedDeviceId(username);
     if (deviceId.isEmpty()) {
         qDebug() << "[LOGIN] FAILED: no device_id stored";
         emit loginUserFailed(QStringLiteral("No device registered on this device."));
         return;
     }
+    m_activeDeviceId = deviceId;
 
     qDebug() << "[LOGIN] device_id:" << deviceId;
     qDebug() << "[LOGIN] Round 0: calling srpStart (generates A)";
@@ -167,7 +168,11 @@ void ApiClient::doSrpInit(
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 1 FAILED";
-            emit loginUserFailed(QStringLiteral("Authentication failed."));
+            if (status == 429) {
+                emit loginUserFailed(QStringLiteral("Too many authentication attempts — please wait and try again."));
+            } else {
+                emit loginUserFailed(QStringLiteral("Authentication failed."));
+            }
             return;
         }
 
@@ -225,10 +230,15 @@ void ApiClient::doSrpVerify(
         reply->deleteLater();
 
         qDebug() << "[LOGIN] Round 2 response: status:" << status;
+        qDebug() << "[LOGIN] Round 2 raw body:" << QString::fromUtf8(body.left(500));
 
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             qDebug() << "[LOGIN] Round 2 FAILED";
-            emit loginUserFailed(QStringLiteral("Authentication failed."));
+            if (status == 429) {
+                emit loginUserFailed(QStringLiteral("Too many authentication attempts — please wait and try again."));
+            } else {
+                emit loginUserFailed(QStringLiteral("Authentication failed."));
+            }
             return;
         }
 
@@ -279,7 +289,16 @@ void ApiClient::sendMessage(
 {
     auto request = makeRequest("/messages");
     auto* reply  = m_network.post(request, QJsonDocument(encryptedEnvelope).toJson());
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [reply]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status < 200 || status >= 300) {
+            qWarning() << "[SEND] POST /messages failed | status:" << status
+                       << "|" << QString::fromUtf8(reply->readAll().left(200));
+        } else {
+            qDebug() << "[SEND] POST /messages OK | status:" << status;
+        }
+        reply->deleteLater();
+    });
 }
 
 void ApiClient::pullMessages(
@@ -354,6 +373,51 @@ void ApiClient::fetchConversations()
         const auto conversations = response.value("conversations").toArray();
         emit fetchConversationsSucceeded(conversations);
     });
+}
+
+void ApiClient::fetchConversationMessages(const QString& conversationId)
+{
+    // percent-encode conversation id into path
+    auto request = makeRequest(
+        "/conversations/" + QString::fromUtf8(QUrl::toPercentEncoding(conversationId)) + "/messages");
+    auto* reply = m_network.get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = body.isEmpty()
+                ? QStringLiteral("Failed to fetch conversation messages.")
+                : QString::fromUtf8(body);
+            emit fetchConversationMessagesFailed(reason);
+            return;
+        }
+
+        const auto response = QJsonDocument::fromJson(body).object();
+        const auto messages = response.value("messages").toArray();
+        emit fetchConversationMessagesSucceeded(messages);
+    });
+}
+
+void ApiClient::deleteMessage(const QString& messageId)
+{
+    auto request = makeRequest(
+        "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)));
+    auto* reply  = m_network.deleteResource(request);
+    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+}
+
+void ApiClient::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
+{
+    auto request = makeRequest(
+        "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)) + "/revoke");
+    QJsonObject body;
+    body["recipient_device_id"] = recipientDeviceId;
+    auto* reply = m_network.post(request, QJsonDocument(body).toJson());
+    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
 }
 
 void ApiClient::fetchKeyBundle(const QString& username)
@@ -434,9 +498,8 @@ QNetworkRequest ApiClient::makeRequest(
 
     // Session authentication headers — set on every request so protected
     // routes can verify the device identity and session token.
-    const QString deviceId = storedDeviceId();
-    if (!deviceId.isEmpty()) {
-        request.setRawHeader("X-Device-ID", deviceId.toUtf8());
+    if (!m_activeDeviceId.isEmpty()) {
+        request.setRawHeader("X-Device-ID", m_activeDeviceId.toUtf8());
     }
 
     if (!m_authToken.isEmpty()) {

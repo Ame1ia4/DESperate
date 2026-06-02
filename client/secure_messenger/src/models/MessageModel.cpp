@@ -49,6 +49,9 @@ QVariant MessageModel::data(
     case VerifiedRole:
         return msg.verificationState == VerificationState::Verified;
 
+    case MessageIdRole:
+        return msg.id;
+
     default:
         return {};
     }
@@ -58,12 +61,13 @@ QHash<int, QByteArray>
 MessageModel::roleNames() const
 {
     return {
-        {ContentRole, "content"},
-        {TimestampRole, "timestamp"},
+        {ContentRole,      "content"},
+        {TimestampRole,    "timestamp"},
         {VerificationRole, "verificationState"},
-        {PlaintextRole, "plaintext"},
-        {OutgoingRole, "outgoing"},
-        {VerifiedRole, "verified"}
+        {PlaintextRole,    "plaintext"},
+        {OutgoingRole,     "outgoing"},
+        {VerifiedRole,     "verified"},
+        {MessageIdRole,    "messageId"}
     };
 }
 
