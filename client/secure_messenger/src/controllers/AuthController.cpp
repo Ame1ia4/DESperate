@@ -209,14 +209,13 @@ void AuthController::signUp(
                 m_api,
                 &ApiClient::registerUserSucceeded,
                 this,
-                [this, regFailConn](const QString& deviceId) {
+                [this, normalized, regFailConn](const QString& deviceId) {
 
                     QObject::disconnect(*regFailConn);
 
                     qDebug() << "[REGISTRATION] Step 3 OK: registered | deviceId:" << deviceId;
 
-                    // Persist device ID for subsequent logins.
-                    m_api->storeDeviceId(deviceId);
+                    m_api->storeDeviceId(normalized, deviceId);
 
                     setAuthError(QString());
                     emit registrationSucceeded();

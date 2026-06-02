@@ -58,6 +58,11 @@ ConversationController::currentConversationId()
     return m_currentConversationId;
 }
 
+bool ConversationController::sessionReady() const noexcept
+{
+    return m_sessionReady;
+}
+
 void ConversationController::loadConversations()
 {
     connect(
@@ -207,6 +212,8 @@ void ConversationController::openConversation(
     if (!participant.isEmpty() &&
         !m_sessionFetchInFlight.contains(conversationId)) {
 
+        m_sessionReady = false;
+        emit sessionReadyChanged();
         setupSessionAsync(conversationId, participant);
     }
 }
@@ -229,12 +236,18 @@ void ConversationController::setupSessionAsync(
             QObject::disconnect(*failConn);
             m_sessionFetchInFlight.remove(conversationId);
 
-            // Initiate PQXDH synchronously — this is a short TCP round-trip
-            // to the local Python service.
             const QByteArray bundleJson =
                 QJsonDocument(bundle).toJson(QJsonDocument::Compact);
 
-            m_cryptoClient->initiateSession(conversationId, bundleJson);
+            const bool ok = m_cryptoClient->initiateSession(conversationId, bundleJson);
+
+            if (conversationId == m_currentConversationId) {
+                m_sessionReady = ok;
+                emit sessionReadyChanged();
+                if (!ok)
+                    qWarning() << "initiateSession failed for conversation" << conversationId
+                               << ":" << m_cryptoClient->lastError();
+            }
         },
         Qt::SingleShotConnection);
 
@@ -249,6 +262,11 @@ void ConversationController::setupSessionAsync(
 
             qWarning() << "fetchKeyBundle failed for conversation"
                        << conversationId << ":" << reason;
+
+            if (conversationId == m_currentConversationId) {
+                m_sessionReady = false;
+                emit sessionReadyChanged();
+            }
         },
         Qt::SingleShotConnection);
 
@@ -341,4 +359,43 @@ QString ConversationController::participantForConversation(
 {
     return m_participants.value(
         conversationId, QString());
+}
+
+void ConversationController::createChat(const QString& username)
+{
+    if (username.trimmed().isEmpty()) {
+        emit createChatFailed(QStringLiteral("Username cannot be empty."));
+        return;
+    }
+
+    connect(
+        m_apiClient,
+        &ApiClient::createConversationSucceeded,
+        this,
+        [this](const QString& conversationId) {
+            // loadConversations registers its fetchConversationsSucceeded handler first.
+            // Our handler connects after, so Qt fires them in order: m_participants is
+            // populated before openConversation runs and setupSessionAsync is skipped.
+            loadConversations();
+            connect(
+                m_apiClient,
+                &ApiClient::fetchConversationsSucceeded,
+                this,
+                [this, conversationId](const QJsonArray&) {
+                    openConversation(conversationId);
+                },
+                Qt::SingleShotConnection);
+        },
+        Qt::SingleShotConnection);
+
+    connect(
+        m_apiClient,
+        &ApiClient::createConversationFailed,
+        this,
+        [this](const QString& reason) {
+            emit createChatFailed(reason);
+        },
+        Qt::SingleShotConnection);
+
+    m_apiClient->createConversation(username);
 }

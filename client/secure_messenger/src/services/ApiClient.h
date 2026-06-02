@@ -51,8 +51,8 @@ public:
     // Create a new conversation with another user (POST /conversations).
     void createConversation(const QString& otherUsername);
 
-    QString storedDeviceId() const;
-    void    storeDeviceId(const QString& deviceId);
+    QString storedDeviceId(const QString& username) const;
+    void    storeDeviceId(const QString& username, const QString& deviceId);
 
 signals:
     void registerUserSucceeded(QString deviceId);
@@ -91,5 +91,6 @@ private:
     QNetworkAccessManager m_network;
     CryptoServiceClient*  m_crypto = nullptr;
     QString               m_authToken;
+    QString               m_activeDeviceId;
     QSettings             m_settings;
 };

@@ -265,8 +265,6 @@ void MessageController::handleDecryptCompleted(
     m_store->storeDecryptedMessage(
         message);
 
-    m_model->addMessage(message);
-
     m_conversations
         ->appendLocalMessage(message);
 

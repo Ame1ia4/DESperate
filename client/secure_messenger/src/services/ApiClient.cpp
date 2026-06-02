@@ -28,14 +28,14 @@ ApiClient::ApiClient(CryptoServiceClient* crypto, QObject* parent)
 
 // ── Device ID persistence ─────────────────────────────────────────────────────
 
-QString ApiClient::storedDeviceId() const
+QString ApiClient::storedDeviceId(const QString& username) const
 {
-    return m_settings.value(QStringLiteral("auth/deviceId")).toString();
+    return m_settings.value(QStringLiteral("auth/deviceId/") + username).toString();
 }
 
-void ApiClient::storeDeviceId(const QString& deviceId)
+void ApiClient::storeDeviceId(const QString& username, const QString& deviceId)
 {
-    m_settings.setValue(QStringLiteral("auth/deviceId"), deviceId);
+    m_settings.setValue(QStringLiteral("auth/deviceId/") + username, deviceId);
 }
 
 // ── Registration ──────────────────────────────────────────────────────────────
@@ -115,12 +115,13 @@ void ApiClient::loginUser(
 {
     qDebug() << "[LOGIN] loginUser called | username:" << username;
 
-    const QString deviceId = storedDeviceId();
+    const QString deviceId = storedDeviceId(username);
     if (deviceId.isEmpty()) {
         qDebug() << "[LOGIN] FAILED: no device_id stored";
         emit loginUserFailed(QStringLiteral("No device registered on this device."));
         return;
     }
+    m_activeDeviceId = deviceId;
 
     qDebug() << "[LOGIN] device_id:" << deviceId;
     qDebug() << "[LOGIN] Round 0: calling srpStart (generates A)";
@@ -435,9 +436,8 @@ QNetworkRequest ApiClient::makeRequest(
 
     // Session authentication headers — set on every request so protected
     // routes can verify the device identity and session token.
-    const QString deviceId = storedDeviceId();
-    if (!deviceId.isEmpty()) {
-        request.setRawHeader("X-Device-ID", deviceId.toUtf8());
+    if (!m_activeDeviceId.isEmpty()) {
+        request.setRawHeader("X-Device-ID", m_activeDeviceId.toUtf8());
     }
 
     if (!m_authToken.isEmpty()) {

@@ -115,12 +115,16 @@ ApplicationWindow {
         }
 
         SplitView {
+            id: mainSplit
+            anchors.fill: parent
+
             ConversationList {
-                width: 350
+                SplitView.preferredWidth: mainSplit.width * 0.2
+                SplitView.minimumWidth: 180
             }
 
             MessageView {
-                Layout.fillWidth: true
+                SplitView.fillWidth: true
             }
         }
     }
