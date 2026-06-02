@@ -298,8 +298,24 @@ void MessageController::handleDecryptFailed(
     QString requestId,
     QString reason)
 {
-    m_pendingDecryptions.remove(
-        requestId);
+    const QJsonObject envelope =
+        m_pendingDecryptions.take(
+            requestId);
+
+    // Acknowledge undecryptable messages so they clear from the server queue.
+    // Without this they re-appear on every poll, looping forever.
+    if (!envelope.isEmpty()) {
+        const QString messageId =
+            envelope.value("id").toString();
+        const QString recipientDeviceId =
+            envelope.value("recipient_device_id").toString();
+        if (!messageId.isEmpty() &&
+            !recipientDeviceId.isEmpty()) {
+            m_api->acknowledgeMessage(
+                messageId,
+                recipientDeviceId);
+        }
+    }
 
     emit messageReceiveFailed(
         reason.isEmpty()

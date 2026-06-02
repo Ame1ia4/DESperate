@@ -401,8 +401,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         payload = bytes.fromhex(ciphertext_hex)
         aad     = conversation_id.encode("utf-8")
 
-        # If we have no session yet and the message carries an initiation bundle,
-        # respond to PQXDH and create the ratchet session as the responder (Bob).
+        # An incoming initiation_bundle signals a session reset by the peer —
+        # they lost state or re-registered. Close the old session and re-establish
+        # as responder, even if a session already exists.
+        if initiation_bundle and conversation_id in _sessions:
+            _sessions.pop(conversation_id)
+            try:
+                store = _require_store()
+                store.delete_session(conversation_id)
+                store.delete_session(f"{_META_KEY_PREFIX}{conversation_id}")
+            except Exception:
+                pass
+
         if conversation_id not in _sessions:
             if not initiation_bundle:
                 raise ValueError(
