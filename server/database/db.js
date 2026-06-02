@@ -47,12 +47,11 @@ const pool = new Pool({
   ssl: resolveSSL(),
 })
 
-// Verify on startup — fail fast if DB is unreachable
+// Verify on startup — log and continue so /health stays reachable even if DB is transiently down
 pool.connect((err, client, release) => {
   if (err) {
-    console.error('Database connection failed — check DB_* env vars and network')
-    if (process.env.NODE_ENV !== 'production') console.error(err)
-    process.exit(1)
+    console.error('Database connection failed — check DB_* env vars and network', err.message)
+    return
   }
   console.log('Database connected')
   release()
