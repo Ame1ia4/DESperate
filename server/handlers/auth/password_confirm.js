@@ -1,6 +1,6 @@
 import { srp } from '../../lib/srp.js'
 import { query } from '../../database/db.js'
-import { revokeAllUserSessions } from '../../state/session_keys.js'
+import { revokeSessionKey } from '../../state/session_keys.js'
 import { isValidClientPublicEphemeral } from '../../utils/validate.js'
 import {
   HEX_RE,
@@ -83,10 +83,7 @@ export async function passwordChangeConfirm(req, res) {
     [new_salt, new_verifier, creds.user_id]
   )
 
-  // Revoke ALL sessions for this user so every device must re-authenticate
-  // with the new password. A single-device revoke would leave other sessions
-  // alive under the old credentials.
-  await revokeAllUserSessions(creds.user_id)
+  await revokeSessionKey(req.deviceId)
 
   console.info('password_change_confirm: password changed', { device_id: req.deviceId })
   res.json({ serverSessionProof: serverSession.proof })
