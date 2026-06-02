@@ -458,7 +458,8 @@ app.use((err, _req, res, _next) => {
 app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
 app.post('/blockchain/verify-leaf',        proofHandler)
 
-const server = app.listen(80, () => console.log('Server running on :80'))
+const PORT = process.env.PORT ?? 3000
+const server = app.listen(PORT, () => console.log(`Server running on :${PORT}`))
 
 startBlockchainWorker()
 

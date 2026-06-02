@@ -3,7 +3,12 @@ import { query, withTransaction } from './db.js'
 import { ABI, CONTRACT_ADDRESS } from './contract.js'
 import { buildPendingRoots } from './build-worker.js'
 import { loadMerkleConfig } from './config.js'
+import { queryFilterChunked } from './merkle-core.js'
 import { MERKLE_ADVISORY_LOCK_KEY } from '../constants/blockchain.js'
+
+const DEPLOY_BLOCK = process.env.CONTRACT_DEPLOY_BLOCK
+  ? parseInt(process.env.CONTRACT_DEPLOY_BLOCK, 10)
+  : 0
 
 let running = false
 
@@ -41,7 +46,8 @@ async function reconcile(provider) {
     console.info(`[publisher] reconcile: checking chain for root id=${row.id} ${root.slice(0, 10)}…`)
     try {
       const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider)
-      const logs     = await contract.queryFilter(contract.filters.HashStored(root))
+      const latest   = await provider.getBlockNumber()
+      const logs     = await queryFilterChunked(contract, contract.filters.HashStored(root), DEPLOY_BLOCK, latest)
       if (logs.length > 0) {
         const log    = logs[0]
         const block  = await log.getBlock()
@@ -271,6 +277,7 @@ export function startBlockchainWorker() {
       return
     }
     running = true
+    console.info('[blockchain-worker] tick starting')
 
     try {
       // Acquire advisory lock so concurrent workers never double-anchor

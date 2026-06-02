@@ -75,3 +75,18 @@ export function verifyProof(leafHex, proof, rootHex) {
   }))
   return tree.verify(proofBufs, leafBuf, rootBuf)
 }
+
+// queryFilterChunked — wraps contract.queryFilter in 9 000-block chunks to
+// stay within drpc free-tier limits (10 000 block max per eth_getLogs call).
+// Stops early once at least one matching log is found.
+const CHUNK = 9_000
+export async function queryFilterChunked(contract, filter, fromBlock, toBlock) {
+  const logs = []
+  for (let from = fromBlock; from <= toBlock; from += CHUNK) {
+    const to = Math.min(from + CHUNK - 1, toBlock)
+    const chunk = await contract.queryFilter(filter, from, to)
+    logs.push(...chunk)
+    if (logs.length > 0) break
+  }
+  return logs
+}

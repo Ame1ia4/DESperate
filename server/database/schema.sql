@@ -425,52 +425,6 @@ CREATE INDEX idx_messages_deleted
     ON messages(deleted_at)
     WHERE deleted_at IS NOT NULL;
 
-    -- MERKLE LEAVES
--- Per-message leaf tracking.
---
--- One leaf per message (UNIQUE msg_id). Leaves transition:
---   pending → batched (included in a built root)
---           → confirmed (root confirmed on-chain)
---
--- ON DELETE CASCADE keeps leaves in sync with message hard-deletes.
--- Soft-deletes gate proof retrieval at the application layer only —
--- this table is not modified on deletion.
--- =========================================================
-
-CREATE TABLE merkle_leaves (
-    id SERIAL PRIMARY KEY,
-
-    -- keccak256(messages.ciphertext), 0x-prefixed.
-    leaf_hash CHAR(66) NOT NULL,
-
-    msg_id UUID
-        NOT NULL UNIQUE
-        REFERENCES messages(id) ON DELETE CASCADE,
-
-    -- NULL until the leaf is included in a built root.
-    merkle_root_id INT
-        REFERENCES merkle_roots(id),
-
-    -- 0-based position in the Merkle tree (insertion order).
-    -- NULL until batched.
-    leaf_index INT,
-
-    state TEXT
-        NOT NULL DEFAULT 'pending'
-        CHECK (state IN ('pending', 'batched', 'confirmed')),
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Fetch the N oldest pending leaves for the build worker.
-CREATE INDEX idx_merkle_leaves_pending
-    ON merkle_leaves(created_at)
-    WHERE state = 'pending';
-
--- Reconstruct the ordered leaf list for a given root.
-CREATE INDEX idx_merkle_leaves_root
-    ON merkle_leaves(merkle_root_id, leaf_index);
-
 -- =========================================================
 -- MERKLE ROOTS
 -- Blockchain Verification Anchors
@@ -529,6 +483,70 @@ CREATE INDEX idx_merkle_roots_state
 CREATE INDEX idx_merkle_roots_tx
     ON merkle_roots(tx_hash)
     WHERE tx_hash IS NOT NULL;
+
+-- =========================================================
+-- MERKLE LEAVES
+-- Per-message leaf tracking.
+--
+-- One leaf per message (UNIQUE msg_id). Leaves transition:
+--   pending → batched (included in a built root)
+--           → confirmed (root confirmed on-chain)
+--
+-- ON DELETE CASCADE keeps leaves in sync with message hard-deletes.
+-- Soft-deletes gate proof retrieval at the application layer only —
+-- this table is not modified on deletion.
+-- =========================================================
+
+CREATE TABLE merkle_leaves (
+    id SERIAL PRIMARY KEY,
+
+    -- keccak256(messages.ciphertext), 0x-prefixed.
+    leaf_hash CHAR(66) NOT NULL,
+
+    msg_id UUID
+        NOT NULL UNIQUE
+        REFERENCES messages(id) ON DELETE CASCADE,
+
+    -- NULL until the leaf is included in a built root.
+    merkle_root_id INT
+        REFERENCES merkle_roots(id),
+
+    -- 0-based position in the Merkle tree (insertion order).
+    -- NULL until batched.
+    leaf_index INT,
+
+    state TEXT
+        NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'batched', 'confirmed')),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Fetch the N oldest pending leaves for the build worker.
+CREATE INDEX idx_merkle_leaves_pending
+    ON merkle_leaves(created_at)
+    WHERE state = 'pending';
+
+-- Reconstruct the ordered leaf list for a given root.
+CREATE INDEX idx_merkle_leaves_root
+    ON merkle_leaves(merkle_root_id, leaf_index);
+
+-- =========================================================
+-- MESSAGE HIDDEN
+--
+-- Per-user "delete for me" layer, independent of the global
+-- messages.deleted_at (which covers "delete for everyone").
+-- Hiding a message gates proof retrieval for that user only;
+-- all other participants are unaffected.  The on-chain anchor
+-- is never removed.
+-- =========================================================
+
+CREATE TABLE message_hidden (
+    msg_id    UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id   UUID        NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+    hidden_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (msg_id, user_id)
+);
 
 -- =========================================================
 -- DEVICE SESSIONS
