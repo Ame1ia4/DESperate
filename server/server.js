@@ -22,6 +22,7 @@ import { proofHandler } from './handlers/merkle/proof.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+
 const verificationHtmlTemplate = readFileSync(
   join(__dirname, 'blockchain', 'verification.html'), 'utf-8'
 )
@@ -418,6 +419,7 @@ app.post('/messages', requireAuth, async (req, res) => {
 })
 
 // Pull pending (undelivered) messages for the authenticated device.
+// Also returns deletion/revocation notices so the recipient's UI updates in-place.
 app.get('/messages/pending', requireAuth, async (req, res) => {
   const { rows } = await query(
     `SELECT
@@ -436,6 +438,11 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
        AND mq.delivery_state      = 'pending'
        AND mq.expires_at          > NOW()
        AND m.deleted_at           IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM message_hidden mh
+         WHERE mh.msg_id  = m.id
+           AND mh.user_id = (SELECT user_id FROM devices WHERE id = $1)
+       )
      ORDER BY mq.msg_sequence ASC
      LIMIT 100`,
     [req.deviceId]
@@ -461,7 +468,31 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
     }
   })
 
-  res.json({ envelopes })
+  // Fetch unsent deletion/revocation notices for this user, then mark them sent
+  // so subsequent polls do not re-deliver the same notice.
+  const { rows: noticeRows } = await query(
+    `SELECT mh.msg_id,
+            CASE WHEN m.deleted_at IS NOT NULL THEN 'deleted' ELSE 'revoked' END AS type
+     FROM   message_hidden mh
+     JOIN   messages m ON m.id = mh.msg_id
+     WHERE  mh.user_id     = (SELECT user_id FROM devices WHERE id = $1)
+       AND  mh.notice_sent = FALSE`,
+    [req.deviceId]
+  )
+
+  if (noticeRows.length > 0) {
+    await query(
+      `UPDATE message_hidden
+       SET    notice_sent = TRUE
+       WHERE  user_id = (SELECT user_id FROM devices WHERE id = $1)
+         AND  msg_id   = ANY($2::uuid[])`,
+      [req.deviceId, noticeRows.map(r => r.msg_id)]
+    )
+    console.log(`[NOTICES] delivered ${noticeRows.length} notice(s) to device ${req.deviceId}:`,
+      noticeRows.map(r => `${r.type}:${r.msg_id}`).join(', '))
+  }
+
+  res.json({ envelopes, notices: noticeRows.map(r => ({ message_id: r.msg_id, type: r.type })) })
 })
 
 // Acknowledge delivery — marks the queue entry as delivered.
@@ -619,13 +650,20 @@ app.delete('/messages/:id', requireAuth, async (req, res) => {
     return result
   })
 
-  if (rowCount === 0)
+  if (rowCount === 0) {
+    console.warn(`[DELETE] 403 msg=${messageId} device=${req.deviceId} — not sender or already deleted`)
     return res.status(403).json({ error: 'Not the sender or message already deleted' })
+  }
 
+  console.log(`[DELETE] msg=${messageId} soft-deleted by device=${req.deviceId}`)
   res.json({ deleted: true })
 })
 
-// Revoke a pending queue entry so a recipient cannot receive the message.
+// Revoke a recipient's access to a message — works both before AND after delivery.
+// Pre-delivery:  removes the pending queue entry.
+// Post-delivery: inserts into message_hidden so the message is excluded from all
+//               future history and pending queries for that recipient.
+// On next poll the recipient receives a 'revoked' notice and their UI updates.
 app.post('/messages/:id/revoke', requireAuth, async (req, res) => {
   const messageId = req.params.id
   if (!UUID_RE.test(messageId))
@@ -641,28 +679,45 @@ app.post('/messages/:id/revoke', requireAuth, async (req, res) => {
      WHERE id = $1
        AND sender_device_id IN (
              SELECT id FROM devices
-             WHERE user_id = (
-               SELECT user_id FROM devices WHERE id = $2
-             )
+             WHERE user_id = (SELECT user_id FROM devices WHERE id = $2)
            )`,
     [messageId, req.deviceId]
   )
-  if (!senderCheck.rows.length)
+  if (!senderCheck.rows.length) {
+    console.warn(`[REVOKE] 403 msg=${messageId} device=${req.deviceId} — not sender`)
     return res.status(403).json({ error: 'Not the sender of this message' })
-
-  const { rowCount } = await query(
-    `DELETE FROM message_queue
-     WHERE msg_id              = $1
-       AND recipient_device_id = $2
-       AND delivery_state      = 'pending'`,
-    [messageId, recipient_device_id]
-  )
-
-  if (rowCount > 0) {
-    res.json({ revoked: true, already_delivered: false })
-  } else {
-    res.json({ revoked: false, already_delivered: true })
   }
+
+  // Resolve the recipient's user_id from their device_id.
+  const { rows: deviceRows } = await query(
+    'SELECT user_id FROM devices WHERE id = $1',
+    [recipient_device_id]
+  )
+  if (!deviceRows.length)
+    return res.status(404).json({ error: 'Recipient device not found' })
+  const recipientUserId = deviceRows[0].user_id
+
+  await withTransaction(async (client) => {
+    // Pre-delivery: remove pending queue entry (no-op if already delivered).
+    await client.query(
+      `DELETE FROM message_queue
+       WHERE msg_id              = $1
+         AND recipient_device_id = $2
+         AND delivery_state      = 'pending'`,
+      [messageId, recipient_device_id]
+    )
+    // Post-delivery: hide from all future queries for this recipient.
+    // notice_sent = FALSE ensures their next poll delivers a 'revoked' notice.
+    await client.query(
+      `INSERT INTO message_hidden (msg_id, user_id, notice_sent)
+       VALUES ($1, $2, FALSE)
+       ON CONFLICT (msg_id, user_id) DO NOTHING`,
+      [messageId, recipientUserId]
+    )
+  })
+
+  console.log(`[REVOKE] msg=${messageId} revoked for device=${recipient_device_id} by device=${req.deviceId}`)
+  res.json({ revoked: true })
 })
 
 // Change SRP credentials (salt + verifier) for the authenticated user.
