@@ -54,7 +54,7 @@ Item {
             color:     outgoing ? "#FFFFFF" : "#0B0B0B"
             font.pixelSize: 14
             // Flexible width: wrap at contentMaxWidth minus reserved paddings
-            width: Math.min(Math.max(60, contentMaxWidth - 48), implicitWidth)
+            width: Math.min(Math.max(60, bubble.contentMaxWidth - 48), implicitWidth)
         }
 
         // Footer: timestamp + ticks

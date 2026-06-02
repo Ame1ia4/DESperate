@@ -222,7 +222,11 @@ void ConversationController::openConversation(
             setupSessionAsync(conversationId, participant);
         }
     }
-    // Notify others (MessageController) that conversation was opened so history can be fetched
+    // NOTE: Not fetching history from /conversations/:id/messages because those messages
+    // lack the initiation_bundle (PQXDH key material) needed for decryption.
+    // Only pullMessages from /messages/pending have the full envelope.
+    // Once conversation is opened, MessageController will pullMessages on a timer.
+    // For now, just emit to signal that local messages are ready.
     emit conversationOpened(conversationId);
 }
 

@@ -275,7 +275,7 @@ app.post('/conversations', requireAuth, async (req, res) => {
 
 // Send an encrypted message — stores it and fans out to recipient devices.
 app.post('/messages', requireAuth, async (req, res) => {
-  const { conversation_id, ciphertext, nonce, initiation_bundle } = req.body
+  const { conversation_id, ciphertext, nonce, initiation_bundle, sender_ik_sig_pub } = req.body
 
   if (!conversation_id || !ciphertext || !nonce)
     return res.status(400).json({ error: 'conversation_id, ciphertext, and nonce required' })
@@ -312,10 +312,10 @@ app.post('/messages', requireAuth, async (req, res) => {
   const messageId = await withTransaction(async (client) => {
     const { rows: [msg] } = await client.query(
       `INSERT INTO messages
-         (conversation_id, sender_device_id, ciphertext, nonce, associated_data)
-       VALUES ($1, $2, $3, $4, $5)
+         (conversation_id, sender_device_id, ciphertext, nonce, associated_data, sender_ik_sig_pub)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, created_at`,
-      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData]
+      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null]
     )
 
     // Find recipient devices (all members except sender).
@@ -359,6 +359,7 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
        m.sender_device_id,
        encode(m.ciphertext, 'hex')             AS ciphertext,
        encode(m.nonce,      'hex')             AS nonce,
+       m.sender_ik_sig_pub,
        mq.id                                   AS queue_id,
        mq.associated_data,
        m.created_at
@@ -387,6 +388,7 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
       recipient_device_id: req.deviceId,
       ciphertext:        r.ciphertext,
       nonce:             r.nonce,
+      sender_ik_sig_pub: r.sender_ik_sig_pub,
       initiation_bundle: initiationBundle,
       created_at:        r.created_at,
     }

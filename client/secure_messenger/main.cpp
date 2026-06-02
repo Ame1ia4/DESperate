@@ -71,13 +71,15 @@
             &trustStore,
             &sessionStore);
 
-    // When a conversation is opened, fetch its server-side history and decrypt.
-    QObject::connect(
-        &conversationController,
-        &ConversationController::conversationOpened,
-        &messageController,
-        &MessageController::fetchConversationHistory,
-        Qt::QueuedConnection);
+    // NOTE: Disabled fetchConversationHistory because /conversations/:id/messages
+    // doesn't include initiation_bundle (PQXDH key material).
+    // Use pullMessages timer instead, which fetches from /messages/pending with full envelope.
+    // QObject::connect(
+    //     &conversationController,
+    //     &ConversationController::conversationOpened,
+    //     &messageController,
+    //     &MessageController::fetchConversationHistory,
+    //     Qt::QueuedConnection);
 
     // QML context exposure
     engine.rootContext()->setContextProperty(
