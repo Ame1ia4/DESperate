@@ -317,12 +317,15 @@ void MessageController::handleDecryptFailed(
         }
 
         // The sender's session is stale — their first message (with the
-        // initiation_bundle) never reached us. Reset our state and re-initiate
-        // so the next outgoing message carries a fresh bundle.
+        // initiation_bundle) never reached us. Re-initiate, but only if we
+        // have no session of our own: if we already have a pending or active
+        // session we are the initiator and re-initiating would create a
+        // competing session that neither side can decrypt.
         if (reason.contains(QStringLiteral("no initiation_bundle"))) {
             const QString conversationId =
                 envelope.value(QStringLiteral("conversation_id")).toString();
-            if (!conversationId.isEmpty())
+            if (!conversationId.isEmpty() &&
+                !m_crypto->hasSession(conversationId))
                 m_conversations->reinitiateSession(conversationId);
         }
     }
