@@ -51,7 +51,7 @@ from typing import Any, Optional
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.exceptions import InvalidTag
 
-from core.constants import KEY_LEN, NONCE_LEN, TAG_LEN
+from core.constants import NONCE_LEN, TAG_LEN
 from core.kdf import (
     argon2id_derive_key,
     hkdf_derive,
@@ -242,72 +242,6 @@ class StateStore:
         raw_key, _ = argon2id_derive_key(passphrase, salt)
         enc_key    = hkdf_derive(raw_key, salt, INFO_LOCAL_KEY_ENC)
 
-        return cls(base_dir, enc_key)
-
-    @classmethod
-    def create_with_key(cls, base_dir: Path, enc_key: bytes, master_salt: bytes) -> StateStore:
-        """
-        Create a new StateStore using a pre-derived encryption key.
-
-        Use this when Argon2id has already been run externally (master-password
-        flow) to avoid a second expensive derivation.  master_salt is written
-        to disk so that the salt file remains present for load_with_key checks.
-
-        Parameters
-        ----------
-        base_dir    : directory to store state files (created if absent)
-        enc_key     : 32-byte encryption key already derived via HKDF
-        master_salt : the Argon2id salt used in that derivation (persisted)
-        """
-        if len(enc_key) != KEY_LEN:
-            raise ValueError(
-                f"enc_key must be {KEY_LEN} bytes, got {len(enc_key)}"
-            )
-        if len(master_salt) != ARGON2_SALT_LEN:
-            raise ValueError(
-                f"master_salt must be {ARGON2_SALT_LEN} bytes, got {len(master_salt)}"
-            )
-        base_dir  = Path(base_dir)
-        base_dir.mkdir(parents=True, exist_ok=True)
-        salt_path = base_dir / _SALT_FILE
-        if salt_path.exists():
-            raise FileExistsError(
-                f"StateStore already exists at {base_dir}. "
-                f"Use StateStore.load_with_key() instead."
-            )
-        _atomic_write(salt_path, master_salt)
-        return cls(base_dir, enc_key)
-
-    @classmethod
-    def load_with_key(cls, base_dir: Path, enc_key: bytes) -> StateStore:
-        """
-        Load an existing StateStore using a pre-derived encryption key.
-
-        Use this when Argon2id has already been run externally (master-password
-        flow).  The salt file must exist (written by create_with_key or create).
-
-        Parameters
-        ----------
-        base_dir : directory containing existing state files
-        enc_key  : 32-byte encryption key already derived via HKDF
-        """
-        if len(enc_key) != KEY_LEN:
-            raise ValueError(
-                f"enc_key must be {KEY_LEN} bytes, got {len(enc_key)}"
-            )
-        base_dir  = Path(base_dir)
-        salt_path = base_dir / _SALT_FILE
-        if not salt_path.exists():
-            raise FileNotFoundError(
-                f"No StateStore found at {base_dir}. "
-                f"Use StateStore.create_with_key() for first use."
-            )
-        salt = salt_path.read_bytes()
-        if len(salt) != ARGON2_SALT_LEN:
-            raise ValueError(
-                f"Corrupt salt file: expected {ARGON2_SALT_LEN} bytes, "
-                f"got {len(salt)}"
-            )
         return cls(base_dir, enc_key)
 
     # ── Ratchet state ─────────────────────────────────────────────────────────
@@ -509,44 +443,43 @@ class StateStore:
         return self._sess_dir / f"{session_id}{_META_SUFFIX}"
 
     def _encrypt_write(self, path: Path, plaintext: bytes, ad: bytes) -> None:
-        """Encrypt plaintext and write to path atomically. Wire format: nonce (12) || ciphertext || tag (16)."""
-        _atomic_write(path, encrypt_blob(self._enc_key, plaintext, ad))
+        """
+        Encrypt plaintext and write to path atomically.
+
+        Wire format: nonce (12) || ciphertext || tag (16)
+        """
+        nonce      = os.urandom(NONCE_LEN)
+        ciphertext = ChaCha20Poly1305(self._enc_key).encrypt(
+            nonce, plaintext, ad
+        )
+        blob = nonce + ciphertext
+        _atomic_write(path, blob)
 
     def _read_decrypt(self, path: Path, ad: bytes) -> bytes:
-        """Read an encrypted blob from path and decrypt it. Raises InvalidTag on tampering or wrong key."""
-        return decrypt_blob(self._enc_key, path.read_bytes(), ad)
+        """
+        Read an encrypted blob from path and decrypt it.
+
+        Raises InvalidTag if authentication fails — either the file has
+        been tampered with or the wrong passphrase was used.
+        """
+        blob = path.read_bytes()
+
+        if len(blob) < _MIN_BLOB_LEN:
+            raise ValueError(
+                f"Encrypted file too short: {path} "
+                f"({len(blob)} bytes, minimum {_MIN_BLOB_LEN})"
+            )
+
+        nonce      = blob[:NONCE_LEN]
+        ciphertext = blob[NONCE_LEN:]
+
+        return ChaCha20Poly1305(self._enc_key).decrypt(nonce, ciphertext, ad)
 
     def __repr__(self) -> str:
         return f"StateStore(base_dir={self._base_dir!r})"
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
-
-def encrypt_blob(enc_key: bytes, plaintext: bytes, ad: bytes) -> bytes:
-    """
-    Encrypt plaintext with ChaCha20-Poly1305.
-
-    Returns nonce (12 B) || ciphertext+tag. Pass the result to decrypt_blob
-    to recover plaintext. The associated data (ad) must match on decryption —
-    use it to bind the blob to its intended purpose (e.g. filename, user id).
-    """
-    nonce = os.urandom(NONCE_LEN)
-    return nonce + ChaCha20Poly1305(enc_key).encrypt(nonce, plaintext, ad)
-
-
-def decrypt_blob(enc_key: bytes, blob: bytes, ad: bytes) -> bytes:
-    """
-    Decrypt a blob produced by encrypt_blob.
-
-    Raises InvalidTag if the key is wrong, the blob has been tampered with,
-    or the associated data does not match.
-    """
-    if len(blob) < _MIN_BLOB_LEN:
-        raise ValueError(
-            f"blob too short: {len(blob)} bytes, minimum {_MIN_BLOB_LEN}"
-        )
-    return ChaCha20Poly1305(enc_key).decrypt(blob[:NONCE_LEN], blob[NONCE_LEN:], ad)
-
 
 def _make_ad(session_id: str, file_type: str) -> bytes:
     """

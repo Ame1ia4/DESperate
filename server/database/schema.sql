@@ -153,24 +153,16 @@ CREATE INDEX idx_devices_active
 -- SRP CHALLENGES
 --
 -- Transient per-device handshake state for SRP round 1→2.
--- One row per (device_id, flow) pair — the composite PK lets the
--- login flow and the password-change flow hold active challenges
--- for the same device simultaneously without clobbering each other.
--- Each flow DELETEs its own row then INSERTs a fresh one (atomic).
--- Challenges are single-use: consumed by DELETE … RETURNING.
+-- One row per device (PK enforces this, preventing accumulation).
+-- auth_init DELETEs any existing row then INSERTs a fresh one.
+-- auth_login DELETEs the row immediately after use — challenges
+-- are single-use regardless of whether verification succeeds.
 -- =========================================================
 
 CREATE TABLE srp_challenges (
-    device_id UUID
-        NOT NULL
+    device_id UUID PRIMARY KEY
         REFERENCES devices(id)
         ON DELETE CASCADE,
-
-    -- Discriminates between flows that share this table.
-    -- 'login'           — POST /auth/init → /auth/login
-    -- 'password_change' — POST /auth/password/change-init → /change-confirm
-    flow VARCHAR(20)
-        NOT NULL DEFAULT 'login',
 
     -- Server's secret ephemeral b (hex). Never sent to the client.
     srp_server_secret TEXT NOT NULL,
@@ -178,13 +170,9 @@ CREATE TABLE srp_challenges (
     created_at TIMESTAMP WITH TIME ZONE
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    -- 5-minute window; round-2 handlers reject rows past this.
+    -- 5-minute window; auth_login rejects rows past this.
     expires_at TIMESTAMP WITH TIME ZONE
-        NOT NULL DEFAULT CURRENT_TIMESTAMP + INTERVAL '5 minutes',
-
-    CHECK (flow IN ('login', 'password_change')),
-
-    PRIMARY KEY (device_id, flow)
+        NOT NULL DEFAULT CURRENT_TIMESTAMP + INTERVAL '5 minutes'
 );
 
 -- =========================================================
