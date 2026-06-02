@@ -509,6 +509,11 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
          AND m.created_at < (
            SELECT created_at FROM messages WHERE id = $2
          )
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden mh
+           WHERE mh.msg_id  = m.id
+             AND mh.user_id = (SELECT user_id FROM devices WHERE id = $3)
+         )
        ORDER BY m.created_at ASC
        LIMIT 50`,
       [conversationId, before, req.deviceId]
@@ -526,6 +531,11 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
        FROM messages m
        WHERE m.conversation_id = $1
          AND m.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden mh
+           WHERE mh.msg_id  = m.id
+             AND mh.user_id = (SELECT user_id FROM devices WHERE id = $2)
+         )
        ORDER BY m.created_at ASC
        LIMIT 50`,
       [conversationId, req.deviceId]
