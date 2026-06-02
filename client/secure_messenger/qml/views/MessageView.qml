@@ -45,6 +45,18 @@ Rectangle {
             downloadToast.visible = true
             toastTimer.restart()
         }
+        function onMessageRevokeSucceeded() {
+            downloadToastText.isError = false
+            downloadToastText.text = "Delivery revoked from recipient"
+            downloadToast.visible = true
+            toastTimer.restart()
+        }
+        function onMessageRevokeFailed() {
+            downloadToastText.isError = true
+            downloadToastText.text = "Revoke failed — message may already be delivered"
+            downloadToast.visible = true
+            toastTimer.restart()
+        }
     }
 
     ColumnLayout {

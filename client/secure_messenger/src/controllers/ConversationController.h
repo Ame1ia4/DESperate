@@ -78,6 +78,11 @@ public slots:
 
     void reinitiateSession(const QString& conversationId);
 
+    void updateMessageId(const QString& oldId, const QString& newId);
+    void removeLocalMessage(const QString& messageId);
+    void markLocalRevoked(const QString& messageId);
+    void markLocalDeleted(const QString& messageId);
+
 signals:
     void currentConversationIdChanged();
 
