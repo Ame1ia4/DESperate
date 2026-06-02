@@ -56,6 +56,8 @@ app.set('trust proxy', 1)
 app.use(cors({ origin: `https://${process.env.SUBDOMAIN}` }))
 app.use(express.json({ limit: '2mb' }))
 
+app.get('/health', (_, res) => res.json({ status: 'ok' }))
+
 const authLimiter    = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
 const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 })
 app.use(generalLimiter)
@@ -69,7 +71,6 @@ app.get('/', serveVerification)
 app.get('/verification.html', serveVerification)
 
 app.use(express.static(join(__dirname, 'blockchain')))
-app.get('/health', (_, res) => res.json({ status: 'ok' }))
 
 const HEX64_RE = /^(0x)?[0-9a-f]{64}$/i
 app.get('/api/blockchain/verify', async (req, res) => {
@@ -638,6 +639,9 @@ app.post('/devices/revoke', requireAuth, async (req, res) => {
   res.json({ revoked: true })
 })
 
+app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
+app.post('/blockchain/verify-leaf',        proofHandler)
+
 // ── 404 ──
 app.use((_, res) => res.status(404).json({ error: 'Not found' }))
 
@@ -647,10 +651,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
-app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
-app.post('/blockchain/verify-leaf',        proofHandler)
-
-const PORT = process.env.PORT ?? 3000
+const PORT = process.env.PORT ?? 80
 const server = app.listen(PORT, () => console.log(`Server running on :${PORT}`))
 
 startBlockchainWorker()

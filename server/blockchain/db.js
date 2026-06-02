@@ -3,13 +3,21 @@ import 'dotenv/config'
 
 const { Pool } = pg
 
+function resolveSSL() {
+  const val = process.env.DB_SSL?.toLowerCase()
+  if (val === 'false') return false
+  if (val === 'no-verify') return { rejectUnauthorized: false }
+  if (val === 'true' || process.env.NODE_ENV === 'production') return true
+  return false
+}
+
 const pool = new Pool({
   host:     process.env.DB_HOST,
   port:     parseInt(process.env.DB_PORT ?? '5432', 10),
   user:     process.env.MERKLE_DB_USER,
   password: process.env.MERKLE_DB_PASS,
   database: process.env.DB_NAME,
-  ssl:      process.env.DB_SSL?.toLowerCase() === 'false' ? false : undefined,
+  ssl:      resolveSSL(),
 })
 
 export const query = (text, params) => pool.query(text, params)
