@@ -30,26 +30,26 @@ describe("MessageIntegrity", function () {
 
   });
 
-  describe("storeHash", function () {
+  describe("storeBatchHashes (single root)", function () {
     it("owner can store a root and event is emitted", async function () {
-      await expect(contract.storeHash(ROOT_1))
+      await expect(contract.storeBatchHashes([ROOT_1]))
         .to.emit(contract, "HashStored")
         .withArgs(ROOT_1, anyValue);
     });
 
     it("reverts when non-owner calls", async function () {
-      await expect(contract.connect(nonOwner).storeHash(ROOT_1))
-        .to.be.revertedWith("Only owner can submit");
+      await expect(contract.connect(nonOwner).storeBatchHashes([ROOT_1]))
+        .to.be.revertedWithCustomError(contract, "Unauthorized");
     });
 
     it("reverts with ZeroRoot for bytes32(0)", async function () {
-      await expect(contract.storeHash(ethers.ZeroHash))
+      await expect(contract.storeBatchHashes([ethers.ZeroHash]))
         .to.be.revertedWithCustomError(contract, "ZeroRoot")
         .withArgs(0);
     });
 
     it("event timestamp matches the block timestamp", async function () {
-      const tx = await contract.storeHash(ROOT_1);
+      const tx = await contract.storeBatchHashes([ROOT_1]);
       const receipt = await tx.wait();
       const block = await ethers.provider.getBlock(receipt.blockNumber);
       const event = contract.interface.parseLog(receipt.logs[0]);
@@ -87,11 +87,11 @@ describe("MessageIntegrity", function () {
 
     it("reverts when non-owner calls", async function () {
       await expect(contract.connect(nonOwner).storeBatchHashes([ROOT_1]))
-        .to.be.revertedWith("Only owner can submit");
+        .to.be.revertedWithCustomError(contract, "Unauthorized");
     });
 
     it("accepts exactly MAX_BATCH_SIZE roots", async function () {
-      const roots = Array.from({ length: 50 }, (_, i) =>
+      const roots = Array.from({ length: 100 }, (_, i) =>
         ethers.keccak256(ethers.toUtf8Bytes(`root-${i}`))
       );
       await expect(contract.storeBatchHashes(roots)).to.not.be.reverted;

@@ -8,6 +8,7 @@ import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { verifyRoot } from './blockchain/merkle-verify.js'
+import { startBlockchainWorker } from './blockchain/publisher.js'
 import { register, registrationNonce } from './handlers/auth/index.js'
 import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
@@ -15,6 +16,9 @@ import { requireAuth } from './middleware/require_auth.js'
 import { query, withTransaction, registerShutdownSignals } from './database/db.js'
 import { revokeSessionKey } from './state/session_keys.js'
 import { UUID_RE } from './constants/auth.js'
+import { computeLeaf } from './blockchain/merkle-core.js'
+import { verifyHandler } from './handlers/merkle/verify.js'
+import { proofHandler } from './handlers/merkle/proof.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -318,6 +322,12 @@ app.post('/messages', requireAuth, async (req, res) => {
       [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData]
     )
 
+    const leafHash = computeLeaf(ciphertextBuf)
+    await client.query(
+      `INSERT INTO merkle_leaves (leaf_hash, msg_id, state) VALUES ($1, $2, 'pending')`,
+      [leafHash, msg.id]
+    )
+
     // Find recipient devices (all members except sender).
     const { rows: recipients } = await client.query(
       `SELECT d.id AS device_id
@@ -444,5 +454,12 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' })
 })
 
-const server = app.listen(80, () => console.log('Server running on :80'))
+app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
+app.post('/blockchain/verify-leaf',        proofHandler)
+
+const PORT = process.env.PORT ?? 3000
+const server = app.listen(PORT, () => console.log(`Server running on :${PORT}`))
+
+startBlockchainWorker()
+
 registerShutdownSignals(server)

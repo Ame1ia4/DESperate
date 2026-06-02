@@ -65,13 +65,33 @@ const I = {
     </svg>,
 };
 
+// ─── Copy button ─────────────────────────────────────────────────────────────
+
+function CopyBtn({ value }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      className="btn btn-link"
+      onClick={copy}
+      style={{ padding: "0 6px", fontSize: 11, marginLeft: 6, verticalAlign: "middle" }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 // ─── Stepper ─────────────────────────────────────────────────────────────────
 
 function Stepper({ current }) {
   const steps = [
     { n: 1, label: "Root lookup" },
-    { n: 2, label: "Verified" },
-    { n: 3, label: "Inclusion check" },
+    { n: 2, label: "Inclusion check" },
   ];
 
   return (
@@ -189,9 +209,9 @@ function AnchorCard({ onVerified, verified, verify }) {
                 <dt>Block</dt>
                 <dd>#{verified.block.toLocaleString()}</dd>
                 <dt>Transaction</dt>
-                <dd>{verified.txid}</dd>
+                <dd>{verified.txid}<CopyBtn value={verified.txid} /></dd>
                 <dt>Root</dt>
-                <dd>{verified.provided}</dd>
+                <dd>{verified.provided}<CopyBtn value={verified.provided} /></dd>
               </dl>
             </div>
           )}
@@ -213,111 +233,60 @@ function AnchorCard({ onVerified, verified, verify }) {
 
 // ─── Step 2: inclusion check ──────────────────────────────────────────────────
 
-function HashRow({ index, value, status, onChange, onRemove, canRemove }) {
-  const statusUI = (() => {
-    if (status === "included")
-      return <span className="chip ok"><I.Check s={10} /> included</span>;
-    if (status === "missing")
-      return (
-        <span className="chip" style={{ background: "var(--bad-soft)", color: "var(--bad)", borderColor: "#e3bbab" }}>
-          <I.X s={10} /> not in tree
-        </span>
-      );
-    if (status === "invalid")
-      return <span className="chip" style={{ background: "var(--bg-tint)", color: "var(--ink-3)" }}>invalid</span>;
-    if (status === "checking")
-      return <span className="chip"><span className="spin" style={{ width: 10, height: 10, borderWidth: 1.5 }} /> checking</span>;
-    return null;
-  })();
-
-  return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "28px 1fr auto auto",
-      gap: 10,
-      alignItems: "center",
-      marginBottom: 8,
-    }}>
-      <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "IBM Plex Mono, monospace", textAlign: "right" }}>
-        {String(index + 1).padStart(2, "0")}
-      </span>
-      <input
-        className="input mono"
-        placeholder="0x… leaf hash"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        spellCheck={false}
-        style={{
-          borderColor: status === "included" ? "#9bc1a1" : status === "missing" ? "#d8a594" : undefined,
-          background:  status === "included" ? "var(--ok-soft)" : status === "missing" ? "var(--bad-soft)" : undefined,
-        }}
-      />
-      <div style={{ minWidth: 100, textAlign: "right" }}>{statusUI}</div>
-      <button
-        className="btn btn-ghost"
-        onClick={onRemove}
-        disabled={!canRemove}
-        style={{ padding: 8, opacity: canRemove ? 1 : 0.3, cursor: canRemove ? "pointer" : "not-allowed" }}
-        title="Remove this row"
-        aria-label="Remove row"
-      >
-        <I.Trash s={12} />
-      </button>
-    </div>
-  );
+function hexOrBase64ToBytes(input) {
+  const s = input.trim();
+  if (/^(0x)?[0-9a-f]+$/i.test(s)) {
+    return ethers.getBytes(s.startsWith("0x") ? s : "0x" + s);
+  }
+  const bin = atob(s);
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
 function ProofCard({ anchored, locked, onInclusionRan }) {
-  const [rows, setRows] = useState([{ id: 1, value: "", status: null }]);
-  const [running, setRunning] = useState(false);
-  const [hasRun, setHasRun] = useState(false);
-  const nextId = useRef(2);
+  const [ciphertext, setCiphertext] = useState("");
+  const [result, setResult]         = useState(null); // { ok, reason, leaf }
+  const [running, setRunning]       = useState(false);
 
   useEffect(() => {
     if (!anchored) {
-      setRows([{ id: 1, value: "", status: null }]);
-      setHasRun(false);
+      setCiphertext("");
+      setResult(null);
       onInclusionRan?.(false);
-      nextId.current = 2;
     }
   }, [anchored]);
 
-  const updateRow = (id, value) =>
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, value, status: null } : r)));
-
-  const removeRow = (id) =>
-    setRows((rs) => (rs.length === 1 ? rs : rs.filter((r) => r.id !== id)));
-
-  const addRow = () =>
-    setRows((rs) => [...rs, { id: nextId.current++, value: "", status: null }]);
-
-  const filled = rows.filter((r) => r.value.trim().length > 0);
-
-  const verify = () => {
-    if (filled.length === 0) return;
+  const verify = async () => {
+    if (!ciphertext.trim()) return;
     setRunning(true);
+    setResult(null);
+    try {
+      const ctBytes = hexOrBase64ToBytes(ciphertext);
+      const leaf    = ethers.keccak256(ctBytes);
 
-    setRows(rows.map((r) => {
-      if (r.value.trim().length === 0) return { ...r, status: null };
-      const h = normHash(r.value);
-      return { ...r, status: isHex64(h) ? "included" : "invalid" };
-    }));
-    setHasRun(true);
-    onInclusionRan?.(true);
-    setRunning(false);
+      const res  = await fetch("/blockchain/verify-leaf", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ leaf, root: anchored.provided }),
+      });
+      const body = await res.json();
+
+      if (!res.ok) throw new Error(body.error || res.statusText);
+
+      setResult({ ok: body.verified, reason: body.reason, leaf });
+      onInclusionRan?.(body.verified);
+    } catch (err) {
+      setResult({ ok: false, reason: err.message, leaf: null });
+      onInclusionRan?.(false);
+    } finally {
+      setRunning(false);
+    }
   };
 
   const clear = () => {
-    setRows([{ id: nextId.current++, value: "", status: null }]);
-    setHasRun(false);
+    setCiphertext("");
+    setResult(null);
     onInclusionRan?.(false);
   };
-
-  const passCount    = rows.filter((r) => r.status === "included").length;
-  const failCount    = rows.filter((r) => r.status === "missing").length;
-  const invalidCount = rows.filter((r) => r.status === "invalid").length;
-  const checkedTotal = passCount + failCount + invalidCount;
-  const allOk        = checkedTotal > 0 && passCount === checkedTotal;
 
   if (locked) {
     return (
@@ -327,8 +296,8 @@ function ProofCard({ anchored, locked, onInclusionRan }) {
           <span className="kbd">step 2 / 2 · locked</span>
         </div>
         <p className="card-sub">
-          Complete the root lookup above to unlock. Once the root is confirmed,
-          you can verify that any hash exists inside the tree.
+          Complete the root lookup above to unlock. Once the root is confirmed
+          on-chain, paste your message ciphertext below to prove it is included.
         </p>
       </div>
     );
@@ -341,53 +310,48 @@ function ProofCard({ anchored, locked, onInclusionRan }) {
         <span className="kbd">step 2 / 2</span>
       </div>
       <p className="card-sub">
-        The root was found on chain. Now check whether specific hashes live
-        inside it — paste a hash into each field below.
+        The root was found on-chain. Paste the raw message ciphertext (hex or
+        base64) to prove it is included in this Merkle tree.
       </p>
 
       <div className="field">
         <label>
-          Hashes to verify
-          <span className="hint">one per row · 64 hex chars</span>
+          Ciphertext
+          <span className="hint">hex or base64</span>
         </label>
+        <textarea
+          className="input mono"
+          rows={4}
+          placeholder="0x… or base64…"
+          value={ciphertext}
+          onChange={(e) => { setCiphertext(e.target.value); setResult(null); }}
+          spellCheck={false}
+          style={{ resize: "vertical", fontFamily: "IBM Plex Mono, monospace", fontSize: 12 }}
+        />
       </div>
 
-      <div>
-        {rows.map((r, i) => (
-          <HashRow
-            key={r.id}
-            index={i}
-            value={r.value}
-            status={r.status}
-            onChange={(v) => updateRow(r.id, v)}
-            onRemove={() => removeRow(r.id)}
-            canRemove={rows.length > 1}
-          />
-        ))}
-      </div>
-
-      <button className="btn btn-ghost" onClick={addRow} style={{ marginTop: 6, fontSize: 12, padding: "8px 12px" }}>
-        <I.Plus s={11} /> Add hash
-      </button>
-
-      <div className="btn-row" style={{ marginTop: 18 }}>
-        <button className="btn btn-primary" onClick={verify} disabled={running || filled.length === 0}>
+      <div className="btn-row">
+        <button
+          className="btn btn-primary"
+          onClick={verify}
+          disabled={running || !ciphertext.trim()}
+        >
           {running ? <span className="spin" /> : <I.Check s={12} />}
-          {running ? "Verifying…" : `Verify ${filled.length || ""} hash${filled.length === 1 ? "" : "es"}`.trim()}
+          {running ? "Verifying…" : "Verify inclusion"}
         </button>
-        {hasRun && <button className="btn btn-link" onClick={clear}>Clear</button>}
+        {result && <button className="btn btn-link" onClick={clear}>Clear</button>}
       </div>
 
-      {hasRun && checkedTotal > 0 && (
-        <div className={`result ${allOk ? "ok" : "bad"} appear`} style={{ marginTop: 22 }}>
+      {result && (
+        <div className={`result ${result.ok ? "ok" : "bad"} appear`} style={{ marginTop: 22 }}>
           <div className="result-bar">
             <div className="verdict">
               <span className="badge">
-                {allOk ? <I.Check s={12} /> : <I.X s={12} />}
+                {result.ok ? <I.Check s={12} /> : <I.X s={12} />}
               </span>
-              {allOk
-                ? `All ${passCount} hashes included in the root`
-                : `${passCount} of ${checkedTotal} hashes included`}
+              {result.ok
+                ? "Ciphertext is included in the on-chain root"
+                : result.reason || "Ciphertext not found in this root"}
             </div>
             {anchored?.timestamp && (
               <span className="chip">
@@ -395,16 +359,16 @@ function ProofCard({ anchored, locked, onInclusionRan }) {
               </span>
             )}
           </div>
-          <div className="result-body" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, color: "var(--ink-2)" }}>
-            <div style={{ display: "flex", gap: 16 }}>
-              {passCount    > 0 && <span><span style={{ color: "var(--ok)",    fontWeight: 600 }}>{passCount}</span> included</span>}
-              {failCount    > 0 && <span><span style={{ color: "var(--bad)",   fontWeight: 600 }}>{failCount}</span> missing</span>}
-              {invalidCount > 0 && <span><span style={{ color: "var(--ink-3)", fontWeight: 600 }}>{invalidCount}</span> invalid</span>}
+          {result.ok && result.leaf && (
+            <div className="result-body">
+              <dl className="kv">
+                <dt>Leaf (keccak256)</dt>
+                <dd>{result.leaf}<CopyBtn value={result.leaf} /></dd>
+                <dt>Root</dt>
+                <dd>{anchored.provided}<CopyBtn value={anchored.provided} /></dd>
+              </dl>
             </div>
-            <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-              root · {shortHash(anchored.provided, 6)}
-            </span>
-          </div>
+          )}
         </div>
       )}
     </div>

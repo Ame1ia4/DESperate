@@ -21,7 +21,15 @@ VALUES
 ('max_queue_messages_per_device', '1000'),
 ('message_expiry_hours', '168'),
 ('signed_prekey_rotation_days', '30'),
-('opk_low_watermark', '25');
+('opk_low_watermark', '25'),
+-- Merkle anchoring
+('merkle_batch_size',             '100'),
+('merkle_root_build_interval_ms', '300000'),
+('merkle_broadcast_interval_ms',  '1200000'),
+('merkle_broadcast_min_roots',    '4'),
+('merkle_max_roots_per_tx',       '100'),
+('merkle_worker_tick_ms',         '60000'),
+('merkle_max_broadcast_attempts', '5');
 
 -- =========================================================
 -- USERS
@@ -138,7 +146,19 @@ CREATE TABLE devices (
         NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     revoked BOOLEAN
-        NOT NULL DEFAULT FALSE
+        NOT NULL DEFAULT FALSE,
+
+    -- =====================================================
+    -- SRP DEVICE SESSION
+    -- Set on successful completion of /auth/verify (round 2).
+    -- Both NULL means the device has never completed an SRP
+    -- handshake; requests gated on an active session are
+    -- rejected until these are populated and unexpired.
+    -- =====================================================
+
+    srp_verified_at TIMESTAMP WITH TIME ZONE,
+
+    srp_expires_at  TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX idx_devices_user
@@ -409,35 +429,124 @@ CREATE INDEX idx_messages_deleted
 -- MERKLE ROOTS
 -- Blockchain Verification Anchors
 --
--- Hash algorithm: keccak256.
--- Must match the on-chain Solidity contract which uses
--- Solidity's built-in keccak256().
-
--- Merkle roots submitted to the MessageIntegrity contract on Sepolia.
--- Verify by calling validateRoot(bytes32) on-chain; retrieve the
--- timestamp via the HashStored event using tx_hash.
+-- Leaf  = keccak256(messages.ciphertext) — ciphertext bytes ONLY.
+-- Tree  = merkletreejs { sortPairs: false, duplicateOdd: false }.
+-- Contract: MessageIntegrity on Sepolia (event-only).
+--   storeBatchHashes(bytes32[]) → HashStored(bytes32 indexed merkleRoot, uint256 timestamp)
+--   No on-chain storage; verification requires querying HashStored logs by tx_hash.
+--
+-- State machine:
+--   built → broadcasting → confirmed
+--                       └→ failed (after merkle_max_broadcast_attempts)
+--   confirmed → broadcasting  (on deep reorg)
 -- =========================================================
 
 CREATE TABLE merkle_roots (
     id SERIAL PRIMARY KEY,
 
-    -- 0x-prefixed keccak256 root. Strip '0x' before passing to contract.
+    -- 0x-prefixed keccak256 root (66 chars including 0x prefix).
     merkle_root CHAR(66)
         NOT NULL
         UNIQUE,
 
-    -- Set once ethers.js returns the transaction hash after broadcast.
-    tx_hash CHAR(66)
-        UNIQUE,
+    -- Set the instant ethers.js returns the tx response — BEFORE
+    -- awaiting confirmation. Multiple roots share one tx, so this
+    -- is NOT unique. NULL while state = 'built' or 'broadcasting'
+    -- (pre-submission).
+    tx_hash CHAR(66),
 
-    -- TRUE once the transaction has been broadcast to Sepolia.
-    broadcast_to_chain BOOLEAN
-        NOT NULL DEFAULT FALSE
+    -- Explicit state machine replaces the old broadcast_to_chain boolean.
+    state TEXT
+        NOT NULL DEFAULT 'built'
+        CHECK (state IN ('built', 'broadcasting', 'confirmed', 'failed')),
+
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    broadcast_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
+
+    -- Unix timestamp from the on-chain HashStored event (not block time).
+    block_timestamp BIGINT,
+
+    -- Broadcast attempt counter. Incremented before each attempt.
+    -- Root moves to state='failed' once this reaches merkle_max_broadcast_attempts.
+    attempts INT NOT NULL DEFAULT 0,
+
+    -- Log index within the tx receipt — debug aid only.
+    log_index INT
 );
 
+-- Drives build/broadcast worker selects (state + age).
+CREATE INDEX idx_merkle_roots_state
+    ON merkle_roots(state, created_at);
+
+-- Non-unique: multiple roots share one tx.
 CREATE INDEX idx_merkle_roots_tx
     ON merkle_roots(tx_hash)
     WHERE tx_hash IS NOT NULL;
+
+-- =========================================================
+-- MERKLE LEAVES
+-- Per-message leaf tracking.
+--
+-- One leaf per message (UNIQUE msg_id). Leaves transition:
+--   pending → batched (included in a built root)
+--           → confirmed (root confirmed on-chain)
+--
+-- ON DELETE CASCADE keeps leaves in sync with message hard-deletes.
+-- Soft-deletes gate proof retrieval at the application layer only —
+-- this table is not modified on deletion.
+-- =========================================================
+
+CREATE TABLE merkle_leaves (
+    id SERIAL PRIMARY KEY,
+
+    -- keccak256(messages.ciphertext), 0x-prefixed.
+    leaf_hash CHAR(66) NOT NULL,
+
+    msg_id UUID
+        NOT NULL UNIQUE
+        REFERENCES messages(id) ON DELETE CASCADE,
+
+    -- NULL until the leaf is included in a built root.
+    merkle_root_id INT
+        REFERENCES merkle_roots(id),
+
+    -- 0-based position in the Merkle tree (insertion order).
+    -- NULL until batched.
+    leaf_index INT,
+
+    state TEXT
+        NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'batched', 'confirmed')),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Fetch the N oldest pending leaves for the build worker.
+CREATE INDEX idx_merkle_leaves_pending
+    ON merkle_leaves(created_at)
+    WHERE state = 'pending';
+
+-- Reconstruct the ordered leaf list for a given root.
+CREATE INDEX idx_merkle_leaves_root
+    ON merkle_leaves(merkle_root_id, leaf_index);
+
+-- =========================================================
+-- MESSAGE HIDDEN
+--
+-- Per-user "delete for me" layer, independent of the global
+-- messages.deleted_at (which covers "delete for everyone").
+-- Hiding a message gates proof retrieval for that user only;
+-- all other participants are unaffected.  The on-chain anchor
+-- is never removed.
+-- =========================================================
+
+CREATE TABLE message_hidden (
+    msg_id    UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id   UUID        NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+    hidden_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (msg_id, user_id)
+);
 
 -- =========================================================
 -- DEVICE SESSIONS
@@ -839,67 +948,41 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =========================================================
--- RECOMMENDED BLOCKCHAIN FLOW
+-- BLOCKCHAIN ANCHORING FLOW
 --
--- Hashing uses keccak256 (NOT SHA-256) to match the
--- on-chain Solidity contract.
+-- Leaf formula (canonical — must match server AND verification page):
+--   leaf = keccak256(messages.ciphertext)
+--   Ciphertext bytes ONLY. No nonce, AD, id, or timestamp.
 --
--- Merkle leaves are derived from messages (the permanent
--- record), not from message_queue (transient).  The queue
--- row may be gone by the time a verification request arrives;
--- the messages row persists.
+-- Tree: merkletreejs { sortPairs: false, duplicateOdd: false }
+--   Insertion order preserved. Odd leaf promoted unchanged (not duplicated).
+--
+-- Send path:
+--   1. Client sends ciphertext + nonce + AD + client_leaf.
+--   2. Server recomputes keccak256(ciphertext) and rejects on mismatch (400).
+--   3. On match: INSERT messages row, INSERT merkle_leaves (state='pending').
+--
+-- Build phase (worker, every ~1 min tick):
+--   Trigger A: pending leaf count >= merkle_batch_size (100)
+--   Trigger B: oldest pending leaf age >= merkle_root_build_interval_ms (5 min)
+--   Action: buildTree(leafHexes), INSERT merkle_roots (state='built'),
+--           UPDATE merkle_leaves SET merkle_root_id, leaf_index, state='batched'
+--
+-- Broadcast phase (same worker tick):
+--   Trigger: built root count >= merkle_max_roots_per_tx (100)
+--         OR oldest built root age >= merkle_broadcast_interval_ms (20 min)
+--   Action:
+--     (a) Mark group state='broadcasting', attempts++
+--     (b) storeBatchHashes(roots) — persist tx_hash BEFORE awaiting confirmation
+--     (c) tx.wait() → decode HashStored logs → set block_timestamp, log_index,
+--         state='confirmed'; UPDATE merkle_leaves state='confirmed'
+--     (d) On error: state back to 'built' if attempts < cap, else 'failed'
+--
+-- Crash recovery (on worker restart):
+--   broadcasting + tx_hash NULL  → query HashStored events by root value;
+--                                   confirm if found, else return to 'built'
+--   broadcasting + tx_hash set   → getTransactionReceipt; confirm or return to 'built'
 -- =========================================================
-
-/*
-
-1. Select recent unanchored messages:
-
-SELECT id, ciphertext, nonce, associated_data, created_at
-FROM   messages
-WHERE  deleted_at IS NULL
-ORDER  BY created_at
-LIMIT  1000;
-
-2. Build Merkle tree from keccak256 leaf hashes:
-
-keccak256(
-    id ||
-    ciphertext ||
-    nonce ||
-    associated_data ||
-    created_at::text
-)
-
-   Use keccak256 — not SHA-256 — so leaf hashes and the
-   Merkle root can be verified directly on-chain by the
-   Solidity contract (Solidity's built-in keccak256()).
-
-3. Submit Merkle root to the Sepolia smart contract.
-
-4. Store root locally:
-
-INSERT INTO merkle_roots (
-    merkle_root,
-    is_pending
-)
-VALUES (
-    $1,   -- 0x-prefixed keccak256 hex string, CHAR(66)
-    TRUE
-);
-
-5. Store the transaction hash once broadcast:
-
-UPDATE merkle_roots
-SET tx_hash = $tx_hash
-WHERE id = $1;
-
-6. When the blockchain confirms:
-
-UPDATE merkle_roots
-SET is_pending = FALSE
-WHERE id = $1;
-
-*/
 
 -- =========================================================
 -- SQL INJECTION PROTECTION
