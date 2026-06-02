@@ -1,18 +1,9 @@
 import { query, withTransaction } from './db.js'
 import { computeRoot } from './merkle-core.js'
 
-// Build phase: turn pending merkle_leaves into built merkle_roots.
-//
-// Called on each worker tick.  Must be called while holding the
-// Postgres advisory lock (acquired by the combined worker in publisher.js).
-//
 // Two triggers:
-//   Full batch  — pending count ≥ batchSize → build one root of exactly
-//                 batchSize leaves (oldest first).  Repeat until below.
-//   Partial     — pending count < batchSize but oldest pending leaf is
-//                 older than buildIntervalMs → build one root of whatever
-//                 leaves are available (prevents indefinite delay for
-//                 low-traffic conversations).
+//   Full batch — pending count >= batchSize → build one root of exactly batchSize leaves (oldest first).
+//   Partial    — oldest pending leaf older than buildIntervalMs → build from whatever is available.
 
 export async function buildPendingRoots(cfg) {
   const { merkle_batch_size: batchSize, merkle_root_build_interval_ms: buildIntervalMs } = cfg
@@ -25,22 +16,15 @@ export async function buildPendingRoots(cfg) {
   )
 
   const { cnt, oldest } = countRows[0]
-  console.info(`[build-worker] tick: ${cnt} pending leaf(ves)`)
   if (cnt === 0) return
 
   const ageMs = oldest ? Date.now() - new Date(oldest).getTime() : 0
   const hasFullBatch = cnt >= batchSize
   const hasTimedOut  = ageMs >= buildIntervalMs
 
-  console.info(`[build-worker] trigger check: fullBatch=${hasFullBatch} (${cnt}/${batchSize}), timedOut=${hasTimedOut} (age=${Math.round(ageMs / 1000)}s / ${buildIntervalMs / 1000}s)`)
-
-  if (!hasFullBatch && !hasTimedOut) {
-    console.info('[build-worker] no trigger met — skipping build')
-    return
-  }
+  if (!hasFullBatch && !hasTimedOut) return
 
   const limit = hasFullBatch ? batchSize : cnt
-  console.info(`[build-worker] building root from up to ${limit} leaf(ves)`)
 
   await withTransaction(async (client) => {
     const { rows: leaves } = await client.query(
@@ -53,16 +37,10 @@ export async function buildPendingRoots(cfg) {
       [limit]
     )
 
-    if (leaves.length === 0) {
-      console.info('[build-worker] no leaves locked (all taken by concurrent worker) — skipping')
-      return
-    }
-
-    console.info(`[build-worker] locked ${leaves.length} leaf(ves): ids=[${leaves.map(l => l.id).join(', ')}]`)
+    if (leaves.length === 0) return
 
     const leafHexes = leaves.map(l => l.leaf_hash.trim())
     const root      = computeRoot(leafHexes)
-    console.info(`[build-worker] computed root: ${root}`)
 
     const { rows: rootRows } = await client.query(
       `INSERT INTO merkle_roots (merkle_root, state, created_at)
@@ -71,7 +49,6 @@ export async function buildPendingRoots(cfg) {
       [root]
     )
     const rootId = rootRows[0].id
-    console.info(`[build-worker] inserted merkle_roots row id=${rootId}`)
 
     const ids     = leaves.map(l => l.id)
     const indexes = leaves.map((_, i) => i)
@@ -84,7 +61,5 @@ export async function buildPendingRoots(cfg) {
        WHERE merkle_leaves.id = t.id`,
       [rootId, ids, indexes]
     )
-
-    console.info(`[build-worker] built root ${root} from ${leaves.length} leaf(ves) (rootId=${rootId}) ✓`)
   })
 }

@@ -322,7 +322,6 @@ app.post('/messages', requireAuth, async (req, res) => {
       [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData]
     )
 
-    // Anchor this message in the merkle leaf set for blockchain verification.
     const leafHash = computeLeaf(ciphertextBuf)
     await client.query(
       `INSERT INTO merkle_leaves (leaf_hash, msg_id, state) VALUES ($1, $2, 'pending')`,

@@ -123,7 +123,7 @@ describe('buildPendingRoots()', () => {
 
     it('assigns correct leaf_index values (0-based insertion order)', async () => {
       const leaves = [1, 2, 3].map(i => makeLeafRow(i, 400_000))
-      const captured = []
+      let capturedParams
 
       globalThis.__db.queryImpl = async () => ({
         rows: [{ cnt: 3, oldest: leaves[0].created_at }],
@@ -131,17 +131,14 @@ describe('buildPendingRoots()', () => {
       globalThis.__db.clientQueryResults = [
         { rows: leaves },
         { rows: [{ id: 7 }] },
-        { rows: [], onCall: (_t, p) => captured.push({ rootId: p[0], idx: p[1], id: p[2] }) },
-        { rows: [], onCall: (_t, p) => captured.push({ rootId: p[0], idx: p[1], id: p[2] }) },
-        { rows: [], onCall: (_t, p) => captured.push({ rootId: p[0], idx: p[1], id: p[2] }) },
+        { rows: [], onCall: (_t, p) => { capturedParams = p } }, // single bulk UPDATE
       ]
 
       await buildPendingRoots({ ...CFG_DEFAULT, merkle_root_build_interval_ms: 300_000 })
 
-      for (let i = 0; i < 3; i++) {
-        assert.strictEqual(captured[i].idx, i)
-        assert.strictEqual(captured[i].rootId, 7)
-      }
+      assert.strictEqual(capturedParams[0], 7)                    // rootId
+      assert.deepStrictEqual(capturedParams[1], [1, 2, 3])        // leaf ids
+      assert.deepStrictEqual(capturedParams[2], [0, 1, 2])        // 0-based indexes
     })
   })
 

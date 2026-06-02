@@ -1,16 +1,6 @@
-// ⚠️  SECURITY GAP (interim only) ─────────────────────────────────────────────
-// This middleware identifies the device via a plain x-device-id header.
-// That header is UNAUTHENTICATED: any client can claim any device id and will
-// pass the session-expiry check as long as that device has a live session.
-//
-// This is an accepted interim measure while /auth/verify (SRP round 2) is still
-// a stub.  Once /auth/verify lands and establishes a session key K, this MUST
-// be replaced by a session-key MAC on every request (e.g. HMAC-SHA256 over the
-// canonical request bytes, keyed with K).
-//
-// Additional risk: TLS terminates at the gateway; gateway→VM is plaintext HTTP,
-// so x-device-id is readable/spoofable on that hop as well.
-// ─────────────────────────────────────────────────────────────────────────────
+// INTERIM ONLY: x-device-id is unauthenticated — any client can claim any device id.
+// Replace with a session-key MAC (HMAC-SHA256 keyed with K) once /auth/verify lands.
+// Also: TLS terminates at the gateway; gateway→VM hop is plaintext, so the header is spoofable there too.
 
 import { query } from '../database/db.js'
 import { UUID_RE } from '../constants/auth.js'

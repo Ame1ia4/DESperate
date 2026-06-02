@@ -159,28 +159,28 @@ describe('broadcastBuiltRoots()', () => {
 
       storeBatchHashesFn = async () => ({ wait: async () => receipt, hash: TX_HASH })
 
-      globalThis.__db.queryImpl = async (text, params) => {
+      globalThis.__db.queryImpl = async (text) => {
         if (/COUNT/.test(text)) return { rows: [{ cnt: 2, oldest: new Date(0).toISOString() }] }
         if (/SELECT id, merkle_root FROM merkle_roots WHERE id/.test(text)) return { rows: roots }
         if (/UPDATE.*tx_hash/.test(text)) return { rows: [] }
-        if (/UPDATE.*block_timestamp/.test(text)) {
-          captured.push(params)
-          return { rows: [] }
-        }
-        if (/SELECT.*merkle_roots.*WHERE.*state.*'confirmed'/.test(text)) return { rows: [] }
         return { rows: [] }
       }
 
+      // Each withTransaction call gets a fresh client with callIndex=0, so both transactions
+      // share clientQueryResults[0] and [1]. Use the query text in onCall to distinguish:
+      // client1 reads [0]=SELECT, [1]=UPDATE broadcasting
+      // client2 reads [0]=UPDATE root1, [1]=UPDATE leaves root1, [2]=UPDATE root2, [3]=UPDATE leaves root2
+      const capture = (t, p) => { if (/block_timestamp/.test(t)) captured.push(p) }
       globalThis.__db.clientQueryResults = [
-        { rows: roots },
-        { rows: [] },
-        { rows: [] }, { rows: [] }, // UPDATE leaves for each root
+        { rows: roots, onCall: capture }, // client1: SELECT FOR UPDATE; client2: UPDATE confirmed root 1
+        { rows: [], onCall: capture },    // client1: UPDATE state=broadcasting; client2: UPDATE leaves root 1
+        { rows: [], onCall: capture },    // client2: UPDATE confirmed root 2
+        { rows: [] },                     // client2: UPDATE leaves root 2
       ]
 
       await broadcastBuiltRoots(CFG)
 
-      // Both roots should have their block_timestamp set
-      assert.ok(captured.length >= 1, 'block_timestamp must be persisted for confirmed roots')
+      assert.ok(captured.length >= 2, 'block_timestamp must be persisted for all confirmed roots')
     })
   })
 
