@@ -83,6 +83,12 @@ MessageController::MessageController(
 
     connect(m_api, &ApiClient::revokeMessageFailed, this, [this](const QString&) {
         emit messageRevokeFailed();
+    connect(m_api, &ApiClient::deleteMessageSucceeded, this, [this](const QString& messageId) {
+        m_model->removeMessage(messageId);
+    });
+
+    connect(m_api, &ApiClient::revokeMessageSucceeded, this, [this](const QString& messageId) {
+        m_model->markRevoked(messageId);
     });
 
     connect(m_conversations, &ConversationController::sessionReadyChanged, this, [this]() {
