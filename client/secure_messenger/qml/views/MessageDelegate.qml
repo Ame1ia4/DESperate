@@ -60,6 +60,12 @@ Item {
                  : (outgoing              ? "#FFFFFF"  : "#0B0B0B")
             font.pixelSize: 14
             font.italic: isDeleted || (revoked && !outgoing)
+            text:      revoked ? "[ Message revoked ]" : plaintext
+            wrapMode:  Text.WordWrap
+            color:     revoked ? (outgoing ? "#C8EDD4" : "#888888")
+                               : (outgoing ? "#FFFFFF" : "#0B0B0B")
+            font.pixelSize: 14
+            font.italic: revoked
             width: Math.min(Math.max(60, bubble.contentMaxWidth - 48), implicitWidth)
         }
 
