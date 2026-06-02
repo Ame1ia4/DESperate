@@ -141,6 +141,10 @@ class SrpSession:
 
         return M.hex()
 
+    def set_password(self, password: str) -> None:
+        """Replace the stored password before process_challenge is called."""
+        self._password = password
+
     def verify_server(self, M2_hex: str) -> bool:
         """
         Verify the server's session proof M2 (mutual authentication).

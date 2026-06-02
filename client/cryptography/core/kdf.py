@@ -89,6 +89,11 @@ INFO_LOCAL_KEY_ENC      = b"local-v1-key-encryption"
 # password hash salt.
 INFO_LOCAL_KEY_MASTER   = b"local-v1-master-key"
 
+# SRP synthetic password — the password fed into SRP so that the verifier is
+# protected by Argon2id rather than only SHA-256. Must differ from all other
+# INFO_* constants to ensure key independence.
+INFO_SRP_AUTH           = b"srp-v1-auth"
+
 
 # Argon2id functions have moved to core/password.py.
 # Re-exported here so existing callers importing from core.kdf continue to work.
@@ -155,6 +160,37 @@ def hkdf_derive(
         salt      = salt,
         info      = info,
     ).derive(ikm)
+
+
+def derive_master_components(
+    password: str,
+    salt:     bytes | None = None,
+) -> tuple[bytes, bytes, bytes]:
+    """
+    Derive SRP synthetic password and keystore encryption key from one Argon2id call.
+
+    Run Argon2id once on the master password, then use HKDF with distinct info
+    strings to produce two independent sub-keys.  The same salt must be used on
+    every login — pass the srp_salt returned by /auth/init (which equals the salt
+    generated during registration and stored on the server).
+
+    Parameters
+    ----------
+    password : the user's master password
+    salt     : ARGON2_SALT_LEN-byte salt. Generated freshly when None (registration).
+               Must be the server-returned srp_salt on subsequent calls (login).
+
+    Returns
+    -------
+    (srp_pass, keystore_key, salt) — all bytes
+        srp_pass    : 32 bytes; encode as .hex() before passing to SrpSession
+        keystore_key: 32 bytes; use directly as ChaCha20-Poly1305 key
+        salt        : the salt used — send to server as srp_salt on first call
+    """
+    master_key, used_salt = argon2id_derive_key(password, salt)
+    srp_pass     = hkdf_derive(master_key, used_salt, INFO_SRP_AUTH)
+    keystore_key = hkdf_derive(master_key, used_salt, INFO_LOCAL_KEY_ENC)
+    return srp_pass, keystore_key, used_salt
 
 
 def hkdf_derive_many(
