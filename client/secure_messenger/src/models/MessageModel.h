@@ -21,7 +21,8 @@ public:
         PlaintextRole,
         OutgoingRole,
         VerifiedRole,
-        MessageIdRole
+        MessageIdRole,
+        RevokedRole
     };
 
     int rowCount(
@@ -40,6 +41,8 @@ public:
         const DecryptedMessage &message
         );
     void clear();
+    void removeMessage(const QString& messageId);
+    void markRevoked(const QString& messageId);
 
 private:
     std::vector<DecryptedMessage> m_messages;

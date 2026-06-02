@@ -10,6 +10,7 @@ Item {
     required property bool    verified
     required property string  messageId
     required property var     timestamp
+    required property bool    revoked
 
     width:  ListView.view ? ListView.view.width : 0
     height: bubble.height + 16
@@ -49,11 +50,12 @@ Item {
                 leftMargin:  14
                 rightMargin: 14
             }
-            text:      plaintext
+            text:      revoked ? "[ Message revoked ]" : plaintext
             wrapMode:  Text.WordWrap
-            color:     outgoing ? "#FFFFFF" : "#0B0B0B"
+            color:     revoked ? (outgoing ? "#C8EDD4" : "#888888")
+                               : (outgoing ? "#FFFFFF" : "#0B0B0B")
             font.pixelSize: 14
-            // Flexible width: wrap at contentMaxWidth minus reserved paddings
+            font.italic: revoked
             width: Math.min(Math.max(60, bubble.contentMaxWidth - 48), implicitWidth)
         }
 
@@ -145,7 +147,13 @@ Item {
 
         MenuItem {
             text: "Forward"
+            enabled: !revoked
             onTriggered: forwardBar.visible = !forwardBar.visible
+        }
+
+        MenuItem {
+            text: "Download"
+            onTriggered: messageController.downloadMessage(messageId, plaintext)
         }
 
         MenuSeparator {}
@@ -159,6 +167,7 @@ Item {
             visible: outgoing
             height:  outgoing ? implicitHeight : 0
             text:    "Revoke delivery"
+            enabled: !revoked
             onTriggered: messageController.revokeMessage(
                 messageId,
                 conversationController.deviceIdForConversation(
@@ -201,7 +210,7 @@ Item {
                     verticalAlignment:   Text.AlignVCenter
                 }
                 onClicked: {
-                    conversationController.createChat(forwardTo.text.trim())
+                    messageController.forwardMessage(forwardTo.text.trim(), plaintext)
                     forwardBar.visible = false
                     forwardTo.clear()
                 }
