@@ -407,7 +407,14 @@ void ApiClient::deleteMessage(const QString& messageId)
     auto request = makeRequest(
         "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)));
     auto* reply  = m_network.deleteResource(request);
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        reply->deleteLater();
+        if (status >= 200 && status < 300)
+            emit deleteMessageSucceeded(messageId);
+        else
+            emit deleteMessageFailed(messageId);
+    });
 }
 
 void ApiClient::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
@@ -417,7 +424,14 @@ void ApiClient::revokeMessage(const QString& messageId, const QString& recipient
     QJsonObject body;
     body["recipient_device_id"] = recipientDeviceId;
     auto* reply = m_network.post(request, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        reply->deleteLater();
+        if (status >= 200 && status < 300)
+            emit revokeMessageSucceeded(messageId);
+        else
+            emit revokeMessageFailed(messageId);
+    });
 }
 
 void ApiClient::fetchKeyBundle(const QString& username)

@@ -80,6 +80,10 @@ signals:
     void createConversationFailed(QString reason);
     void fetchUserDevicesSucceeded(QJsonArray devices);
     void fetchUserDevicesFailed(QString reason);
+    void deleteMessageSucceeded(QString messageId);
+    void deleteMessageFailed(QString messageId);
+    void revokeMessageSucceeded(QString messageId);
+    void revokeMessageFailed(QString messageId);
 
 private:
     void doSrpInit(

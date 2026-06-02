@@ -1,7 +1,11 @@
 #include "MessageController.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QUuid>
 
 #include "ConversationController.h"
@@ -58,6 +62,22 @@ MessageController::MessageController(
         this,
         &MessageController
         ::handleDecryptFailed);
+
+    connect(m_api, &ApiClient::deleteMessageSucceeded, this, [this](const QString& messageId) {
+        m_model->removeMessage(messageId);
+    });
+
+    connect(m_api, &ApiClient::revokeMessageSucceeded, this, [this](const QString& messageId) {
+        m_model->markRevoked(messageId);
+    });
+
+    connect(m_conversations, &ConversationController::sessionReadyChanged, this, [this]() {
+        if (!m_conversations->sessionReady()) return;
+        const QString convId = m_conversations->currentConversationId();
+        if (!m_pendingForwards.contains(convId)) return;
+        const QString text = m_pendingForwards.take(convId);
+        sendText(convId, text);
+    });
 }
 
 void MessageController::deleteMessage(const QString& messageId)
@@ -68,6 +88,53 @@ void MessageController::deleteMessage(const QString& messageId)
 void MessageController::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
 {
     m_api->revokeMessage(messageId, recipientDeviceId);
+}
+
+void MessageController::forwardMessage(const QString& toUsername, const QString& plaintext)
+{
+    const QString trimmed = toUsername.trimmed();
+    if (trimmed.isEmpty() || plaintext.isEmpty()) return;
+
+    // Store plaintext keyed by the conversation ID we're about to create/open.
+    // The ID is captured from createConversationSucceeded before createChat fires it.
+    connect(
+        m_api,
+        &ApiClient::createConversationSucceeded,
+        this,
+        [this, plaintext](const QString& conversationId) {
+            m_pendingForwards.insert(conversationId, plaintext);
+        },
+        Qt::SingleShotConnection);
+
+    // createChat handles conversation creation, loadConversations (for device IDs),
+    // openConversation, and PQXDH session setup. sessionReadyChanged fires when ready.
+    m_conversations->createChat(trimmed);
+}
+
+void MessageController::downloadMessage(const QString& messageId, const QString& plaintext)
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (dir.isEmpty()) {
+        emit messageDownloadFailed(QStringLiteral("Cannot locate Downloads folder."));
+        return;
+    }
+
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString path      = QDir(dir).filePath(QStringLiteral("message_%1.txt").arg(timestamp));
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        emit messageDownloadFailed(QStringLiteral("Failed to save: ") + file.errorString());
+        return;
+    }
+
+    QTextStream out(&file);
+    out << "Message ID: " << messageId << "\n";
+    out << "Downloaded: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n\n";
+    out << plaintext << "\n";
+    file.close();
+
+    emit messageDownloaded(path);
 }
 
 void MessageController::sendText(
