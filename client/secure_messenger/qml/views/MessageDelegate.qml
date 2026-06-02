@@ -11,83 +11,123 @@ Item {
     required property string  messageId
     required property var     timestamp
 
-    width:  ListView.view.width
-    height: row.height + 16
+    width:  ListView.view ? ListView.view.width : 0
+    height: bubble.height + 16
 
-    // ── Layout: avatar space + bubble, mirrored for outgoing ─────────────────
-    Row {
-        id: row
-        anchors {
-            left:   parent.left
-            right:  parent.right
-            top:    parent.top
-            topMargin: 8
-            leftMargin:  outgoing ? parent.width * 0.22 : 8
-            rightMargin: outgoing ? 8 : parent.width * 0.22
+    // ── Bubble ────────────────────────────────────────────────────────────────
+    Rectangle {
+        id: bubble
+
+        // Max width 75% of the view, with padding for text
+        property real contentMaxWidth: root.width * 0.75 - 28
+
+        anchors.top:        parent.top
+        anchors.topMargin:  8
+        anchors.right:      outgoing ? parent.right     : undefined
+        anchors.left:       outgoing ? undefined         : parent.left
+        anchors.rightMargin: outgoing ? 8 : 0
+        anchors.leftMargin:  outgoing ? 0 : 8
+
+        // Message text drives the bubble size but will wrap at contentMaxWidth
+        radius: 14
+        // WhatsApp-ish colors: green for outgoing, light gray for incoming
+        color: outgoing ? "#25D366" : "#ECECEC"
+        border.color: outgoing ? "#1DA851" : "#D6D6D6"
+        border.width: 1
+
+        // Message text
+        Text {
+            id: msgText
+            anchors {
+                top:         parent.top
+                left:        parent.left
+                topMargin:   12
+                leftMargin:  14
+                rightMargin: 14
+            }
+            text:      plaintext
+            wrapMode:  Text.WordWrap
+            color:     outgoing ? "#FFFFFF" : "#0B0B0B"
+            font.pixelSize: 14
+            // Flexible width: prefer natural width but wrap at contentMaxWidth
+            // Reserve space for the top-right menu button so text doesn't get overlapped
+            width: Math.min(Math.max(contentMaxWidth - 36, 40), implicitWidth)
         }
-        spacing: 0
 
-        // ── Bubble ────────────────────────────────────────────────────────────
-        Rectangle {
-            id: bubble
-            width:  parent.width
-            radius: 16
-            color:  outgoing ? "#3C8A5A" : "#2A5B45"
+        // Footer: timestamp + ticks
+        Row {
+            id: footer
+            anchors {
+                top:         msgText.bottom
+                topMargin:   6
+                right:       parent.right
+                rightMargin: 14
+                bottom:      parent.bottom
+                bottomMargin: 8
+            }
+            spacing: 4
+            layoutDirection: Qt.RightToLeft
 
-            // Shadow effect
-            layer.enabled: true
-            layer.effect: null
+            Text {
+                visible: outgoing
+                text:    verified ? "✓✓" : "✓"
+                color:   verified ? "#FFFFFF" : "#B9EAC0"
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+            }
 
-            Column {
-                anchors {
-                    fill: parent
-                    margins: 12
+            Text {
+                text: {
+                    if (!timestamp) return ""
+                    if (timestamp instanceof Date) return Qt.formatTime(timestamp, "hh:mm")
+                    var s = timestamp.toString()
+                    return s.length >= 16 ? s.substring(11, 16) : s
                 }
-                spacing: 6
+                color:     outgoing ? "#FFFFFF" : "#4F4F4F"
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
 
-                // Message text
+        // Mini-menu button (top-right corner)
+        Button {
+            id: menuButton
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: 6
+            anchors.rightMargin: 6
+            implicitWidth: 28
+            implicitHeight: 28
+            background: Rectangle { color: "transparent" }
+            contentItem: Rectangle {
+                width: parent.implicitWidth
+                height: parent.implicitHeight
+                radius: width/2
+                color: "transparent"
+                border.color: "transparent"
                 Text {
-                    width: parent.width
-                    text:  plaintext
-                    wrapMode: Text.Wrap
-                    color: "#F8F0D7"
+                    anchors.centerIn: parent
+                    text: "⋯"
+                    color: outgoing ? "#EAF9F0" : "#2B2B2B"
                     font.pixelSize: 14
                 }
-
-                // Footer: timestamp + status
-                Row {
-                    width: parent.width
-                    spacing: 6
-                    layoutDirection: outgoing ? Qt.RightToLeft : Qt.LeftToRight
-
-                    Text {
-                        text: timestamp instanceof Date
-                              ? Qt.formatTime(timestamp, "hh:mm")
-                              : (typeof timestamp === "string" ? timestamp.substring(11, 16) : "")
-                        color:     "#A8D5B5"
-                        font.pixelSize: 10
-                    }
-
-                    Text {
-                        visible: outgoing
-                        text:    verified ? "✓✓" : "✓"
-                        color:   verified ? "#7EE8A2" : "#A8D5B5"
-                        font.pixelSize: 10
-                    }
-                }
             }
-
-            // Right-click / press-and-hold to open action menu
-            MouseArea {
-                anchors.fill: parent
-                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                onClicked: function(mouse) {
-                    if (mouse.button === Qt.RightButton)
-                        actionMenu.popup()
-                }
-                onPressAndHold: actionMenu.popup()
-            }
+            onClicked: actionMenu.popup()
         }
+
+        // Right-click / press-and-hold → action menu
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            onClicked: function(mouse) {
+                if (mouse.button === Qt.RightButton) actionMenu.popup()
+            }
+            onPressAndHold: actionMenu.popup()
+        }
+
+        // Bubble width depends on text width + padding
+        width: Math.min(msgText.width + 28, root.width * 0.75)
+        height: msgText.height + footer.height + 32
     }
 
     // ── Action menu ───────────────────────────────────────────────────────────
@@ -96,20 +136,18 @@ Item {
 
         MenuItem {
             text: "Copy"
-            onTriggered: Clipboard.copy !== undefined
-                         ? Clipboard.copy(plaintext)
-                         : Qt.copyToClipboard(plaintext)
+            onTriggered: Qt.copyToClipboard(plaintext)
         }
 
         MenuItem {
             text: "Forward"
-            onTriggered: forwardField.visible = true
+            onTriggered: forwardBar.visible = !forwardBar.visible
         }
 
         MenuSeparator {}
 
         MenuItem {
-            text:    "Delete for me"
+            text: "Delete for me"
             onTriggered: messageController.deleteMessage(messageId)
         }
 
@@ -118,22 +156,17 @@ Item {
             height:  outgoing ? implicitHeight : 0
             text:    "Revoke delivery"
             onTriggered: messageController.revokeMessage(
-                             messageId,
-                             conversationController.deviceIdForConversation(
-                                 conversationController.currentConversationId))
+                messageId,
+                conversationController.deviceIdForConversation(
+                    conversationController.currentConversationId))
         }
     }
 
-    // ── Inline forward bar (shown after "Forward") ────────────────────────────
+    // ── Inline forward bar ────────────────────────────────────────────────────
     Rectangle {
-        id: forwardField
+        id: forwardBar
         visible: false
-        anchors {
-            left:  parent.left
-            right: parent.right
-            top:   row.bottom
-            topMargin: 4
-        }
+        anchors { left: parent.left; right: parent.right; top: bubble.bottom; topMargin: 4 }
         height: visible ? 36 : 0
         color: "#173D28"
         radius: 8
@@ -158,16 +191,14 @@ Item {
                 implicitHeight: 28
                 background: Rectangle { color: "#4FAE7C"; radius: 6 }
                 contentItem: Text {
-                    text: parent.text
-                    color: "#1B3B28"
+                    text: parent.text; color: "#1B3B28"
                     font: parent.font
                     horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                    verticalAlignment:   Text.AlignVCenter
                 }
                 onClicked: {
-                    // Forward = open/create a conversation and send the same text
                     conversationController.createChat(forwardTo.text.trim())
-                    forwardField.visible = false
+                    forwardBar.visible = false
                     forwardTo.clear()
                 }
             }
@@ -175,17 +206,15 @@ Item {
             Button {
                 text: "✕"
                 font.pixelSize: 12
-                implicitWidth: 28
-                implicitHeight: 28
+                implicitWidth: 28; implicitHeight: 28
                 background: Rectangle { color: "#5A3030"; radius: 6 }
                 contentItem: Text {
-                    text: parent.text
-                    color: "#F8F0D7"
+                    text: parent.text; color: "#F8F0D7"
                     font: parent.font
                     horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                    verticalAlignment:   Text.AlignVCenter
                 }
-                onClicked: { forwardField.visible = false; forwardTo.clear() }
+                onClicked: { forwardBar.visible = false; forwardTo.clear() }
             }
         }
     }

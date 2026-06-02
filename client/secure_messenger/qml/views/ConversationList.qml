@@ -85,7 +85,15 @@ Rectangle {
             leftMargin: 8
             rightMargin: 8
 
+            id: convList
             model: conversationController ? conversationController.conversations : null
+            verticalLayoutDirection: ListView.TopToBottom
+
+            onCountChanged: {
+                if (count > 0) {
+                    positionViewAtIndex(count - 1, ListView.End)
+                }
+            }
 
             delegate: Rectangle {
                 width: ListView.view.width - 16

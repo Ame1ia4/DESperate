@@ -197,6 +197,8 @@ void MessageController::handleEncryptCompleted(
     m_conversations
         ->appendLocalMessage(message);
 
+    m_store->storeDecryptedMessage(message);
+
     emit messageSent();
 }
 

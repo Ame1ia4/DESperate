@@ -22,14 +22,22 @@ Rectangle {
         }
 
         ListView {
+            id: messageList
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
 
             model: conversationController ? conversationController.messages : null
-            verticalLayoutDirection: ListView.BottomToTop
+            verticalLayoutDirection: ListView.TopToBottom
 
             delegate: MessageDelegate {}
+
+            onCountChanged: {
+                if (count > 0) {
+                    // keep view scrolled to the most recent message (bottom)
+                    positionViewAtIndex(count - 1, ListView.End)
+                }
+            }
         }
 
         Text {

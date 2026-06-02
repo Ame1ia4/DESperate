@@ -29,21 +29,21 @@ void LocalMessageStore::storeOutgoingMessage(
             .toString();
 
     typedEnvelope.ciphertext =
-        QByteArray::fromBase64(
+        QByteArray::fromHex(
             envelope.value(
                         "ciphertext")
                 .toString()
                 .toUtf8());
 
     typedEnvelope.nonce =
-        QByteArray::fromBase64(
+        QByteArray::fromHex(
             envelope.value(
                         "nonce")
                 .toString()
                 .toUtf8());
 
     typedEnvelope.associatedData =
-        QByteArray::fromBase64(
+        QByteArray::fromHex(
             envelope.value(
                         "associated_data")
                 .toString()
