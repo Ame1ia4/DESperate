@@ -373,6 +373,16 @@ QString ConversationController::participantForConversation(
         conversationId, QString());
 }
 
+void ConversationController::reinitiateSession(const QString& conversationId)
+{
+    if (conversationId.isEmpty())
+        return;
+    m_cryptoClient->resetSession(conversationId);
+    const QString participant = m_participants.value(conversationId);
+    if (!participant.isEmpty())
+        setupSessionAsync(conversationId, participant);
+}
+
 void ConversationController::createChat(const QString& username)
 {
     if (username.trimmed().isEmpty()) {

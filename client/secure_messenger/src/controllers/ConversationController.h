@@ -76,6 +76,8 @@ public slots:
 
     Q_INVOKABLE void createChat(const QString& username);
 
+    void reinitiateSession(const QString& conversationId);
+
 signals:
     void currentConversationIdChanged();
 

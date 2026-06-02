@@ -414,6 +414,12 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 pass
 
         if conversation_id not in _sessions:
+            try:
+                _require_session(conversation_id)
+            except (ValueError, FileNotFoundError, KeyError):
+                pass
+
+        if conversation_id not in _sessions:
             if not initiation_bundle:
                 raise ValueError(
                     f"No session for {conversation_id!r} and no initiation_bundle — "
@@ -498,6 +504,18 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         plaintext = _run(entry.ratchet.decrypt(signed, aad))
 
         return {"plaintext": plaintext.decode("utf-8", errors="replace")}
+
+    if method == "reset_session":
+        conversation_id = params["conversation_id"]
+        _sessions.pop(conversation_id, None)
+        _pending_sessions.pop(conversation_id, None)
+        try:
+            store = _require_store()
+            store.delete_session(conversation_id)
+            store.delete_session(f"{_META_KEY_PREFIX}{conversation_id}")
+        except Exception:
+            pass
+        return {"success": True}
 
     raise ValueError(f"Unknown method: {method!r}")
 
