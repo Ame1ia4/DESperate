@@ -117,6 +117,7 @@ void MessageModel::markRevoked(const QString& messageId)
 {
     for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
         if (m_messages[i].id == messageId) {
+            if (m_messages[i].revoked) return;
             m_messages[i].revoked = true;
             const QModelIndex idx = index(i);
             emit dataChanged(idx, idx, {RevokedRole});
@@ -129,6 +130,7 @@ void MessageModel::markDeleted(const QString& messageId)
 {
     for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
         if (m_messages[i].id == messageId) {
+            if (m_messages[i].isDeleted) return;
             m_messages[i].isDeleted = true;
             const QModelIndex idx = index(i);
             emit dataChanged(idx, idx, {IsDeletedRole});

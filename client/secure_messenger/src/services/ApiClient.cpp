@@ -330,7 +330,10 @@ void ApiClient::pullMessages(
 
         const auto response  = QJsonDocument::fromJson(body).object();
         const auto envelopes = response.value("envelopes").toArray();
+        const auto notices   = response.value("notices").toArray();
         emit pullMessagesSucceeded(envelopes);
+        if (!notices.isEmpty())
+            emit pullNoticesSucceeded(notices);
     });
 }
 

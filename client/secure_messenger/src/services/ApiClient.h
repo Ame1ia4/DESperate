@@ -72,6 +72,7 @@ signals:
     void fetchConversationMessagesSucceeded(QJsonArray messages);
     void fetchConversationMessagesFailed(QString reason);
     void pullMessagesSucceeded(QJsonArray envelopes);
+    void pullNoticesSucceeded(QJsonArray notices);
     void pullMessagesFailed();
     void acknowledgeMessageSucceeded(QString messageId);
     void acknowledgeMessageFailed(QString messageId);

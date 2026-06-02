@@ -498,6 +498,32 @@ void MessageController::pullAndProcessMessages(
         },
         Qt::SingleShotConnection);
 
+    connect(
+        m_api,
+        &ApiClient::pullNoticesSucceeded,
+        this,
+        [this](const QJsonArray& notices) {
+            for (const auto& v : notices) {
+                const auto notice    = v.toObject();
+                const QString msgId  = notice.value("message_id").toString();
+                const QString type   = notice.value("type").toString();
+                if (msgId.isEmpty()) continue;
+
+                if (type == QStringLiteral("deleted")) {
+                    qDebug() << "[NOTICE] deletion:" << msgId;
+                    m_model->markDeleted(msgId);
+                    m_store->markMessageDeleted(msgId);
+                    m_conversations->markLocalDeleted(msgId);
+                } else if (type == QStringLiteral("revoked")) {
+                    qDebug() << "[NOTICE] revoke:" << msgId;
+                    m_model->markRevoked(msgId);
+                    m_store->markMessageRevoked(msgId);
+                    m_conversations->markLocalRevoked(msgId);
+                }
+            }
+        },
+        Qt::SingleShotConnection);
+
     m_api->pullMessages(deviceId);
 }
 

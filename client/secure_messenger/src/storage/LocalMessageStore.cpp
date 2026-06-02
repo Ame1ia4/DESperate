@@ -308,14 +308,18 @@ void LocalMessageStore::removeDecryptedMessage(const QString& messageId)
 void LocalMessageStore::markMessageRevoked(const QString& messageId)
 {
     if (!m_messageIndex.contains(messageId)) return;
-    m_decryptedMessages[m_messageIndex.value(messageId)].revoked = true;
+    auto& msg = m_decryptedMessages[m_messageIndex.value(messageId)];
+    if (msg.revoked) return;
+    msg.revoked = true;
     saveState();
 }
 
 void LocalMessageStore::markMessageDeleted(const QString& messageId)
 {
     if (!m_messageIndex.contains(messageId)) return;
-    m_decryptedMessages[m_messageIndex.value(messageId)].isDeleted = true;
+    auto& msg = m_decryptedMessages[m_messageIndex.value(messageId)];
+    if (msg.isDeleted) return;
+    msg.isDeleted = true;
     saveState();
 }
 
