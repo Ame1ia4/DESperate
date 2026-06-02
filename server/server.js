@@ -363,7 +363,16 @@ app.post('/messages', requireAuth, async (req, res) => {
       [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null]
     )
 
-    const leafHash = computeLeaf(ciphertextBuf)
+    // M2 fix applied: pass context fields so the leaf is bound to this
+    // specific message, conversation, and sender. Without these, encodeField
+    // fills all three with zero bytes and the hash reduces to keccak256(ciphertext),
+    // allowing a ciphertext to be transplanted between conversations with a
+    // valid proof. msg.id is available here because the INSERT RETURNING fires first.
+    const leafHash = computeLeaf(ciphertextBuf, {
+      messageId:      String(msg.id),
+      conversationId: conversation_id,
+      senderDeviceId: req.deviceId,
+    })
     await client.query(
       `INSERT INTO merkle_leaves (leaf_hash, msg_id, state) VALUES ($1, $2, 'pending')`,
       [leafHash, msg.id]

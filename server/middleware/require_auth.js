@@ -11,10 +11,11 @@ import { getSessionKey } from '../state/session_keys.js'
 //   X-Request-Time: <Unix timestamp in milliseconds>
 //   X-Request-HMAC: HMAC-SHA256(hmac_key, device_id + ":" + timestamp) hex
 //
-// M4 fix: added per-request HMAC over a timestamp to bound the replay
-// window to ±30 s. A captured bearer token alone is no longer sufficient
-// — the attacker would also need the hmac_key (never transmitted after
-// login) to forge a valid X-Request-HMAC for a new timestamp.
+// M4 fix: mandatory per-request HMAC over a timestamp bounds the replay
+// window to ±30 s. X-Request-Time and X-Request-HMAC are now required on
+// every request — missing headers are rejected with 401. A captured bearer
+// token alone is no longer sufficient: the attacker also needs hmac_key,
+// which is only transmitted once at login and never again.
 // Session TTL reduced from 24 h to 2 h (enforced in storeSessionKey).
 //
 // Known limitation: true TLS channel binding (RFC 5929) is not available
@@ -77,30 +78,39 @@ export async function requireAuth(req, res, next) {
   }
 
   // 3. M4 fix: per-request timestamp + HMAC replay window (±30 s).
+  // Headers are now MANDATORY — a bearer token alone is no longer sufficient.
+  // The C++ client must send X-Request-Time and X-Request-HMAC on every request
+  // using the hmac_key returned at login. Previously these were optional, which
+  // meant possession of a stolen bearer token was still sufficient for full access,
+  // making the auth_verify.js security claim ("bearer token alone is no longer
+  // sufficient") false. Now it is enforced.
   const requestTime = parseInt(req.headers['x-request-time'] || '0', 10)
-  const requestHmac = req.headers['x-request-hmac'] || ''
-  if (requestTime && requestHmac) {
-    const skew = Math.abs(Date.now() - requestTime)
-    if (skew > 30_000) {
-      console.warn('requireAuth: request timestamp outside ±30 s window', { deviceId, skew })
-      return res.status(401).json({ error: 'Request timestamp out of range' })
-    }
-    const expected = createHmac('sha256', Buffer.from(storedKey.hmacKey, 'hex'))
-      .update(`${deviceId}:${requestTime}`)
-      .digest('hex')
-    try {
-      const expectedBuf = Buffer.from(expected,    'hex')
-      const receivedBuf = Buffer.from(requestHmac, 'hex')
-      if (expectedBuf.length !== receivedBuf.length || !timingSafeEqual(expectedBuf, receivedBuf)) {
-        console.warn('requireAuth: HMAC mismatch', { deviceId })
-        return res.status(401).json({ error: 'Authentication required' })
-      }
-    } catch {
+  const requestHmac = (req.headers['x-request-hmac'] || '').trim()
+
+  if (!requestTime || !requestHmac) {
+    console.warn('requireAuth: missing X-Request-Time or X-Request-HMAC', { deviceId })
+    return res.status(401).json({ error: 'X-Request-Time and X-Request-HMAC are required' })
+  }
+
+  const skew = Math.abs(Date.now() - requestTime)
+  if (skew > 30_000) {
+    console.warn('requireAuth: request timestamp outside ±30 s window', { deviceId, skew })
+    return res.status(401).json({ error: 'Request timestamp out of range' })
+  }
+
+  const expected = createHmac('sha256', Buffer.from(storedKey.hmacKey, 'hex'))
+    .update(`${deviceId}:${requestTime}`)
+    .digest('hex')
+  try {
+    const expectedBuf = Buffer.from(expected,    'hex')
+    const receivedBuf = Buffer.from(requestHmac, 'hex')
+    if (expectedBuf.length !== receivedBuf.length || !timingSafeEqual(expectedBuf, receivedBuf)) {
+      console.warn('requireAuth: HMAC mismatch', { deviceId })
       return res.status(401).json({ error: 'Authentication required' })
     }
+  } catch {
+    return res.status(401).json({ error: 'Authentication required' })
   }
-  // Note: if X-Request-HMAC is absent the token check alone is used.
-  // Once the C++ client is updated to send the headers, make them required.
 
   req.deviceId = deviceId
   next()
