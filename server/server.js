@@ -40,7 +40,6 @@ app.use(helmet({
       scriptSrc: [
         "'strict-dynamic'",
         (_req, res) => `'nonce-${res.locals.nonce}'`,
-        'https:',
       ],
       styleSrc:  ["'self'", 'https://fonts.googleapis.com'],
       fontSrc:   ["'self'", 'https://fonts.gstatic.com'],
@@ -49,6 +48,24 @@ app.use(helmet({
       objectSrc: ["'none'"],
       baseUri:   ["'self'"],
       formAction: ["'self'"],
+    },
+  },
+  // Explicitly disable browser features this application does not use.
+  // Prevents a compromised page from accessing sensitive device APIs.
+  permissionsPolicy: {
+    features: {
+      camera:             [],
+      microphone:         [],
+      geolocation:        [],
+      payment:            [],
+      usb:                [],
+      bluetooth:          [],
+      accelerometer:      [],
+      gyroscope:          [],
+      magnetometer:       [],
+      ambientLightSensor: [],
+      displayCapture:     [],
+      fullscreen:         ["'self'"],
     },
   },
 }))
