@@ -40,6 +40,9 @@ app.use(helmet({
       scriptSrc: [
         "'strict-dynamic'",
         (_req, res) => `'nonce-${res.locals.nonce}'`,
+        // NOTE: 'https:' removed — it is a legacy fallback that allows scripts
+        // from any HTTPS origin in browsers that do not support strict-dynamic.
+        // With strict-dynamic, nonce-based trust propagation is sufficient.
       ],
       styleSrc:  ["'self'", 'https://fonts.googleapis.com'],
       fontSrc:   ["'self'", 'https://fonts.gstatic.com'],
@@ -79,6 +82,19 @@ const authLimiter    = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
 const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 })
 app.use(generalLimiter)
 
+// H3 fix: per-(requester-device, target-username) rate limit on key bundle fetches.
+// Without this, any authenticated user could drain a target's entire OPK pool
+// (typically 20 keys) within the general 100/15min window, forcing every new
+// session to fall back to the identity KEM key and losing PQ forward secrecy.
+// Limit: 3 fetches per requester per target per 10 minutes — enough for legitimate
+// use (open a conversation, one retry) without allowing pool exhaustion.
+const opkFetchLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  keyGenerator: (req) => `${req.deviceId}:${req.params.username}`,
+  message: { error: 'Too many key bundle requests for this user. Try again later.' },
+})
+
 // ── Public routes ──
 const serveVerification = (req, res) => {
   const html = verificationHtmlTemplate.replace(/<script/g, `<script nonce="${res.locals.nonce}"`)
@@ -110,7 +126,7 @@ app.post('/auth/login',    authLimiter, authVerify)
 
 // ── Public key bundle fetch (protected) ──
 // Returns the public PQXDH bundle for a username so a peer can initiate a session.
-app.get('/keys/:username', requireAuth, async (req, res) => {
+app.get('/keys/:username', requireAuth, opkFetchLimiter, async (req, res) => {
   const { username } = req.params
   if (!username || username.length > 50)
     return res.status(400).json({ error: 'Invalid username' })

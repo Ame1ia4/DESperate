@@ -243,7 +243,7 @@ void ConversationController::setupSessionAsync(
         m_apiClient,
         &ApiClient::fetchKeyBundleSucceeded,
         this,
-        [this, conversationId, failConn](const QJsonObject& bundle) {
+        [this, conversationId, participant, failConn](const QJsonObject& bundle) {
 
             QObject::disconnect(*failConn);
             m_sessionFetchInFlight.remove(conversationId);
@@ -253,12 +253,39 @@ void ConversationController::setupSessionAsync(
 
             const bool ok = m_cryptoClient->initiateSession(conversationId, bundleJson);
 
+            // C1 fix: verify the peer's identity fingerprint via TrustStore
+            // immediately after session setup, before allowing any messages.
+            //
+            // TOFU semantics (TrustStore::verifyIdentity):
+            //   - First contact: the fingerprint is pinned locally and trusted.
+            //   - Subsequent contacts: the received fingerprint is compared against
+            //     the locally pinned one. A mismatch fires fingerprintMismatch and
+            //     blocks the session until the user confirms out-of-band.
+            //
+            // ik_sig_pub is the 2624-byte hybrid Ed25519+ML-DSA-87 identity key
+            // from GET /keys/:username — the same key the crypto service verifies
+            // every message signature against, so it is the correct fingerprint.
+            const QString receivedFingerprint =
+                bundle.value("ik_sig_pub").toString();
+
+            const bool trusted =
+                (!participant.isEmpty() && !receivedFingerprint.isEmpty())
+                    ? m_trust->verifyIdentity(participant, receivedFingerprint)
+                    : false;
+
             if (conversationId == m_currentConversationId) {
-                m_sessionReady = ok;
+                // Session is only ready if crypto init succeeded AND the identity
+                // is trusted. A fingerprint mismatch leaves sessionReady=false,
+                // keeping the send/receive path blocked until the user resolves
+                // the mismatch in VerifyDialog.
+                m_sessionReady = ok && trusted;
                 emit sessionReadyChanged();
                 if (!ok)
                     qWarning() << "initiateSession failed for conversation" << conversationId
                                << ":" << m_cryptoClient->lastError();
+                if (!trusted)
+                    qWarning() << "Identity verification failed for" << participant
+                               << "— fingerprint mismatch or empty bundle field.";
             }
         },
         Qt::SingleShotConnection);

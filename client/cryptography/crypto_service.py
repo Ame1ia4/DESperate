@@ -151,6 +151,41 @@ def _require_session(conversation_id: str) -> _SessionEntry:
     )
 
 
+def _load_opk_secrets(
+    bundle: IdentityBundle,
+) -> tuple[dict[int, bytes], dict[int, bytes]]:
+    """
+    Extract OPK secret key maps from a loaded IdentityBundle.
+
+    Returns (local_x25519_opks, local_kem_opks) as {opk_id: secret_key_bytes}
+    dicts suitable for passing directly to pqxdh.respond().
+
+    H3 fix: previously both dicts were always passed as {} to respond(),
+    meaning any session initiated with a real OPK (used_identity_kem=False)
+    would raise PQXDHError because the secret key was not in the map.
+    OPK-based PQ forward secrecy was therefore never actually delivered.
+    """
+    x25519_map = {opk.opk_id: opk.secret_key for opk in bundle.x25519_opks}
+    kem_map    = {opk.opk_id: opk.secret_key for opk in bundle.kem_opks}
+    return x25519_map, kem_map
+
+
+def _consume_opk(
+    store:  StateStore,
+    bundle: IdentityBundle,
+    opk_id: int,
+) -> None:
+    """
+    Remove a consumed OPK pair from the local keystore.
+
+    Called after a successful respond() that used a real OPK so that the
+    same secret key is never reused across session resets.
+    """
+    bundle.x25519_opks = [o for o in bundle.x25519_opks if o.opk_id != opk_id]
+    bundle.kem_opks    = [o for o in bundle.kem_opks    if o.opk_id != opk_id]
+    store.save_state(_BUNDLE_KEY, bundle.to_private_bundle())
+
+
 def _open_or_create_store(password: str) -> StateStore:
     """Load an existing StateStore or create a fresh one."""
     salt_path = _STORE_BASE_DIR / "salt"
@@ -402,9 +437,14 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         aad     = conversation_id.encode("utf-8")
 
         # An incoming initiation_bundle signals a session reset by the peer —
-        # they lost state or re-registered. Close the old session and re-establish
-        # as responder, even if a session already exists.
+        # they lost state or re-registered. Before wiping the existing session,
+        # save the pinned identity key so we can verify the new session uses the
+        # same identity.  A key change is a hard error: it means either the peer
+        # genuinely re-registered (they should notify the user out-of-band) or a
+        # malicious server is performing a MITM substitution.
+        _pinned_ik_before_reset: Optional[bytes] = None
         if initiation_bundle and conversation_id in _sessions:
+            _pinned_ik_before_reset = _sessions[conversation_id].remote_ik_sig_pub
             _sessions.pop(conversation_id)
             try:
                 store = _require_store()
@@ -430,21 +470,41 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 )
             init = InitiationBundle.from_dict(initiation_bundle)
 
-            # OPK secret keys are not yet stored locally (OPK replenishment stub).
-            # The initiator uses allow_no_opk=True, so used_identity_kem=True and
-            # opk_id=None — the respond() call needs no local OPK secret keys.
+            # H3 fix: load OPK secret keys from the keystore so respond() can
+            # perform DH4 and PQ decapsulation when the initiator used a real OPK
+            # (used_identity_kem=False). Previously both maps were always {}, making
+            # OPK-based sessions fail and PQ forward secrecy completely absent.
+            x25519_opks, kem_opks = _load_opk_secrets(bundle)
             pqxdh_result = _pqxdh_respond(
                 local_bundle      = bundle,
                 initiation        = init,
-                local_x25519_opks = {},
-                local_kem_opks    = {},
+                local_x25519_opks = x25519_opks,
+                local_kem_opks    = kem_opks,
             )
+            # Consume the OPK so the secret key is never reused across resets.
+            if init.opk_id is not None and not init.used_identity_kem:
+                store = _require_store()
+                _consume_opk(store, bundle, init.opk_id)
 
             # Verify signature first to extract the wire bytes, then use them
             # with create_as_responder (which needs the actual EncryptedMessage).
             remote_sig_pub = bytes.fromhex(sender_ik_sig_pub_hex) if sender_ik_sig_pub_hex else b""
             if not remote_sig_pub:
                 raise ValueError("sender_ik_sig_pub required for first message")
+
+            # H1 fix: if this is a re-initiation (we had a prior session), the
+            # incoming identity key MUST match the previously pinned key.
+            # Any mismatch is treated as a potential MITM key substitution and
+            # is rejected hard. The user must verify the new safety number
+            # out-of-band before a fresh session can be accepted.
+            if _pinned_ik_before_reset is not None:
+                if remote_sig_pub != _pinned_ik_before_reset:
+                    raise ValueError(
+                        "IDENTITY_KEY_CHANGED: peer's identity key does not match the "
+                        "previously pinned key for this conversation. This may indicate "
+                        "a server MITM or that the peer re-registered. Verify the new "
+                        "safety number out-of-band before continuing."
+                    )
 
             try:
                 signed_initial = verify_and_extract(
