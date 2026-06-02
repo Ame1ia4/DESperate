@@ -55,6 +55,9 @@ QVariant MessageModel::data(
     case RevokedRole:
         return msg.revoked;
 
+    case IsDeletedRole:
+        return msg.isDeleted;
+
     default:
         return {};
     }
@@ -71,7 +74,8 @@ MessageModel::roleNames() const
         {OutgoingRole,     "outgoing"},
         {VerifiedRole,     "verified"},
         {MessageIdRole,    "messageId"},
-        {RevokedRole,      "revoked"}
+        {RevokedRole,      "revoked"},
+        {IsDeletedRole,    "isDeleted"}
     };
 }
 
@@ -116,6 +120,29 @@ void MessageModel::markRevoked(const QString& messageId)
             m_messages[i].revoked = true;
             const QModelIndex idx = index(i);
             emit dataChanged(idx, idx, {RevokedRole});
+            return;
+        }
+    }
+}
+
+void MessageModel::markDeleted(const QString& messageId)
+{
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == messageId) {
+            m_messages[i].isDeleted = true;
+            const QModelIndex idx = index(i);
+            emit dataChanged(idx, idx, {IsDeletedRole});
+            return;
+        }
+    }
+}
+
+void MessageModel::updateMessageId(const QString& oldId, const QString& newId)
+{
+    if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
+    for (auto& msg : m_messages) {
+        if (msg.id == oldId) {
+            msg.id = newId;
             return;
         }
     }

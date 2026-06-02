@@ -28,7 +28,8 @@ public:
     void fetchRegistrationNonce();
 
     void sendMessage(
-        const QJsonObject& encryptedEnvelope
+        const QJsonObject& encryptedEnvelope,
+        const QString& localId = QString()
         );
 
     void pullMessages(
@@ -84,6 +85,8 @@ signals:
     void deleteMessageFailed(QString messageId);
     void revokeMessageSucceeded(QString messageId);
     void revokeMessageFailed(QString messageId);
+    // Fired after POST /messages succeeds; carries both the client temp ID and server DB UUID
+    void messageSentToServer(QString localId, QString serverId);
 
 private:
     void doSrpInit(

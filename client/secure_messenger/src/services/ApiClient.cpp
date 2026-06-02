@@ -285,19 +285,28 @@ void ApiClient::setAuthToken(const QString& token)
 }
 
 void ApiClient::sendMessage(
-    const QJsonObject& encryptedEnvelope)
+    const QJsonObject& encryptedEnvelope,
+    const QString& localId)
 {
     auto request = makeRequest("/messages");
     auto* reply  = m_network.post(request, QJsonDocument(encryptedEnvelope).toJson());
-    connect(reply, &QNetworkReply::finished, this, [reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, localId]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body  = reply->readAll();
+        reply->deleteLater();
         if (status < 200 || status >= 300) {
             qWarning() << "[SEND] POST /messages failed | status:" << status
-                       << "|" << QString::fromUtf8(reply->readAll().left(200));
-        } else {
-            qDebug() << "[SEND] POST /messages OK | status:" << status;
+                       << "|" << QString::fromUtf8(body.left(200));
+            return;
         }
-        reply->deleteLater();
+        qDebug() << "[SEND] POST /messages OK | status:" << status;
+        if (!localId.isEmpty()) {
+            const QString serverId =
+                QJsonDocument::fromJson(body).object().value("id").toString();
+            qDebug() << "[SEND] ID mapping: local" << localId << "→ server" << serverId;
+            if (!serverId.isEmpty())
+                emit messageSentToServer(localId, serverId);
+        }
     });
 }
 
@@ -409,6 +418,8 @@ void ApiClient::deleteMessage(const QString& messageId)
     auto* reply  = m_network.deleteResource(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body  = reply->readAll();
+        qDebug() << "[DELETE] status:" << status << "|" << QString::fromUtf8(body.left(200));
         reply->deleteLater();
         if (status >= 200 && status < 300)
             emit deleteMessageSucceeded(messageId);
@@ -426,6 +437,8 @@ void ApiClient::revokeMessage(const QString& messageId, const QString& recipient
     auto* reply = m_network.post(request, QJsonDocument(body).toJson());
     connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body  = reply->readAll();
+        qDebug() << "[REVOKE] status:" << status << "|" << QString::fromUtf8(body.left(200));
         reply->deleteLater();
         if (status >= 200 && status < 300)
             emit revokeMessageSucceeded(messageId);

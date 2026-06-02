@@ -63,12 +63,27 @@ MessageController::MessageController(
         &MessageController
         ::handleDecryptFailed);
 
-    connect(m_api, &ApiClient::deleteMessageSucceeded, this, [this](const QString& messageId) {
-        m_model->removeMessage(messageId);
-    });
+    // When the server responds to POST /messages, swap the client temp ID for the server DB UUID
+    // in the model, the local store, AND the ConversationController's in-memory cache.
+    // All three must be in sync so that delete/revoke still use the correct ID after navigation.
+    connect(m_api, &ApiClient::messageSentToServer, this,
+        [this](const QString& localId, const QString& serverId) {
+            m_model->updateMessageId(localId, serverId);
+            m_store->updateMessageId(localId, serverId);
+            m_conversations->updateMessageId(localId, serverId);
+        });
 
+    // Revoke: mark the sender's own bubble with a small indicator, persist the state,
+    // but keep the original message text visible (only the recipient lost access).
     connect(m_api, &ApiClient::revokeMessageSucceeded, this, [this](const QString& messageId) {
         m_model->markRevoked(messageId);
+        m_store->markMessageRevoked(messageId);
+        m_conversations->markLocalRevoked(messageId);
+        emit messageRevokeSucceeded();
+    });
+
+    connect(m_api, &ApiClient::revokeMessageFailed, this, [this](const QString&) {
+        emit messageRevokeFailed();
     });
 
     connect(m_conversations, &ConversationController::sessionReadyChanged, this, [this]() {
@@ -82,6 +97,11 @@ MessageController::MessageController(
 
 void MessageController::deleteMessage(const QString& messageId)
 {
+    if (messageId.isEmpty()) return;
+    // Mark deleted in all three layers so the bubble stays but shows "Message deleted".
+    m_model->markDeleted(messageId);
+    m_store->markMessageDeleted(messageId);
+    m_conversations->markLocalDeleted(messageId);
     m_api->deleteMessage(messageId);
 }
 
@@ -232,19 +252,21 @@ void MessageController::handleEncryptCompleted(
     QJsonObject fullEnvelope = envelope;
     fullEnvelope["conversation_id"] = pending.conversationId;
 
-    qDebug() << "[SEND] encryped OK, posting to server | conv:" << pending.conversationId
+    qDebug() << "[SEND] encrypted OK, posting to server | conv:" << pending.conversationId
              << "| ciphertext len:" << envelope["ciphertext"].toString().length();
 
+    // Use a brace-free UUID as the local temp ID.
+    // The server will assign its own DB UUID; messageSentToServer swaps it in once the
+    // POST /messages response arrives so delete/revoke can reference the correct ID.
+    const QString localId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
     m_store->storeOutgoingMessage(fullEnvelope);
-    m_api->sendMessage(fullEnvelope);
+    m_api->sendMessage(fullEnvelope, localId);
 
     // Optimistic UI update.
     DecryptedMessage message;
 
-    message.id =
-        envelope.value("id").toString(
-            QUuid::createUuid()
-                .toString());
+    message.id = localId;
 
     message.conversationId =
         pending.conversationId;
