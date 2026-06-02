@@ -80,6 +80,8 @@ signals:
 
     void messageDownloaded(QString path);
     void messageDownloadFailed(QString reason);
+    void messageRevokeSucceeded();
+    void messageRevokeFailed();
 
 private slots:
     void handleEncryptCompleted(
