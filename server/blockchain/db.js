@@ -6,9 +6,9 @@ const { Pool } = pg
 const pool = new Pool({
   host:     process.env.DB_HOST,
   port:     parseInt(process.env.DB_PORT ?? '5432', 10),
-  user:     process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.BLOCKCHAIN_DB_NAME ?? 'test_merkle',
+  user:     process.env.MERKLE_DB_USER,
+  password: process.env.MERKLE_DB_PASS,
+  database: process.env.DB_NAME,
   ssl:      process.env.DB_SSL?.toLowerCase() === 'false' ? false : undefined,
 })
 
