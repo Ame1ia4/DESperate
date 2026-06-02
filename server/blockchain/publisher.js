@@ -82,9 +82,14 @@ async function reconcile(provider) {
         await confirmRootsFromReceipt(receipt, [row.id])
       } else if (receipt && receipt.status !== 1) {
         console.error(`[publisher] reconcile: tx ${txHash} reverted — returning root id=${row.id} to built`)
-        await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
+        await query(
+          `UPDATE merkle_roots SET state = 'built', tx_hash = NULL WHERE id = $1`,
+          [row.id]
+        )
       } else {
-        await query(`UPDATE merkle_roots SET state = 'built' WHERE id = $1`, [row.id])
+        // receipt is null: tx not yet mined or RPC hiccup — leave in 'broadcasting' so
+        // the next reconcile re-checks rather than submitting a duplicate transaction.
+        console.warn(`[publisher] reconcile: no receipt yet for tx ${txHash} (root id=${row.id}) — will retry on next start`)
       }
     } catch (err) {
       console.error(`[publisher] reconcile: error fetching receipt for tx ${txHash} (root id=${row.id})`, err)
@@ -105,7 +110,9 @@ async function confirmRootsFromReceipt(receipt, rootIds) {
         const rootHex = parsed.args.merkleRoot.toLowerCase()
         eventsByRoot[rootHex] = { timestamp: Number(parsed.args.timestamp), logIndex: log.index }
       }
-    } catch (_) { /* not a HashStored log */ }
+    } catch (e) {
+      console.debug('[publisher] failed to parse log (likely non-HashStored):', e?.message)
+    }
   }
 
   const { rows } = await query(
@@ -139,7 +146,7 @@ async function confirmRootsFromReceipt(receipt, rootIds) {
 
 // ── Broadcast phase ──────────────────────────────────────────────────────────
 
-async function broadcastBuiltRoots(cfg) {
+async function broadcastBuiltRoots(cfg, signer) {
   const {
     merkle_broadcast_interval_ms:  broadcastIntervalMs,
     merkle_broadcast_min_roots:    minRoots,
@@ -162,7 +169,8 @@ async function broadcastBuiltRoots(cfg) {
 
   // (a) Mark the group as broadcasting BEFORE submitting to the network.
   //     If we crash between here and the tx submission, reconcile() handles it.
-  const { rows: builtRoots } = await withTransaction(async (client) => {
+  let builtRoots = []
+  await withTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT id, merkle_root, attempts
        FROM merkle_roots
@@ -173,8 +181,9 @@ async function broadcastBuiltRoots(cfg) {
       [maxRootsPerTx]
     )
 
-    if (rows.length === 0) return { rows: [] }
+    if (rows.length === 0) return
 
+    builtRoots = rows
     const ids = rows.map(r => r.id)
     await client.query(
       `UPDATE merkle_roots
@@ -182,8 +191,6 @@ async function broadcastBuiltRoots(cfg) {
        WHERE id = ANY($1::int[])`,
       [ids]
     )
-
-    return { rows }
   })
 
   if (builtRoots.length === 0) return
@@ -192,7 +199,6 @@ async function broadcastBuiltRoots(cfg) {
   const roots = builtRoots.map(r => r.merkle_root.trim())
 
   try {
-    const signer   = buildSigner()
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer)
 
     const estimated = await contract.storeBatchHashes.estimateGas(roots)
@@ -216,6 +222,9 @@ async function broadcastBuiltRoots(cfg) {
     console.error('[publisher] broadcast error:', err?.message ?? err)
 
     for (const row of builtRoots) {
+      // row.attempts is the pre-increment value from the SELECT; the DB now holds
+      // row.attempts + 1. Comparing row.attempts + 1 >= maxAttempts checks whether
+      // the current (post-increment) attempt count has reached the limit.
       if (row.attempts + 1 >= maxAttempts) {
         await query(
           `UPDATE merkle_roots SET state = 'failed' WHERE id = $1`,
@@ -224,7 +233,7 @@ async function broadcastBuiltRoots(cfg) {
         console.error(`[publisher] root id=${row.id} permanently failed after ${maxAttempts} attempts`)
       } else {
         await query(
-          `UPDATE merkle_roots SET state = 'built' WHERE id = $1`,
+          `UPDATE merkle_roots SET state = 'built', tx_hash = NULL WHERE id = $1`,
           [row.id]
         )
       }
@@ -240,7 +249,10 @@ export function startBlockchainWorker() {
     return
   }
 
-  let cfg = null
+  // cfg and signer start null; if start() throws (e.g. loadMerkleConfig fails),
+  // run() is never scheduled — the null values are never reachable at runtime.
+  let cfg    = null
+  let signer = null
 
   async function run() {
     if (running) return
@@ -250,7 +262,7 @@ export function startBlockchainWorker() {
       await query(`SELECT pg_advisory_lock($1)`, [MERKLE_ADVISORY_LOCK_KEY])
 
       await buildPendingRoots(cfg)
-      await broadcastBuiltRoots(cfg)
+      await broadcastBuiltRoots(cfg, signer)
 
     } catch (err) {
       console.error('[blockchain-worker] tick error:', err?.message ?? err)
@@ -264,7 +276,8 @@ export function startBlockchainWorker() {
   }
 
   async function start() {
-    cfg = await loadMerkleConfig()
+    cfg    = await loadMerkleConfig()
+    signer = buildSigner()  // cached — provider + wallet are stateless across ticks
     console.info('[blockchain-worker] started')
 
     const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL)
