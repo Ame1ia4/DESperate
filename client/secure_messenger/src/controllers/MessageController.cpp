@@ -141,12 +141,12 @@ void MessageController::copyMerkleRoot(const QString& messageId)
         if (id != messageId) return;
         disconnect(m_api, &ApiClient::blockchainVerifySucceeded, this, nullptr);
         disconnect(m_api, &ApiClient::blockchainVerifyFailed,    this, nullptr);
-        if (data.value(QStringLiteral("status")).toString() == QStringLiteral("stored-on-blockchain")) {
-            const QString root = data.value(QStringLiteral("merkle_root")).toString();
+        const QString root = data.value(QStringLiteral("merkle_root")).toString();
+        if (!root.isEmpty()) {
             QGuiApplication::clipboard()->setText(root);
             emit merkleRootCopied(root);
         } else {
-            emit merkleRootPending(messageId);
+            emit merkleRootPending(messageId);   // leaf not yet batched into a root
         }
     });
     connect(m_api, &ApiClient::blockchainVerifyFailed,

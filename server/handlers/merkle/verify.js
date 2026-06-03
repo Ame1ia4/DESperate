@@ -36,7 +36,10 @@ async function getMessageStatus(msgId, userId, deviceId) {
   const leaf = leafRows[0]
 
   if (!leaf.root_id || leaf.root_state !== 'confirmed') {
-    return { status: 'pending' }
+    return {
+      status: 'pending',
+      ...(leaf.merkle_root ? { merkle_root: leaf.merkle_root.trim() } : {}),
+    }
   }
 
   return {

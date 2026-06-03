@@ -265,6 +265,6 @@ Rectangle {
     Connections {
         target: messageController
         function onMerkleRootCopied(root)  { merkleStatusBanner.show("Merkle root copied") }
-        function onMerkleRootPending(id)   { merkleStatusBanner.show("Not yet confirmed on-chain") }
+        function onMerkleRootPending(id)   { merkleStatusBanner.show("No Merkle root yet — message not batched") }
     }
 }
