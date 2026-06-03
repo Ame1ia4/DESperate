@@ -51,6 +51,28 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
         }
 
+        // C1 fix: shown when TOFU pinning found a fingerprint mismatch.
+        // The send/receive path is already blocked (sessionReady=false);
+        // this banner makes the reason visible to the user.
+        Rectangle {
+            Layout.fillWidth: true
+            height: 44
+            color: "#5C1A1A"
+            radius: 6
+            visible: conversationController
+                     && conversationController.currentConversationId !== ""
+                     && !conversationController.sessionReady
+                     && conversationController.identityMismatch
+
+            Text {
+                anchors.centerIn: parent
+                text: "⚠️ Identity key mismatch — messaging blocked. Check the verification warning."
+                color: "#FF6B6B"
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
@@ -89,6 +111,44 @@ Rectangle {
                     messageField.clear()
                 }
             }
+        }
+    }
+
+    // C1 fix: VerifyDialog is instantiated here and wired to
+    // conversationController.fingerprintMismatch. It was previously
+    // defined in VerifyDialog.qml but never instantiated anywhere in
+    // the component tree, so it could never be shown.
+    //
+    // On mismatch:
+    //   - The dialog blocks interaction (modal, NoAutoClose).
+    //   - "Accept New Key" calls conversationController.verifyFingerprint
+    //     with the new fingerprint to re-pin it, then reinitiates the session.
+    //   - "Reject" leaves sessionReady=false and shows the blocked banner.
+    VerifyDialog {
+        id: verifyDialog
+
+        onFingerprintAccepted: {
+            // Re-pin the new fingerprint and unblock the conversation.
+            conversationController.verifyFingerprint(
+                conversationController.currentConversationId,
+                verifyDialog.receivedFingerprint)
+            conversationController.reinitiateSession(
+                conversationController.currentConversationId)
+        }
+
+        onFingerprintRejected: {
+            // Leave sessionReady=false. The blocked banner stays visible.
+            // The user can reopen the conversation later to try again.
+        }
+    }
+
+    Connections {
+        target: conversationController
+
+        function onFingerprintMismatch(pinned, received) {
+            verifyDialog.expectedFingerprint = pinned
+            verifyDialog.receivedFingerprint = received
+            verifyDialog.open()
         }
     }
 }

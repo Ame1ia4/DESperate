@@ -40,6 +40,9 @@ app.use(helmet({
       scriptSrc: [
         "'strict-dynamic'",
         (_req, res) => `'nonce-${res.locals.nonce}'`,
+        // NOTE: 'https:' removed — it is a legacy fallback that allows scripts
+        // from any HTTPS origin in browsers that do not support strict-dynamic.
+        // With strict-dynamic, nonce-based trust propagation is sufficient.
       ],
       styleSrc:  ["'self'", 'https://fonts.googleapis.com'],
       fontSrc:   ["'self'", 'https://fonts.gstatic.com'],
@@ -70,6 +73,13 @@ app.use(helmet({
   },
 }))
 app.set('trust proxy', 1)
+// L1 fix: fail fast if SUBDOMAIN is unset rather than silently producing
+// origin 'https://undefined', which would reject all cross-origin requests
+// or (if misconfigured upstream) allow everything.
+if (!process.env.SUBDOMAIN) {
+  console.error('FATAL: SUBDOMAIN environment variable is not set')
+  process.exit(1)
+}
 app.use(cors({ origin: `https://${process.env.SUBDOMAIN}` }))
 app.use(express.json({ limit: '2mb' }))
 
@@ -78,6 +88,19 @@ app.get('/health', (_, res) => res.json({ status: 'ok' }))
 const authLimiter    = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 })
 const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 })
 app.use(generalLimiter)
+
+// H3 fix: per-(requester-device, target-username) rate limit on key bundle fetches.
+// Without this, any authenticated user could drain a target's entire OPK pool
+// (typically 20 keys) within the general 100/15min window, forcing every new
+// session to fall back to the identity KEM key and losing PQ forward secrecy.
+// Limit: 3 fetches per requester per target per 10 minutes — enough for legitimate
+// use (open a conversation, one retry) without allowing pool exhaustion.
+const opkFetchLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  keyGenerator: (req) => `${req.deviceId}:${req.params.username}`,
+  message: { error: 'Too many key bundle requests for this user. Try again later.' },
+})
 
 // ── Public routes ──
 const serveVerification = (req, res) => {
@@ -110,7 +133,7 @@ app.post('/auth/login',    authLimiter, authVerify)
 
 // ── Public key bundle fetch (protected) ──
 // Returns the public PQXDH bundle for a username so a peer can initiate a session.
-app.get('/keys/:username', requireAuth, async (req, res) => {
+app.get('/keys/:username', requireAuth, opkFetchLimiter, async (req, res) => {
   const { username } = req.params
   if (!username || username.length > 50)
     return res.status(400).json({ error: 'Invalid username' })
@@ -340,7 +363,16 @@ app.post('/messages', requireAuth, async (req, res) => {
       [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null]
     )
 
-    const leafHash = computeLeaf(ciphertextBuf)
+    // M2 fix applied: pass context fields so the leaf is bound to this
+    // specific message, conversation, and sender. Without these, encodeField
+    // fills all three with zero bytes and the hash reduces to keccak256(ciphertext),
+    // allowing a ciphertext to be transplanted between conversations with a
+    // valid proof. msg.id is available here because the INSERT RETURNING fires first.
+    const leafHash = computeLeaf(ciphertextBuf, {
+      messageId:      String(msg.id),
+      conversationId: conversation_id,
+      senderDeviceId: req.deviceId,
+    })
     await client.query(
       `INSERT INTO merkle_leaves (leaf_hash, msg_id, state) VALUES ($1, $2, 'pending')`,
       [leafHash, msg.id]
@@ -358,6 +390,13 @@ app.post('/messages', requireAuth, async (req, res) => {
     )
 
     // Fan out to each recipient device.
+    // L5 note: initiation_bundle is stored here as unauthenticated queue
+    // metadata. A tampering server could alter it, which would cause the
+    // recipient's PQXDH response to fail (wrong SK) rather than silently
+    // accepting a forged session — the AEAD tag would not verify. This means
+    // tampering causes a detectable failure rather than a MITM. A full fix
+    // would have the sender sign the initiation_bundle under ik_sig, but that
+    // requires client changes. Documented as a known limitation.
     const queueMeta = Buffer.from(JSON.stringify({ initiation_bundle: initiation_bundle ?? null }))
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
 
@@ -656,8 +695,41 @@ app.post('/devices/revoke', requireAuth, async (req, res) => {
   res.json({ revoked: true })
 })
 
+// M2 fix: proofHandler was missing requireAuth — any unauthenticated caller
+// could query the Merkle proof endpoint. Added requireAuth to both routes.
 app.get('/messages/:id/blockchain-verify', requireAuth, verifyHandler)
-app.post('/blockchain/verify-leaf',        proofHandler)
+app.post('/blockchain/verify-leaf',        requireAuth, proofHandler)
+
+// H4 fix: return all active (non-revoked) devices for a user so the
+// client can detect ghost devices injected by a compromised server.
+//
+// Returns an array of { device_id, fingerprint } objects — one per
+// non-revoked device. The client compares this list against the single
+// device_id it received in the conversation list; more than one entry
+// is surfaced as a warning in the UI.
+//
+// Known limitation: a fully compromised server can suppress ghost
+// devices from this response. This is best-effort detection, not a
+// cryptographic guarantee, and is documented as such.
+app.get('/users/:username/devices', requireAuth, async (req, res) => {
+  const { username } = req.params
+  if (!username || username.length > 50)
+    return res.status(400).json({ error: 'Invalid username' })
+
+  const { rows } = await query(
+    `SELECT
+       d.id                                   AS device_id,
+       encode(d.identity_signing_pub, 'hex')  AS fingerprint
+     FROM devices d
+     JOIN users   u ON u.id = d.user_id
+     WHERE u.username = $1
+       AND d.revoked  = FALSE
+     ORDER BY d.created_at ASC`,
+    [username]
+  )
+
+  res.json({ devices: rows })
+})
 
 // ── 404 ──
 app.use((_, res) => res.status(404).json({ error: 'Not found' }))

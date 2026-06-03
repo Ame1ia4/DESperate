@@ -39,6 +39,21 @@ class ConversationController : public QObject
             READ sessionReady
                 NOTIFY sessionReadyChanged)
 
+    // C1 fix: true while a fingerprint mismatch is unresolved for the
+    // current conversation. Drives the blocked banner in MessageView.qml.
+    Q_PROPERTY(
+        bool identityMismatch
+            READ identityMismatch
+                NOTIFY identityMismatchChanged)
+
+    // H4 fix: number of active devices the server reports for the peer
+    // in the current conversation. A value >1 is shown as a warning in
+    // ConversationList so the user can detect ghost devices.
+    Q_PROPERTY(
+        int peerDeviceCount
+            READ peerDeviceCount
+                NOTIFY peerDeviceCountChanged)
+
 public:
     explicit ConversationController(
         ApiClient* api,
@@ -54,6 +69,10 @@ public:
     QString currentConversationId() const noexcept;
 
     bool sessionReady() const noexcept;
+
+    bool identityMismatch() const noexcept;
+
+    int peerDeviceCount() const noexcept;
 
 public slots:
     void loadConversations();
@@ -78,6 +97,11 @@ public slots:
 
     void reinitiateSession(const QString& conversationId);
 
+    // H4 fix: fetch all active devices for the peer and compare against
+    // the single device_id the server returned in the conversation list.
+    // Emits ghostDeviceDetected if the server reports additional devices.
+    Q_INVOKABLE void fetchPeerDevices(const QString& conversationId);
+
 signals:
     void currentConversationIdChanged();
 
@@ -94,6 +118,15 @@ signals:
     void fingerprintMismatch(
         QString expectedFingerprint,
         QString receivedFingerprint);
+
+    // C1 fix
+    void identityMismatchChanged();
+
+    // H4 fix: emitted when the server reports more active devices for the
+    // peer than expected. deviceCount is the total the server returned.
+    void ghostDeviceDetected(QString conversationId, int deviceCount);
+
+    void peerDeviceCountChanged();
 
 private:
     // Fetch the participant's public key bundle and establish the PQXDH session.
@@ -130,4 +163,15 @@ private:
 
     // conversationIds for which a session fetch is already in-flight
     QSet<QString> m_sessionFetchInFlight;
+
+    // C1 fix: true when a fingerprint mismatch is unresolved
+    bool m_identityMismatch = false;
+
+    // H4 fix: number of active devices the server last reported for the
+    // peer in the current conversation (0 = not yet fetched)
+    int m_peerDeviceCount = 0;
+
+    // conversationId → expected single device ID from conversation list
+    // Used to detect ghost devices when full device list is fetched.
+    QHash<QString, QStringList> m_peerDeviceFingerprints;
 };

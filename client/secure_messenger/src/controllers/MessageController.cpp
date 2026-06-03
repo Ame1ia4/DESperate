@@ -191,8 +191,19 @@ void MessageController::handleEncryptCompleted(
         QString::fromUtf8(
             pending.plaintext);
 
-    message.verificationState =
-        VerificationState::Verified;
+    // C1 fix: outgoing messages are only Verified if TrustStore confirms
+    // the recipient's identity key is pinned and matches. Previously this
+    // was hardcoded to Verified, meaning the UI always showed a green tick
+    // regardless of whether identity verification had ever run.
+    {
+        const QString participant =
+            m_conversations->participantForConversation(
+                pending.conversationId);
+        message.verificationState =
+            (!participant.isEmpty() && m_trust->isVerified(participant))
+                ? VerificationState::Verified
+                : VerificationState::Unverified;
+    }
 
     m_conversations
         ->appendLocalMessage(message);
@@ -276,8 +287,20 @@ void MessageController::handleDecryptCompleted(
     message.plaintext =
         plaintext;
 
-    message.verificationState =
-        VerificationState::Verified;
+    // C1 fix: incoming messages are only Verified if TrustStore confirms
+    // the sender's identity is pinned and matches. Previously hardcoded
+    // to Verified — the UI reported every message as authenticated even
+    // when no identity check had ever been performed.
+    {
+        const QString conversationId =
+            envelope.value("conversation_id").toString();
+        const QString participant =
+            m_conversations->participantForConversation(conversationId);
+        message.verificationState =
+            (!participant.isEmpty() && m_trust->isVerified(participant))
+                ? VerificationState::Verified
+                : VerificationState::Unverified;
+    }
 
     m_store->storeDecryptedMessage(
         message);

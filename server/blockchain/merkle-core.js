@@ -18,14 +18,47 @@ function keccakBuf(data) {
   return Buffer.from(hex.slice(2), 'hex')
 }
 
-export function computeLeaf(ciphertextBytes) {
-  if (typeof ciphertextBytes === 'string') {
-    const clean = ciphertextBytes.startsWith('0x') ? ciphertextBytes : '0x' + ciphertextBytes
-    return ethers.keccak256(ethers.getBytes(clean))
+// M2 fix: bind the leaf to its context so a server cannot move a valid
+// ciphertext hash from one conversation or sender to another.
+//
+// Old leaf = keccak256(ciphertext)
+// New leaf = keccak256(message_id || conversation_id || sender_device_id || ciphertext)
+//
+// All fields are length-prefixed (4-byte LE uint32) to prevent boundary
+// confusion between adjacent variable-length inputs.
+//
+// The verification page must use the same construction — update verification.html
+// to accept and encode the three context fields alongside the ciphertext.
+//
+// BREAKING: existing roots computed with the old scheme will not verify.
+// Document this as a migration cut-over in the design doc.
+export function computeLeaf(ciphertextBytes, { messageId, conversationId, senderDeviceId } = {}) {
+  // Encode a string field as: 4-byte LE length prefix || UTF-8 bytes.
+  // A missing/empty field encodes as four zero bytes (length = 0).
+  function encodeField(s) {
+    if (!s) return Buffer.alloc(4)
+    const b = Buffer.from(s, 'utf8')
+    const len = Buffer.alloc(4)
+    len.writeUInt32LE(b.length, 0)
+    return Buffer.concat([len, b])
   }
-  return ethers.keccak256(ciphertextBytes instanceof Uint8Array
-    ? ciphertextBytes
-    : new Uint8Array(ciphertextBytes))
+
+  const ctBuf = typeof ciphertextBytes === 'string'
+    ? Buffer.from(ciphertextBytes.replace(/^0x/i, ''), 'hex')
+    : Buffer.from(ciphertextBytes instanceof Uint8Array ? ciphertextBytes : new Uint8Array(ciphertextBytes))
+
+  const ctLen = Buffer.alloc(4)
+  ctLen.writeUInt32LE(ctBuf.length, 0)
+
+  const preimage = Buffer.concat([
+    encodeField(messageId),
+    encodeField(conversationId),
+    encodeField(senderDeviceId),
+    ctLen,
+    ctBuf,
+  ])
+
+  return ethers.keccak256(preimage)
 }
 
 export function buildTree(leafHexes) {
