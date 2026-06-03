@@ -76,3 +76,17 @@ export async function revokeSessionKey(deviceId) {
   await query('DELETE FROM device_sessions WHERE device_id = $1', [deviceId])
 }
 
+// Invalidate all sessions for every device belonging to a user — used on
+// password change so existing tokens are dead before the response reaches the client.
+export async function revokeAllSessionsForUser(userId) {
+  const { rows } = await query(
+    'SELECT id FROM devices WHERE user_id = $1',
+    [userId]
+  )
+  for (const { id } of rows) _cache.delete(id)
+  await query(
+    'DELETE FROM device_sessions WHERE device_id IN (SELECT id FROM devices WHERE user_id = $1)',
+    [userId]
+  )
+}
+

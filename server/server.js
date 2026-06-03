@@ -14,7 +14,7 @@ import { authInit } from './middleware/auth_init.js'
 import { authVerify } from './middleware/auth_verify.js'
 import { requireAuth } from './middleware/require_auth.js'
 import { query, withTransaction, registerShutdownSignals } from './database/db.js'
-import { revokeSessionKey } from './state/session_keys.js'
+import { revokeSessionKey, revokeAllSessionsForUser } from './state/session_keys.js'
 import { UUID_RE } from './constants/auth.js'
 import { computeLeaf } from './blockchain/merkle-core.js'
 import { verifyHandler } from './handlers/merkle/verify.js'
@@ -744,8 +744,8 @@ app.patch('/auth/password', authLimiter, requireAuth, async (req, res) => {
 
   if (typeof new_salt !== 'string' || !/^[0-9a-f]{64}$/i.test(new_salt))
     return res.status(400).json({ error: 'new_salt must be 64 hex characters' })
-  if (typeof new_verifier !== 'string' || !/^[0-9a-f]{1,768}$/i.test(new_verifier))
-    return res.status(400).json({ error: 'new_verifier must be up to 768 hex characters' })
+  if (typeof new_verifier !== 'string' || !/^[0-9a-f]{768}$/i.test(new_verifier))
+    return res.status(400).json({ error: 'new_verifier must be exactly 768 hex characters' })
 
   const userResult = await query(
     'SELECT user_id FROM devices WHERE id = $1',
@@ -754,9 +754,11 @@ app.patch('/auth/password', authLimiter, requireAuth, async (req, res) => {
   if (!userResult.rows.length) return res.status(401).json({ error: 'Device not found' })
 
   await query(
-    'UPDATE users SET srp_salt = $1, srp_verifier = decode($2, \'hex\') WHERE id = $3',
+    'UPDATE users SET srp_salt = $1, srp_verifier = $2 WHERE id = $3',
     [new_salt, new_verifier, userResult.rows[0].user_id]
   )
+
+  await revokeAllSessionsForUser(userResult.rows[0].user_id)
 
   res.json({ updated: true })
 })

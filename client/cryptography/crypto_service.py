@@ -14,6 +14,8 @@ Methods:
   srp_start                — begin SRP-6a login (round 1)
   srp_challenge            — process server SRP challenge (round 2)
   srp_verify               — verify server proof, return SRP session key K
+  prepare_password_change  — derive new SRP credentials from new password; returns new_salt + new_verifier
+  commit_password_change   — delete keystore and clear state after server confirms password update
   initiate_session         — run PQXDH as initiator, seed Double Ratchet
   encrypt_message          — Double Ratchet encrypt + hybrid Ed25519/ML-DSA-87 sign
   decrypt_message          — hybrid verify + Double Ratchet decrypt; auto-responds to PQXDH
@@ -27,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import sys
 from dataclasses import dataclass
@@ -86,8 +89,9 @@ _srp_session:         Optional[SrpSession]    = None
 _store:               Optional[StateStore]    = None
 _local_bundle:        Optional[IdentityBundle] = None
 _pending_password:    Optional[str]           = None  # raw password cached between srp_start and srp_challenge
-_pending_keystore_key: Optional[bytes]        = None  # derived in srp_challenge; promoted to _cached only after srp_verify succeeds
-_cached_keystore_key:  Optional[bytes]        = None  # set only after confirmed mutual auth (or post-register); used by unlock_keystore
+_pending_keystore_key:     Optional[bytes]    = None  # derived in srp_challenge; promoted to _cached only after srp_verify succeeds
+_cached_keystore_key:      Optional[bytes]    = None  # set only after confirmed mutual auth (or post-register); used by unlock_keystore
+_pending_new_keystore_key: Optional[bytes]    = None  # staged by prepare_password_change; consumed by commit_password_change
 _pending_sessions: dict = {}   # conversation_id → pending PQXDH state (pre-first-message)
 
 
@@ -352,6 +356,30 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             _store                = None
             _local_bundle         = None
         return {"authenticated": authenticated, "session_key": session_key}
+
+    # ── Password change ───────────────────────────────────────────────────────
+
+    if method == "prepare_password_change":
+        username     = params["username"]
+        new_password = params["new_password"]
+        srp_pass, new_keystore_key, new_salt = derive_master_components(new_password)
+        verifier_bytes = _create_srp_verifier(username, srp_pass.hex(), new_salt)
+        _pending_new_keystore_key = new_keystore_key
+        return {"new_salt": new_salt.hex(), "new_verifier": verifier_bytes.hex()}
+
+    if method == "commit_password_change":
+        global _store, _local_bundle, _cached_keystore_key, _pending_keystore_key
+        global _pending_new_keystore_key, _srp_session, _pending_password
+        _store                    = None
+        _local_bundle             = None
+        _cached_keystore_key      = None
+        _pending_keystore_key     = None
+        _pending_new_keystore_key = None
+        _srp_session              = None
+        _pending_password         = None
+        if _STORE_BASE_DIR.exists():
+            shutil.rmtree(_STORE_BASE_DIR)
+        return {"success": True}
 
     # ── Session existence check ───────────────────────────────────────────────
 
