@@ -57,8 +57,7 @@ Rectangle {
             downloadToast.visible = true
             toastTimer.restart()
         }
-        function onCiphertextCopied(ct) {
-            clipboardHelper.copyText(ct)
+        function onCiphertextCopied() {
             downloadToastText.isError = false
             downloadToastText.text = "Ciphertext copied to clipboard"
             downloadToast.visible = true
@@ -67,6 +66,16 @@ Rectangle {
         function onCiphertextCopyFailed() {
             downloadToastText.isError = true
             downloadToastText.text = "No ciphertext stored for this message"
+            downloadToast.visible = true
+            toastTimer.restart()
+        }
+    }
+
+    Connections {
+        target: clipboardHelper
+        function onTextCopied() {
+            downloadToastText.isError = false
+            downloadToastText.text = "Copied to clipboard"
             downloadToast.visible = true
             toastTimer.restart()
         }
