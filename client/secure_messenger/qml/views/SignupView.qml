@@ -7,6 +7,14 @@ Page {
     signal signUpRequested(string username, string password, string confirmPassword)
     signal backRequested()
 
+    function passwordError(pw) {
+        if (pw.length === 0)          return ""
+        if (pw.length < 12)           return "Password must be at least 12 characters"
+        if (!/[A-Za-z]/.test(pw))     return "Password must contain at least one letter"
+        if (!/[0-9]/.test(pw))        return "Password must contain at least one number"
+        return ""
+    }
+
     Rectangle {
         anchors.fill: parent
         color: "#214D2D"
@@ -38,17 +46,25 @@ Page {
 
             TextField {
                 id: passwordField
-                placeholderText: "Password"
+                placeholderText: "Password (min. 12 chars, letters & numbers)"
                 placeholderTextColor: "#C9D4C5"
                 maximumLength: 64
                 echoMode: showPassword ? TextInput.Normal : TextInput.Password
                 background: Rectangle {
                     color: "#2E6D47"
                     radius: 10
-                    border.color: "#4FAE7C"
+                    border.color: passwordError(passwordField.text) !== "" ? "#FF6B6B" : "#4FAE7C"
                     border.width: 1
                 }
                 color: "#F5EDD6"
+            }
+
+            Text {
+                visible: passwordError(passwordField.text) !== ""
+                text: passwordError(passwordField.text)
+                color: "#FF6B6B"
+                font.pixelSize: 12
+                Layout.topMargin: -10
             }
 
             TextField {
@@ -78,8 +94,9 @@ Page {
 
             Button {
                 text: "Sign Up"
+                enabled: passwordError(passwordField.text) === ""  && passwordField.text.length > 0
                 background: Rectangle {
-                    color: "#4FAE7C"
+                    color: parent.enabled ? "#4FAE7C" : "#3A5A47"
                     radius: 10
                 }
                 onClicked: {

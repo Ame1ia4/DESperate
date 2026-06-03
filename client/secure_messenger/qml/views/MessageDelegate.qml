@@ -10,9 +10,12 @@ Item {
     required property bool    verified
     required property string  messageId
     required property var     timestamp
+    required property bool    revoked
+    required property bool    isDeleted
+    required property bool    forwarded
 
     width:  ListView.view ? ListView.view.width : 0
-    height: bubble.height + 16
+    height: bubble.height + 16 + (forwardBar.visible ? forwardBar.height + 4 : 0)
 
     
 
@@ -49,11 +52,15 @@ Item {
                 leftMargin:  14
                 rightMargin: 14
             }
-            text:      plaintext
+            text: isDeleted          ? "Message deleted"
+                : (revoked && !outgoing) ? "[ Message revoked ]"
+                : plaintext
             wrapMode:  Text.WordWrap
-            color:     outgoing ? "#FFFFFF" : "#0B0B0B"
+            color: isDeleted             ? (outgoing ? "#C8EDD4" : "#888888")
+                 : (revoked && !outgoing) ? "#888888"
+                 : (outgoing              ? "#FFFFFF"  : "#0B0B0B")
             font.pixelSize: 14
-            // Flexible width: wrap at contentMaxWidth minus reserved paddings
+            font.italic: isDeleted || (revoked && !outgoing)
             width: Math.min(Math.max(60, bubble.contentMaxWidth - 48), implicitWidth)
         }
 
@@ -70,6 +77,15 @@ Item {
             }
             spacing: 4
             layoutDirection: Qt.RightToLeft
+
+            Text {
+                visible: outgoing && revoked
+                text:    "· revoked"
+                color:   "#B9EAC0"
+                font.pixelSize: 10
+                font.italic: true
+                anchors.verticalCenter: parent.verticalCenter
+            }
 
             Text {
                 visible: outgoing
@@ -140,25 +156,42 @@ Item {
 
         MenuItem {
             text: "Copy"
+            enabled: !isDeleted
             onTriggered: clipboardHelper.copyText(plaintext)
         }
 
         MenuItem {
+            text: "Copy ciphertext"
+            enabled: !isDeleted
+            onTriggered: messageController.copyCiphertext(messageId)
+        }
+
+        MenuItem {
             text: "Forward"
+            enabled: !revoked && !isDeleted
             onTriggered: forwardBar.visible = !forwardBar.visible
+        }
+
+        MenuItem {
+            text: "Download"
+            enabled: !isDeleted
+            onTriggered: messageController.downloadMessage(messageId, plaintext)
         }
 
         MenuSeparator {}
 
         MenuItem {
-            text: "Delete for me"
+            visible: outgoing && !isDeleted
+            height:  (outgoing && !isDeleted) ? implicitHeight : 0
+            text:    "Delete for everyone"
             onTriggered: messageController.deleteMessage(messageId)
         }
 
         MenuItem {
-            visible: outgoing
-            height:  outgoing ? implicitHeight : 0
+            visible: outgoing && !isDeleted
+            height:  (outgoing && !isDeleted) ? implicitHeight : 0
             text:    "Revoke delivery"
+            enabled: !revoked
             onTriggered: messageController.revokeMessage(
                 messageId,
                 conversationController.deviceIdForConversation(
@@ -201,7 +234,7 @@ Item {
                     verticalAlignment:   Text.AlignVCenter
                 }
                 onClicked: {
-                    conversationController.createChat(forwardTo.text.trim())
+                    messageController.forwardMessage(forwardTo.text.trim(), plaintext)
                     forwardBar.visible = false
                     forwardTo.clear()
                 }

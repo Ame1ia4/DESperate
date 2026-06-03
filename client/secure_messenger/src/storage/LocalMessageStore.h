@@ -48,6 +48,18 @@ public:
         const QString& messageId)
         const;
 
+    QByteArray ciphertextForMessage(
+        const QString& messageId)
+        const;
+
+    void updateMessageId(
+        const QString& oldId,
+        const QString& newId);
+
+    void removeDecryptedMessage(const QString& messageId);
+    void markMessageRevoked(const QString& messageId);
+    void markMessageDeleted(const QString& messageId);
+
     void clearConversation(
         const QString& conversationId);
 

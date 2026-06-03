@@ -22,6 +22,7 @@ import { proofHandler } from './handlers/merkle/proof.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+
 const verificationHtmlTemplate = readFileSync(
   join(__dirname, 'blockchain', 'verification.html'), 'utf-8'
 )
@@ -320,7 +321,7 @@ app.post('/conversations', requireAuth, async (req, res) => {
 
 // Send an encrypted message — stores it and fans out to recipient devices.
 app.post('/messages', requireAuth, async (req, res) => {
-  const { conversation_id, ciphertext, nonce, initiation_bundle, sender_ik_sig_pub } = req.body
+  const { conversation_id, ciphertext, nonce, initiation_bundle, sender_ik_sig_pub, forwarded } = req.body
 
   if (!conversation_id || !ciphertext || !nonce)
     return res.status(400).json({ error: 'conversation_id, ciphertext, and nonce required' })
@@ -342,7 +343,7 @@ app.post('/messages', requireAuth, async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid hex encoding' })
   }
-
+// Validate ciphertext and nonce lengths before hitting DB constraints or silently truncating.
   if (nonceBuf.length !== 12)
     return res.status(400).json({ error: 'nonce must be 12 bytes' })
 
@@ -357,10 +358,11 @@ app.post('/messages', requireAuth, async (req, res) => {
   const messageId = await withTransaction(async (client) => {
     const { rows: [msg] } = await client.query(
       `INSERT INTO messages
-         (conversation_id, sender_device_id, ciphertext, nonce, associated_data, sender_ik_sig_pub)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (conversation_id, sender_device_id, ciphertext, nonce, associated_data, sender_ik_sig_pub, forwarded)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, created_at`,
-      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null]
+      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null,
+       forwarded === true]
     )
 
     // M2 fix applied: pass context fields so the leaf is bound to this
@@ -418,6 +420,7 @@ app.post('/messages', requireAuth, async (req, res) => {
 })
 
 // Pull pending (undelivered) messages for the authenticated device.
+// Also returns deletion/revocation notices so the recipient's UI updates in-place.
 app.get('/messages/pending', requireAuth, async (req, res) => {
   const { rows } = await query(
     `SELECT
@@ -429,6 +432,7 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
        m.sender_ik_sig_pub,
        mq.id                                   AS queue_id,
        mq.associated_data,
+       m.forwarded,
        m.created_at
      FROM message_queue mq
      JOIN messages m ON m.id = mq.msg_id
@@ -436,6 +440,11 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
        AND mq.delivery_state      = 'pending'
        AND mq.expires_at          > NOW()
        AND m.deleted_at           IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM message_hidden mh
+         WHERE mh.msg_id  = m.id
+           AND mh.user_id = (SELECT user_id FROM devices WHERE id = $1)
+       )
      ORDER BY mq.msg_sequence ASC
      LIMIT 100`,
     [req.deviceId]
@@ -457,11 +466,38 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
       nonce:             r.nonce,
       sender_ik_sig_pub: r.sender_ik_sig_pub,
       initiation_bundle: initiationBundle,
+      forwarded:         r.forwarded,
       created_at:        r.created_at,
     }
   })
 
-  res.json({ envelopes })
+  // Atomically mark notices as sent and return them in a single statement so a
+  // server crash between read and update cannot cause duplicate re-delivery.
+  const { rows: noticeRows } = await query(
+    `UPDATE message_hidden mh
+     SET    notice_sent = TRUE
+     FROM   messages m
+     WHERE  mh.msg_id      = m.id
+       AND  mh.user_id     = (SELECT user_id FROM devices WHERE id = $1)
+       AND  mh.notice_sent = FALSE
+     RETURNING mh.msg_id,
+               CASE WHEN m.deleted_at IS NOT NULL THEN 'deleted' ELSE 'revoked' END AS type,
+               m.conversation_id,
+               m.created_at`,
+    [req.deviceId]
+  )
+
+  if (noticeRows.length > 0) {
+    console.log(`[NOTICES] delivered ${noticeRows.length} notice(s) to device ${req.deviceId}:`,
+      noticeRows.map(r => `${r.type}:${r.msg_id}`).join(', '))
+  }
+
+  res.json({ envelopes, notices: noticeRows.map(r => ({
+    message_id:      r.msg_id,
+    type:            r.type,
+    conversation_id: r.conversation_id,
+    created_at:      r.created_at,
+  })) })
 })
 
 // Acknowledge delivery — marks the queue entry as delivered.
@@ -509,6 +545,7 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
          m.sender_device_id,
          encode(m.ciphertext, 'hex') AS ciphertext,
          encode(m.nonce,      'hex') AS nonce,
+         m.forwarded,
          m.created_at,
          (m.sender_device_id = $3)   AS is_mine
        FROM messages m
@@ -516,6 +553,11 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
          AND m.deleted_at IS NULL
          AND m.created_at < (
            SELECT created_at FROM messages WHERE id = $2
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden mh
+           WHERE mh.msg_id  = m.id
+             AND mh.user_id = (SELECT user_id FROM devices WHERE id = $3)
          )
        ORDER BY m.created_at ASC
        LIMIT 50`,
@@ -529,11 +571,17 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
          m.sender_device_id,
          encode(m.ciphertext, 'hex') AS ciphertext,
          encode(m.nonce,      'hex') AS nonce,
+         m.forwarded,
          m.created_at,
          (m.sender_device_id = $2)   AS is_mine
        FROM messages m
        WHERE m.conversation_id = $1
          AND m.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden mh
+           WHERE mh.msg_id  = m.id
+             AND mh.user_id = (SELECT user_id FROM devices WHERE id = $2)
+         )
        ORDER BY m.created_at ASC
        LIMIT 50`,
       [conversationId, req.deviceId]
@@ -580,34 +628,59 @@ app.get('/messages/:id', requireAuth, async (req, res) => {
   res.json(message)
 })
 
-// Soft-delete a message — only the sender may delete.
+// Soft-delete a message for everyone — only the original sender may delete.
+// Sets deleted_at so the message is excluded from all subsequent queries for all participants.
 app.delete('/messages/:id', requireAuth, async (req, res) => {
   const messageId = req.params.id
   if (!UUID_RE.test(messageId))
     return res.status(400).json({ error: 'Invalid message id' })
 
-  const { rowCount } = await query(
-    `UPDATE messages
-     SET deleted_at           = NOW(),
-         deleted_by_device_id = $2
-     WHERE id               = $1
-       AND sender_device_id IN (
-             SELECT id FROM devices
-             WHERE user_id = (
-               SELECT user_id FROM devices WHERE id = $2
-             )
-           )
-       AND deleted_at IS NULL`,
-    [messageId, req.deviceId]
-  )
+  const { rowCount } = await withTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE messages
+       SET deleted_at           = NOW(),
+           deleted_by_device_id = $2
+       WHERE id               = $1
+         AND deleted_at IS NULL
+         AND sender_device_id IN (
+               SELECT id FROM devices
+               WHERE user_id = (
+                 SELECT user_id FROM devices WHERE id = $2
+               )
+             )`,
+      [messageId, req.deviceId]
+    )
+    if (result.rowCount === 0) return result
 
-  if (rowCount === 0)
+    // Hide the message from every other participant's history so they
+    // cannot see it even if they already received it.
+    await client.query(
+      `INSERT INTO message_hidden (msg_id, user_id, notice_sent)
+       SELECT $1, cm.user_id, FALSE
+       FROM   conversation_members cm
+       JOIN   messages m ON m.id = $1
+       WHERE  cm.conversation_id = m.conversation_id
+         AND  cm.user_id != (SELECT user_id FROM devices WHERE id = $2)
+       ON CONFLICT (msg_id, user_id) DO UPDATE SET notice_sent = FALSE`,
+      [messageId, req.deviceId]
+    )
+    return result
+  })
+
+  if (rowCount === 0) {
+    console.warn(`[DELETE] 403 msg=${messageId} device=${req.deviceId} — not sender or already deleted`)
     return res.status(403).json({ error: 'Not the sender or message already deleted' })
+  }
 
+  console.log(`[DELETE] msg=${messageId} soft-deleted by device=${req.deviceId}`)
   res.json({ deleted: true })
 })
 
-// Revoke a pending queue entry so a recipient cannot receive the message.
+// Revoke a recipient's access to a message — works both before AND after delivery.
+// Pre-delivery:  removes the pending queue entry.
+// Post-delivery: inserts into message_hidden so the message is excluded from all
+//               future history and pending queries for that recipient.
+// On next poll the recipient receives a 'revoked' notice and their UI updates.
 app.post('/messages/:id/revoke', requireAuth, async (req, res) => {
   const messageId = req.params.id
   if (!UUID_RE.test(messageId))
@@ -623,28 +696,46 @@ app.post('/messages/:id/revoke', requireAuth, async (req, res) => {
      WHERE id = $1
        AND sender_device_id IN (
              SELECT id FROM devices
-             WHERE user_id = (
-               SELECT user_id FROM devices WHERE id = $2
-             )
+             WHERE user_id = (SELECT user_id FROM devices WHERE id = $2)
            )`,
     [messageId, req.deviceId]
   )
-  if (!senderCheck.rows.length)
+  if (!senderCheck.rows.length) {
+    console.warn(`[REVOKE] 403 msg=${messageId} device=${req.deviceId} — not sender`)
     return res.status(403).json({ error: 'Not the sender of this message' })
-
-  const { rowCount } = await query(
-    `DELETE FROM message_queue
-     WHERE msg_id              = $1
-       AND recipient_device_id = $2
-       AND delivery_state      = 'pending'`,
-    [messageId, recipient_device_id]
-  )
-
-  if (rowCount > 0) {
-    res.json({ revoked: true, already_delivered: false })
-  } else {
-    res.json({ revoked: false, already_delivered: true })
   }
+
+  // Resolve the recipient's user_id from their device_id.
+  const { rows: deviceRows } = await query(
+    'SELECT user_id FROM devices WHERE id = $1',
+    [recipient_device_id]
+  )
+  if (!deviceRows.length)
+    return res.status(404).json({ error: 'Recipient device not found' })
+  const recipientUserId = deviceRows[0].user_id
+
+  await withTransaction(async (client) => {
+    // Pre-delivery: remove pending queue entry (no-op if already delivered).
+    await client.query(
+      `DELETE FROM message_queue
+       WHERE msg_id              = $1
+         AND recipient_device_id = $2
+         AND delivery_state      = 'pending'`,
+      [messageId, recipient_device_id]
+    )
+    // Post-delivery: hide from all future queries for this recipient.
+    // DO UPDATE resets notice_sent so a 'revoked' notice is re-delivered even
+    // if a prior delete already created the row with notice_sent = TRUE.
+    await client.query(
+      `INSERT INTO message_hidden (msg_id, user_id, notice_sent)
+       VALUES ($1, $2, FALSE)
+       ON CONFLICT (msg_id, user_id) DO UPDATE SET notice_sent = FALSE`,
+      [messageId, recipientUserId]
+    )
+  })
+
+  console.log(`[REVOKE] msg=${messageId} revoked for device=${recipient_device_id} by device=${req.deviceId}`)
+  res.json({ revoked: true })
 })
 
 // Change SRP credentials (salt + verifier) for the authenticated user.

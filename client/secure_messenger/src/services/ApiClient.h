@@ -28,7 +28,8 @@ public:
     void fetchRegistrationNonce();
 
     void sendMessage(
-        const QJsonObject& encryptedEnvelope
+        const QJsonObject& encryptedEnvelope,
+        const QString& localId = QString()
         );
 
     void pullMessages(
@@ -59,6 +60,8 @@ public:
     QString storedDeviceId(const QString& username) const;
     void    storeDeviceId(const QString& username, const QString& deviceId);
 
+    void clearCredentials();
+
 signals:
     void registerUserSucceeded(QString deviceId);
     void registerUserFailed(QString reason);
@@ -71,6 +74,7 @@ signals:
     void fetchConversationMessagesSucceeded(QJsonArray messages);
     void fetchConversationMessagesFailed(QString reason);
     void pullMessagesSucceeded(QJsonArray envelopes);
+    void pullNoticesSucceeded(QJsonArray notices);
     void pullMessagesFailed();
     void acknowledgeMessageSucceeded(QString messageId);
     void acknowledgeMessageFailed(QString messageId);
@@ -80,6 +84,12 @@ signals:
     void createConversationFailed(QString reason);
     void fetchUserDevicesSucceeded(QJsonArray devices);
     void fetchUserDevicesFailed(QString reason);
+    void deleteMessageSucceeded(QString messageId);
+    void deleteMessageFailed(QString messageId);
+    void revokeMessageSucceeded(QString messageId);
+    void revokeMessageFailed(QString messageId);
+    // Fired after POST /messages succeeds; carries both the client temp ID and server DB UUID
+    void messageSentToServer(QString localId, QString serverId);
 
 private:
     void doSrpInit(
@@ -100,6 +110,7 @@ private:
     QNetworkAccessManager m_network;
     CryptoServiceClient*  m_crypto = nullptr;
     QString               m_authToken;
+    QString               m_hmacKey;
     QString               m_activeDeviceId;
     QSettings             m_settings;
 };

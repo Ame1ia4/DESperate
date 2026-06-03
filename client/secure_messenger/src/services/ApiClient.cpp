@@ -10,6 +10,9 @@
 #include <QNetworkReply>
 #include <QUrl>
 #include <QString>
+#include <QDateTime>
+#include <QMessageAuthenticationCode>
+#include <QCryptographicHash>
 
 ApiClient::ApiClient(CryptoServiceClient* crypto, QObject* parent)
     : QObject(parent)
@@ -245,12 +248,13 @@ void ApiClient::doSrpVerify(
         const auto parsed       = QJsonDocument::fromJson(body).object();
         const auto M2           = parsed.value(QStringLiteral("serverSessionProof")).toString();
         const auto sessionToken = parsed.value(QStringLiteral("session_token")).toString();
+        const auto hmacKey      = parsed.value(QStringLiteral("hmac_key")).toString();
 
         qDebug() << "[LOGIN] Round 2 OK: M2 len:" << M2.length()
                  << "| sessionToken len:" << sessionToken.length();
 
-        if (M2.isEmpty() || sessionToken.isEmpty()) {
-            qDebug() << "[LOGIN] Round 2 FAILED: M2 or session_token empty";
+        if (M2.isEmpty() || sessionToken.isEmpty() || hmacKey.isEmpty()) {
+            qDebug() << "[LOGIN] Round 2 FAILED: M2 or session_token or hmac_key empty";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
@@ -271,6 +275,7 @@ void ApiClient::doSrpVerify(
 
         // Use the server-issued HKDF-derived token (not raw K) as the Bearer credential.
         setAuthToken(sessionToken);
+        m_hmacKey = hmacKey;
 
         qDebug() << "[LOGIN] SUCCESS: session established";
         emit loginUserSucceeded();
@@ -284,20 +289,36 @@ void ApiClient::setAuthToken(const QString& token)
     m_authToken = token;
 }
 
+void ApiClient::clearCredentials()
+{
+    m_authToken.clear();
+    m_hmacKey.clear();
+    m_activeDeviceId.clear();
+}
+
 void ApiClient::sendMessage(
-    const QJsonObject& encryptedEnvelope)
+    const QJsonObject& encryptedEnvelope,
+    const QString& localId)
 {
     auto request = makeRequest("/messages");
     auto* reply  = m_network.post(request, QJsonDocument(encryptedEnvelope).toJson());
-    connect(reply, &QNetworkReply::finished, this, [reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, localId]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body  = reply->readAll();
+        reply->deleteLater();
         if (status < 200 || status >= 300) {
             qWarning() << "[SEND] POST /messages failed | status:" << status
-                       << "|" << QString::fromUtf8(reply->readAll().left(200));
-        } else {
-            qDebug() << "[SEND] POST /messages OK | status:" << status;
+                       << "|" << QString::fromUtf8(body.left(200));
+            return;
         }
-        reply->deleteLater();
+        qDebug() << "[SEND] POST /messages OK | status:" << status;
+        if (!localId.isEmpty()) {
+            const QString serverId =
+                QJsonDocument::fromJson(body).object().value("id").toString();
+            qDebug() << "[SEND] ID mapping: local" << localId << "→ server" << serverId;
+            if (!serverId.isEmpty())
+                emit messageSentToServer(localId, serverId);
+        }
     });
 }
 
@@ -321,7 +342,10 @@ void ApiClient::pullMessages(
 
         const auto response  = QJsonDocument::fromJson(body).object();
         const auto envelopes = response.value("envelopes").toArray();
+        const auto notices   = response.value("notices").toArray();
         emit pullMessagesSucceeded(envelopes);
+        if (!notices.isEmpty())
+            emit pullNoticesSucceeded(notices);
     });
 }
 
@@ -407,7 +431,16 @@ void ApiClient::deleteMessage(const QString& messageId)
     auto request = makeRequest(
         "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)));
     auto* reply  = m_network.deleteResource(request);
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body  = reply->readAll();
+        qDebug() << "[DELETE] status:" << status << "|" << QString::fromUtf8(body.left(200));
+        reply->deleteLater();
+        if (status >= 200 && status < 300)
+            emit deleteMessageSucceeded(messageId);
+        else
+            emit deleteMessageFailed(messageId);
+    });
 }
 
 void ApiClient::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
@@ -417,7 +450,16 @@ void ApiClient::revokeMessage(const QString& messageId, const QString& recipient
     QJsonObject body;
     body["recipient_device_id"] = recipientDeviceId;
     auto* reply = m_network.post(request, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body  = reply->readAll();
+        qDebug() << "[REVOKE] status:" << status << "|" << QString::fromUtf8(body.left(200));
+        reply->deleteLater();
+        if (status >= 200 && status < 300)
+            emit revokeMessageSucceeded(messageId);
+        else
+            emit revokeMessageFailed(messageId);
+    });
 }
 
 void ApiClient::fetchKeyBundle(const QString& username)
@@ -532,6 +574,21 @@ QNetworkRequest ApiClient::makeRequest(
         request.setRawHeader(
             "Authorization",
             ("Bearer " + m_authToken).toUtf8());
+    }
+
+    // M4: per-request timestamp + HMAC replay protection.
+    // Server requires X-Request-Time (Unix ms) and X-Request-HMAC on every
+    // protected route. HMAC = HMAC-SHA256(hmac_key, deviceId + ":" + timestamp).
+    if (!m_hmacKey.isEmpty() && !m_activeDeviceId.isEmpty()) {
+        const qint64 timestamp = QDateTime::currentMSecsSinceEpoch();
+        const QByteArray message =
+            (m_activeDeviceId + ":" + QString::number(timestamp)).toUtf8();
+        const QByteArray hmac = QMessageAuthenticationCode::hash(
+            message,
+            QByteArray::fromHex(m_hmacKey.toUtf8()),
+            QCryptographicHash::Sha256);
+        request.setRawHeader("X-Request-Time", QString::number(timestamp).toUtf8());
+        request.setRawHeader("X-Request-HMAC", hmac.toHex());
     }
 
     return request;

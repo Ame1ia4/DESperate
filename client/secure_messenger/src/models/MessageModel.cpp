@@ -52,6 +52,15 @@ QVariant MessageModel::data(
     case MessageIdRole:
         return msg.id;
 
+    case RevokedRole:
+        return msg.revoked;
+
+    case IsDeletedRole:
+        return msg.isDeleted;
+
+    case ForwardedRole:
+        return msg.forwarded;
+
     default:
         return {};
     }
@@ -67,7 +76,10 @@ MessageModel::roleNames() const
         {PlaintextRole,    "plaintext"},
         {OutgoingRole,     "outgoing"},
         {VerifiedRole,     "verified"},
-        {MessageIdRole,    "messageId"}
+        {MessageIdRole,    "messageId"},
+        {RevokedRole,      "revoked"},
+        {IsDeletedRole,    "isDeleted"},
+        {ForwardedRole,    "forwarded"}
     };
 }
 
@@ -91,4 +103,55 @@ void MessageModel::clear()
     beginResetModel();
     m_messages.clear();
     endResetModel();
+}
+
+void MessageModel::removeMessage(const QString& messageId)
+{
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == messageId) {
+            beginRemoveRows(QModelIndex(), i, i);
+            m_messages.erase(m_messages.begin() + i);
+            endRemoveRows();
+            return;
+        }
+    }
+}
+
+void MessageModel::markRevoked(const QString& messageId)
+{
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == messageId) {
+            if (m_messages[i].revoked) return;
+            m_messages[i].revoked = true;
+            const QModelIndex idx = index(i);
+            emit dataChanged(idx, idx, {RevokedRole});
+            return;
+        }
+    }
+}
+
+void MessageModel::markDeleted(const QString& messageId)
+{
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == messageId) {
+            if (m_messages[i].isDeleted) return;
+            m_messages[i].isDeleted = true;
+            const QModelIndex idx = index(i);
+            emit dataChanged(idx, idx, {IsDeletedRole});
+            return;
+        }
+    }
+}
+
+void MessageModel::updateMessageId(const QString& oldId, const QString& newId)
+{
+    if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
+    for (int i = 0; i < static_cast<int>(m_messages.size()); ++i) {
+        if (m_messages[i].id == oldId) {
+            m_messages[i].id = newId;
+            const QModelIndex idx = index(i);
+            emit dataChanged(idx, idx, {MessageIdRole});
+            return;
+        }
+    }
 }

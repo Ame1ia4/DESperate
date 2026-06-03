@@ -410,7 +410,12 @@ CREATE TABLE messages (
 
     -- ChaCha20-Poly1305: 12-byte nonce
     -- AES-256-GCM:       12-byte nonce (96-bit, recommended)
-    CHECK (octet_length(nonce) = 12)
+    CHECK (octet_length(nonce) = 12),
+
+    -- Sender-set flag transported as envelope metadata (not inside ciphertext).
+    -- Allows recipient UI to show a "forwarded" badge without embedding magic
+    -- bytes inside the encrypted payload.
+    forwarded BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_messages_conversation
@@ -542,9 +547,13 @@ CREATE INDEX idx_merkle_leaves_root
 -- =========================================================
 
 CREATE TABLE message_hidden (
-    msg_id    UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    user_id   UUID        NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
-    hidden_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    msg_id      UUID        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id     UUID        NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+    hidden_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- FALSE until the deletion/revocation notice has been delivered to the
+    -- recipient's next pending-messages poll, then flipped to TRUE so
+    -- subsequent polls do not re-send the same notice.
+    notice_sent BOOLEAN     NOT NULL DEFAULT FALSE,
     PRIMARY KEY (msg_id, user_id)
 );
 

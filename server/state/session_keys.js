@@ -20,11 +20,12 @@ setInterval(() => {
     if (entry.expiresAt <= now) _cache.delete(id)
 }, 60_000).unref()
 
-export async function storeSessionKey(deviceId, keyHex) {
+export async function storeSessionKey(deviceId, keyData) {
   const expiresAt = Date.now() + SESSION_KEY_TTL_MS
-  _cache.set(deviceId, { keyHex, expiresAt })
+  _cache.set(deviceId, { keyData, expiresAt })
 
-  // Persist to DB so the key survives a server restart.
+  // JSON.stringify so the { token, hmacKey, issuedAt } object round-trips
+  // correctly through the text column instead of becoming "[object Object]".
   await query(
     `INSERT INTO device_sessions (device_id, session_key_hex, expires_at)
      VALUES ($1, $2, NOW() + INTERVAL '24 hours')
@@ -32,7 +33,7 @@ export async function storeSessionKey(deviceId, keyHex) {
      DO UPDATE SET
        session_key_hex = EXCLUDED.session_key_hex,
        expires_at      = EXCLUDED.expires_at`,
-    [deviceId, keyHex]
+    [deviceId, JSON.stringify(keyData)]
   )
 }
 
@@ -43,7 +44,7 @@ export async function getSessionKey(deviceId) {
     if (cached.expiresAt <= Date.now()) {
       _cache.delete(deviceId)
     } else {
-      return cached.keyHex
+      return cached.keyData
     }
   }
 
@@ -57,10 +58,15 @@ export async function getSessionKey(deviceId) {
   )
   if (!rows.length) return null
 
-  const { session_key_hex } = rows[0]
+  let keyData
+  try {
+    keyData = JSON.parse(rows[0].session_key_hex)
+  } catch {
+    return null
+  }
   // Repopulate cache so subsequent requests skip the DB.
-  _cache.set(deviceId, { keyHex: session_key_hex, expiresAt: Date.now() + SESSION_KEY_TTL_MS })
-  return session_key_hex
+  _cache.set(deviceId, { keyData, expiresAt: Date.now() + SESSION_KEY_TTL_MS })
+  return keyData
 }
 
 // Instantly invalidate a device's session: clear the in-process cache AND the

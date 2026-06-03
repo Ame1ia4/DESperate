@@ -274,13 +274,14 @@ void AuthController::logout()
 {
     if (m_authenticated) {
         m_authenticated = false;
-
         emit authenticatedChanged();
     }
 
+    // Zero out all session credentials immediately so no in-flight request
+    // after this point can be signed with the previous user's token or HMAC key.
+    m_api->clearCredentials();
+
     m_currentUserId.clear();
-
     emit currentUserChanged();
-
     setAuthError(QString());
 }

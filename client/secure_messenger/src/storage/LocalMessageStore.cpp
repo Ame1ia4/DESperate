@@ -30,6 +30,8 @@
                     m.timestamp = QDateTime::fromString(obj.value("timestamp").toString(), Qt::ISODateWithMs);
                     m.verificationState = static_cast<VerificationState>(obj.value("verificationState").toInt(0));
                     m.isDeleted = obj.value("isDeleted").toBool(false);
+                    m.revoked  = obj.value("revoked").toBool(false);
+                    m.forwarded = obj.value("forwarded").toBool(false);
                     const int index = m_decryptedMessages.size();
                     m_messageIndex.insert(m.id, index);
                     m_decryptedMessages.push_back(m);
@@ -72,6 +74,8 @@
         obj["timestamp"] = m.timestamp.toString(Qt::ISODateWithMs);
         obj["verificationState"] = static_cast<int>(m.verificationState);
         obj["isDeleted"] = m.isDeleted;
+        obj["revoked"] = m.revoked;
+        obj["forwarded"] = m.forwarded;
         return obj;
     }
 
@@ -273,6 +277,72 @@ bool LocalMessageStore::containsMessage(
 {
     return m_messageIndex.contains(
         messageId);
+}
+
+QByteArray LocalMessageStore::ciphertextForMessage(
+    const QString& messageId)
+    const
+{
+    for (const auto& e : m_envelopes) {
+        if (e.id == messageId)
+            return e.ciphertext;
+    }
+    return {};
+}
+
+void LocalMessageStore::updateMessageId(
+    const QString& oldId,
+    const QString& newId)
+{
+    if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
+
+    if (m_messageIndex.contains(oldId)) {
+        const int idx = m_messageIndex.take(oldId);
+        m_messageIndex.insert(newId, idx);
+        m_decryptedMessages[idx].id = newId;
+    }
+
+    for (auto& e : m_envelopes) {
+        if (e.id == oldId) {
+            e.id = newId;
+            break;
+        }
+    }
+
+    saveState();
+}
+
+void LocalMessageStore::removeDecryptedMessage(const QString& messageId)
+{
+    if (!m_messageIndex.contains(messageId)) return;
+
+    const int idx = m_messageIndex.value(messageId);
+    m_decryptedMessages.removeAt(idx);
+
+    // Positions after the removed row shifted — rebuild the whole index.
+    m_messageIndex.clear();
+    for (int i = 0; i < m_decryptedMessages.size(); ++i)
+        m_messageIndex.insert(m_decryptedMessages[i].id, i);
+
+    saveState();
+}
+
+void LocalMessageStore::markMessageRevoked(const QString& messageId)
+{
+    if (!m_messageIndex.contains(messageId)) return;
+    auto& msg = m_decryptedMessages[m_messageIndex.value(messageId)];
+    if (msg.revoked) return;
+    msg.revoked = true;
+    saveState();
+}
+
+void LocalMessageStore::markMessageDeleted(const QString& messageId)
+{
+    if (!m_messageIndex.contains(messageId)) return;
+    auto& msg = m_decryptedMessages[m_messageIndex.value(messageId)];
+    if (msg.isDeleted) return;
+    msg.isDeleted = true;
+    saveState();
 }
 
 void LocalMessageStore::clearConversation(

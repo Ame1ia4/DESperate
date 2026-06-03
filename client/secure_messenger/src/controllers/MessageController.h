@@ -26,6 +26,8 @@ struct PendingMessage
     QString recipientDeviceId;
 
     QByteArray plaintext;
+
+    bool forwarded = false;
 };
 
 class MessageController : public QObject
@@ -46,15 +48,21 @@ public:
 public slots:
     Q_INVOKABLE void sendText(
         const QString& conversationId,
-        const QString& text);
+        const QString& text,
+        bool forwarded = false);
 
     Q_INVOKABLE void deleteMessage(const QString& messageId);
     Q_INVOKABLE void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
+    Q_INVOKABLE void forwardMessage(const QString& toUsername, const QString& plaintext);
+    Q_INVOKABLE void downloadMessage(const QString& messageId, const QString& plaintext);
+    Q_INVOKABLE QString ciphertextForMessage(const QString& messageId) const;
+    Q_INVOKABLE void copyCiphertext(const QString& messageId);
 
     void sendMessage(
         QString conversationId,
         QString recipientDeviceId,
-        QByteArray plaintext);
+        QByteArray plaintext,
+        bool forwarded = false);
 
     void receiveEnvelope(
         QJsonObject envelope);
@@ -75,6 +83,14 @@ signals:
 
     void messageReceiveFailed(
         QString reason);
+
+    void messageDownloaded(QString path);
+    void messageDownloadFailed(QString reason);
+    void messageRevokeSucceeded();
+    void messageRevokeFailed();
+    void ciphertextCopied();
+    void ciphertextCopyFailed();
+    void forwardInitiated(QString toUsername);
 
 private slots:
     void handleEncryptCompleted(
@@ -114,4 +130,7 @@ private:
 
     QHash<QString, QJsonObject>
         m_pendingDecryptions;
+
+    QHash<QString, QString>
+        m_pendingForwards;
 };

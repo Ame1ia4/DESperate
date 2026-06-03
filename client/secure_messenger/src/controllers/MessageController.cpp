@@ -1,7 +1,13 @@
 #include "MessageController.h"
 
+#include <QClipboard>
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QGuiApplication>
 #include <QJsonArray>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QUuid>
 
 #include "ConversationController.h"
@@ -12,6 +18,10 @@
 #include "src/storage/LocalMessageStore.h"
 #include "src/storage/TrustStore.h"
 #include "src/types/Types.h"
+
+// STX-fwd-STX prefix embedded in ciphertext payload to mark forwarded messages.
+// Control chars (0x02) won't appear in normal user text.
+static const QString FORWARD_PREFIX = QStringLiteral("\x02""fwd\x02");
 
 MessageController::MessageController(
     ApiClient* api,
@@ -58,10 +68,69 @@ MessageController::MessageController(
         this,
         &MessageController
         ::handleDecryptFailed);
+
+    // When the server responds to POST /messages, swap the client temp ID for the server DB UUID
+    // in the model, the local store, AND the ConversationController's in-memory cache.
+    // All three must be in sync so that delete/revoke still use the correct ID after navigation.
+    connect(m_api, &ApiClient::messageSentToServer, this,
+        [this](const QString& localId, const QString& serverId) {
+            m_model->updateMessageId(localId, serverId);
+            m_store->updateMessageId(localId, serverId);
+            m_conversations->updateMessageId(localId, serverId);
+        });
+
+    connect(m_api, &ApiClient::deleteMessageSucceeded, this, [this](const QString& messageId) {
+        Q_UNUSED(messageId)
+        // markDeleted (called synchronously in deleteMessage) already applied the
+        // placeholder. Do not remove it — let "Message deleted" stay visible.
+    });
+
+    // Revoke: mark the sender's own bubble with a small indicator, persist the state,
+    // but keep the original message text visible (only the recipient lost access).
+    connect(m_api, &ApiClient::revokeMessageSucceeded, this, [this](const QString& messageId) {
+        m_model->markRevoked(messageId);
+        m_store->markMessageRevoked(messageId);
+        m_conversations->markLocalRevoked(messageId);
+        emit messageRevokeSucceeded();
+    });
+
+    connect(m_api, &ApiClient::revokeMessageFailed, this, [this](const QString&) {
+        emit messageRevokeFailed();
+    });
+
+    // sessionReadyChanged fires when the current conversation's session state changes,
+    // but m_pendingForwards is keyed by conversation ID that may no longer be current
+    // if the user navigated away during the async createChat chain. Iterate all pending
+    // forwards and check the crypto layer directly to avoid using currentConversationId().
+    connect(m_conversations, &ConversationController::sessionReadyChanged, this, [this]() {
+        if (m_pendingForwards.isEmpty()) return;
+        const auto keys = m_pendingForwards.keys();
+        for (const QString& convId : keys) {
+            if (m_crypto->hasSession(convId)) {
+                const QString text = m_pendingForwards.take(convId);
+                sendText(convId, text, /*forwarded=*/true);
+            }
+        }
+    });
+
+    // If conversation creation fails the entry never gets a conversation ID, so
+    // we cannot match it. Drain the map to prevent stale plaintext leaking in memory.
+    connect(m_conversations, &ConversationController::createChatFailed, this,
+        [this](const QString&) {
+            if (!m_pendingForwards.isEmpty()) {
+                m_pendingForwards.clear();
+                emit messageSendFailed(QStringLiteral("Forward failed: could not create conversation."));
+            }
+        });
 }
 
 void MessageController::deleteMessage(const QString& messageId)
 {
+    if (messageId.isEmpty()) return;
+    // Mark deleted in all three layers so the bubble stays but shows "Message deleted".
+    m_model->markDeleted(messageId);
+    m_store->markMessageDeleted(messageId);
+    m_conversations->markLocalDeleted(messageId);
     m_api->deleteMessage(messageId);
 }
 
@@ -70,9 +139,81 @@ void MessageController::revokeMessage(const QString& messageId, const QString& r
     m_api->revokeMessage(messageId, recipientDeviceId);
 }
 
+void MessageController::forwardMessage(const QString& toUsername, const QString& plaintext)
+{
+    const QString trimmed = toUsername.trimmed();
+    if (trimmed.isEmpty() || plaintext.isEmpty()) return;
+
+    emit forwardInitiated(trimmed);
+
+    // Store plaintext keyed by the conversation ID we're about to create/open.
+    // The ID is captured from createConversationSucceeded before createChat fires it.
+    connect(
+        m_api,
+        &ApiClient::createConversationSucceeded,
+        this,
+        [this, plaintext](const QString& conversationId) {
+            m_pendingForwards.insert(conversationId, plaintext);
+        },
+        Qt::SingleShotConnection);
+
+    // createChat handles conversation creation, loadConversations (for device IDs),
+    // openConversation, and PQXDH session setup. sessionReadyChanged fires when ready.
+    m_conversations->createChat(trimmed);
+}
+
+void MessageController::downloadMessage(const QString& messageId, const QString& plaintext)
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (dir.isEmpty()) {
+        emit messageDownloadFailed(QStringLiteral("Cannot locate Downloads folder."));
+        return;
+    }
+
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString path      = QDir(dir).filePath(QStringLiteral("message_%1.txt").arg(timestamp));
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        emit messageDownloadFailed(QStringLiteral("Failed to save: ") + file.errorString());
+        return;
+    }
+
+    QTextStream out(&file);
+    out << "WARNING: This file contains decrypted plaintext. Keep it secure and delete when done.\n";
+    out << "Message ID: " << messageId << "\n";
+    out << "Downloaded: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n\n";
+    out << plaintext << "\n";
+    file.close();
+
+    // Restrict to owner-read-only after writing (mode 0400 on Linux/macOS; equivalent ACL on Windows).
+    // Must happen after close — setPermissions before write would prevent the write from succeeding.
+    QFile::setPermissions(path, QFileDevice::ReadOwner);
+
+    emit messageDownloaded(path);
+}
+
+QString MessageController::ciphertextForMessage(const QString& messageId) const
+{
+    const QByteArray ct = m_store->ciphertextForMessage(messageId);
+    return ct.isEmpty() ? QString{} : QString::fromLatin1(ct.toHex());
+}
+
+void MessageController::copyCiphertext(const QString& messageId)
+{
+    const QByteArray ct = m_store->ciphertextForMessage(messageId);
+    if (ct.isEmpty()) {
+        emit ciphertextCopyFailed();
+        return;
+    }
+    QGuiApplication::clipboard()->setText(QString::fromLatin1(ct.toHex()));
+    emit ciphertextCopied();
+}
+
 void MessageController::sendText(
     const QString& conversationId,
-    const QString& text)
+    const QString& text,
+    bool forwarded)
 {
     const QString trimmed = text.trimmed();
 
@@ -87,13 +228,15 @@ void MessageController::sendText(
     sendMessage(
         conversationId,
         deviceId,
-        trimmed.toUtf8());
+        trimmed.toUtf8(),
+        forwarded);
 }
 
 void MessageController::sendMessage(
     QString conversationId,
     QString recipientDeviceId,
-    QByteArray plaintext)
+    QByteArray plaintext,
+    bool forwarded)
 {
     if (conversationId.isEmpty()) {
 
@@ -136,6 +279,9 @@ void MessageController::sendMessage(
     pending.plaintext =
         plaintext;
 
+    pending.forwarded =
+        forwarded;
+
     m_pendingMessages.insert(
         requestId,
         pending);
@@ -164,20 +310,24 @@ void MessageController::handleEncryptCompleted(
     // Inject fields the server requires that the crypto service doesn't produce.
     QJsonObject fullEnvelope = envelope;
     fullEnvelope["conversation_id"] = pending.conversationId;
+    fullEnvelope["forwarded"]        = pending.forwarded;
 
-    qDebug() << "[SEND] encryped OK, posting to server | conv:" << pending.conversationId
+    qDebug() << "[SEND] encrypted OK, posting to server | conv:" << pending.conversationId
              << "| ciphertext len:" << envelope["ciphertext"].toString().length();
 
+    // Use a brace-free UUID as the local temp ID.
+    // The server will assign its own DB UUID; messageSentToServer swaps it in once the
+    // POST /messages response arrives so delete/revoke can reference the correct ID.
+    const QString localId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    fullEnvelope["id"] = localId;
     m_store->storeOutgoingMessage(fullEnvelope);
-    m_api->sendMessage(fullEnvelope);
+    m_api->sendMessage(fullEnvelope, localId);
 
     // Optimistic UI update.
     DecryptedMessage message;
 
-    message.id =
-        envelope.value("id").toString(
-            QUuid::createUuid()
-                .toString());
+    message.id = localId;
 
     message.conversationId =
         pending.conversationId;
@@ -188,9 +338,10 @@ void MessageController::handleEncryptCompleted(
     message.timestamp =
         QDateTime::currentDateTimeUtc();
 
-    message.plaintext =
-        QString::fromUtf8(
-            pending.plaintext);
+    message.plaintext = QString::fromUtf8(pending.plaintext);
+
+    message.forwarded =
+        pending.forwarded;
 
     // C1 fix: outgoing messages are only Verified if TrustStore confirms
     // the recipient's identity key is pinned and matches. Previously this
@@ -285,8 +436,17 @@ void MessageController::handleDecryptCompleted(
             : QDateTime
             ::currentDateTimeUtc();
 
-    message.plaintext =
-        plaintext;
+    // Prefer the envelope's forwarded field (set by the sender since this fix).
+    // Fall back to the legacy magic-byte prefix for messages encrypted before this change.
+    if (envelope.value("forwarded").toBool(false)) {
+        message.plaintext = plaintext;
+        message.forwarded = true;
+    } else if (plaintext.startsWith(FORWARD_PREFIX)) {
+        message.plaintext = plaintext.mid(FORWARD_PREFIX.length());
+        message.forwarded = true;
+    } else {
+        message.plaintext = plaintext;
+    }
 
     // C1 fix: incoming messages are only Verified if TrustStore confirms
     // the sender's identity is pinned and matches. Previously hardcoded
@@ -303,11 +463,17 @@ void MessageController::handleDecryptCompleted(
                 : VerificationState::Failed;
     }
 
+    // Check dedup before storeOutgoingMessage so that if these two collections are
+    // ever unified, containsMessage still reflects pre-store state and appendLocalMessage
+    // is not silently skipped for all incoming messages.
+    const bool stored = !m_store->containsMessage(message.id);
+    m_store->storeOutgoingMessage(envelope);
     m_store->storeDecryptedMessage(
         message);
 
-    m_conversations
-        ->appendLocalMessage(message);
+    if (stored)
+        m_conversations
+            ->appendLocalMessage(message);
 
     m_api->acknowledgeMessage(
         message.id,
@@ -329,6 +495,10 @@ void MessageController::handleDecryptFailed(
     // Acknowledge undecryptable messages so they clear from the server queue.
     // Without this they re-appear on every poll, looping forever.
     if (!envelope.isEmpty()) {
+        // Persist the envelope so "Copy ciphertext" works even for messages
+        // we cannot decrypt (e.g. our own outgoing messages in history).
+        m_store->storeOutgoingMessage(envelope);
+
         const QString messageId =
             envelope.value("id").toString();
         const QString recipientDeviceId =
@@ -391,6 +561,58 @@ void MessageController::pullAndProcessMessages(
 
             emit messageReceiveFailed(
                 "Failed to pull messages.");
+        },
+        Qt::SingleShotConnection);
+
+    connect(
+        m_api,
+        &ApiClient::pullNoticesSucceeded,
+        this,
+        [this](const QJsonArray& notices) {
+            for (const auto& v : notices) {
+                const auto notice   = v.toObject();
+                const QString msgId = notice.value("message_id").toString();
+                const QString type  = notice.value("type").toString();
+                if (msgId.isEmpty()) continue;
+
+                const bool isDelete = (type == QStringLiteral("deleted"));
+                const bool isRevoke = (type == QStringLiteral("revoked"));
+                if (!isDelete && !isRevoke) continue;
+
+                if (!m_store->containsMessage(msgId)) {
+                    // Message was deleted/revoked before we ever received it.
+                    // Create a placeholder so the conversation shows a tombstone.
+                    const QString convId    = notice.value("conversation_id").toString();
+                    const QString createdAt = notice.value("created_at").toString();
+                    if (convId.isEmpty()) continue;
+
+                    DecryptedMessage placeholder;
+                    placeholder.id               = msgId;
+                    placeholder.conversationId   = convId;
+                    placeholder.senderDeviceId   = QString{};
+                    placeholder.plaintext        = QString{};
+                    placeholder.timestamp        = QDateTime::fromString(createdAt, Qt::ISODateWithMs);
+                    if (!placeholder.timestamp.isValid())
+                        placeholder.timestamp    = QDateTime::currentDateTimeUtc();
+                    placeholder.verificationState = VerificationState::Failed;
+                    placeholder.isDeleted        = isDelete;
+                    placeholder.revoked          = isRevoke;
+
+                    qDebug() << "[NOTICE] tombstone for unseen msg:" << msgId << type;
+                    m_store->storeDecryptedMessage(placeholder);
+                    m_conversations->appendLocalMessage(placeholder);
+                } else if (isDelete) {
+                    qDebug() << "[NOTICE] deletion:" << msgId;
+                    m_model->markDeleted(msgId);
+                    m_store->markMessageDeleted(msgId);
+                    m_conversations->markLocalDeleted(msgId);
+                } else {
+                    qDebug() << "[NOTICE] revoke:" << msgId;
+                    m_model->markRevoked(msgId);
+                    m_store->markMessageRevoked(msgId);
+                    m_conversations->markLocalRevoked(msgId);
+                }
+            }
         },
         Qt::SingleShotConnection);
 

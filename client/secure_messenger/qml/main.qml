@@ -17,15 +17,17 @@ ApplicationWindow {
 
     header: ToolBar {
         visible: authController && authController.authenticated
+        implicitHeight: 48
         background: Rectangle { color: "#2B6D45" }
         RowLayout {
             anchors.fill: parent
-            anchors.margins: 8
+            anchors.margins: 10
 
             Label {
                 text: "Secure Messenger"
                 color: "#F5EDD6"
                 font.bold: true
+                font.pixelSize: 20
             }
 
             Item {
@@ -34,7 +36,21 @@ ApplicationWindow {
 
             Button {
                 text: "Logout"
+                implicitWidth: 90
+                implicitHeight: 32
                 onClicked: authController.logout()
+                background: Rectangle {
+                    color: "#4FAE7C"
+                    radius: 16
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: "#1B3B28"
+                    font.bold: true
+                    font.pixelSize: 13
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
         }
     }

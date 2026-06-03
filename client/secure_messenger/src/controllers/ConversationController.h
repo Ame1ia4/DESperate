@@ -101,6 +101,10 @@ public slots:
     // the single device_id the server returned in the conversation list.
     // Emits ghostDeviceDetected if the server reports additional devices.
     Q_INVOKABLE void fetchPeerDevices(const QString& conversationId);
+    void updateMessageId(const QString& oldId, const QString& newId);
+    void removeLocalMessage(const QString& messageId);
+    void markLocalRevoked(const QString& messageId);
+    void markLocalDeleted(const QString& messageId);
 
 signals:
     void currentConversationIdChanged();

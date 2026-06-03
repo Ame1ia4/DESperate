@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
+#include <algorithm>
 
 #include "src/models/ConversationModel.h"
 #include "src/models/MessageModel.h"
@@ -183,37 +184,27 @@ void ConversationController::openConversation(
 
     m_messageModel->clear();
 
-    QSet<QString> cachedIds;
+    // Merge cache and store (store may have messages from a previous session).
+    QSet<QString> seenIds;
+    for (const auto& message : m_messagesByConversation.value(conversationId))
+        seenIds.insert(message.id);
 
-    const auto cachedMessages =
-        m_messagesByConversation.value(
-            conversationId);
-
-    for (const auto& message : cachedMessages) {
-
-        if (!message.isDeleted) {
-            m_messageModel->addMessage(message);
-            cachedIds.insert(message.id);
+    for (const auto& message : m_store->messagesForConversation(conversationId)) {
+        if (!seenIds.contains(message.id)) {
+            seenIds.insert(message.id);
+            m_messagesByConversation[conversationId].push_back(message);
         }
     }
 
-    const auto storedMessages =
-        m_store->messagesForConversation(
-            conversationId);
+    // Sort the merged list chronologically so the view always shows oldest→newest.
+    auto& convMessages = m_messagesByConversation[conversationId];
+    std::sort(convMessages.begin(), convMessages.end(),
+        [](const DecryptedMessage& a, const DecryptedMessage& b) {
+            return a.timestamp < b.timestamp;
+        });
 
-    for (const auto& message : storedMessages) {
-
-        if (message.isDeleted ||
-            cachedIds.contains(message.id)) {
-            continue;
-        }
-
+    for (const auto& message : convMessages)
         m_messageModel->addMessage(message);
-
-        m_messagesByConversation
-            [conversationId]
-                .push_back(message);
-    }
 
     // Kick off PQXDH session setup only if no session exists yet.
     const QString participant =
@@ -332,12 +323,9 @@ void ConversationController::setupSessionAsync(
 void ConversationController::appendLocalMessage(
     const DecryptedMessage& message)
 {
-    if (!validateMessage(
-            message.plaintext)) {
-
-        emit errorOccurred(
-            "Invalid message.");
-
+    // Placeholders for deleted/revoked messages have empty plaintext — allow them through.
+    if (!message.isDeleted && !message.revoked && !validateMessage(message.plaintext)) {
+        emit errorOccurred("Invalid message.");
         return;
     }
 
@@ -503,6 +491,56 @@ void ConversationController::fetchPeerDevices(
         Qt::SingleShotConnection);
 
     m_apiClient->fetchUserDevices(participant);
+}
+
+void ConversationController::updateMessageId(const QString& oldId, const QString& newId)
+{
+    if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
+    for (auto& msgList : m_messagesByConversation) {
+        for (auto& msg : msgList) {
+            if (msg.id == oldId) {
+                msg.id = newId;
+                return;
+            }
+        }
+    }
+}
+
+void ConversationController::removeLocalMessage(const QString& messageId)
+{
+    for (auto it = m_messagesByConversation.begin(); it != m_messagesByConversation.end(); ++it) {
+        auto& msgList = it.value();
+        for (auto msgIt = msgList.begin(); msgIt != msgList.end(); ++msgIt) {
+            if (msgIt->id == messageId) {
+                msgList.erase(msgIt);
+                return;
+            }
+        }
+    }
+}
+
+void ConversationController::markLocalRevoked(const QString& messageId)
+{
+    for (auto& msgList : m_messagesByConversation) {
+        for (auto& msg : msgList) {
+            if (msg.id == messageId) {
+                msg.revoked = true;
+                return;
+            }
+        }
+    }
+}
+
+void ConversationController::markLocalDeleted(const QString& messageId)
+{
+    for (auto& msgList : m_messagesByConversation) {
+        for (auto& msg : msgList) {
+            if (msg.id == messageId) {
+                msg.isDeleted = true;
+                return;
+            }
+        }
+    }
 }
 
 void ConversationController::createChat(const QString& username)
