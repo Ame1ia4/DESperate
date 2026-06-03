@@ -343,7 +343,7 @@ app.post('/messages', requireAuth, async (req, res) => {
   } catch {
     return res.status(400).json({ error: 'Invalid hex encoding' })
   }
-
+// Validate ciphertext and nonce lengths before hitting DB constraints or silently truncating.
   if (nonceBuf.length !== 12)
     return res.status(400).json({ error: 'nonce must be 12 bytes' })
 
