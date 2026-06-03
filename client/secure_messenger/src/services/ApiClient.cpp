@@ -10,6 +10,9 @@
 #include <QNetworkReply>
 #include <QUrl>
 #include <QString>
+#include <QDateTime>
+#include <QMessageAuthenticationCode>
+#include <QCryptographicHash>
 
 ApiClient::ApiClient(CryptoServiceClient* crypto, QObject* parent)
     : QObject(parent)
@@ -245,12 +248,13 @@ void ApiClient::doSrpVerify(
         const auto parsed       = QJsonDocument::fromJson(body).object();
         const auto M2           = parsed.value(QStringLiteral("serverSessionProof")).toString();
         const auto sessionToken = parsed.value(QStringLiteral("session_token")).toString();
+        const auto hmacKey      = parsed.value(QStringLiteral("hmac_key")).toString();
 
         qDebug() << "[LOGIN] Round 2 OK: M2 len:" << M2.length()
                  << "| sessionToken len:" << sessionToken.length();
 
-        if (M2.isEmpty() || sessionToken.isEmpty()) {
-            qDebug() << "[LOGIN] Round 2 FAILED: M2 or session_token empty";
+        if (M2.isEmpty() || sessionToken.isEmpty() || hmacKey.isEmpty()) {
+            qDebug() << "[LOGIN] Round 2 FAILED: M2 or session_token or hmac_key empty";
             emit loginUserFailed(QStringLiteral("Authentication failed."));
             return;
         }
@@ -271,6 +275,7 @@ void ApiClient::doSrpVerify(
 
         // Use the server-issued HKDF-derived token (not raw K) as the Bearer credential.
         setAuthToken(sessionToken);
+        m_hmacKey = hmacKey;
 
         qDebug() << "[LOGIN] SUCCESS: session established";
         emit loginUserSucceeded();
@@ -562,6 +567,21 @@ QNetworkRequest ApiClient::makeRequest(
         request.setRawHeader(
             "Authorization",
             ("Bearer " + m_authToken).toUtf8());
+    }
+
+    // M4: per-request timestamp + HMAC replay protection.
+    // Server requires X-Request-Time (Unix ms) and X-Request-HMAC on every
+    // protected route. HMAC = HMAC-SHA256(hmac_key, deviceId + ":" + timestamp).
+    if (!m_hmacKey.isEmpty() && !m_activeDeviceId.isEmpty()) {
+        const qint64 timestamp = QDateTime::currentMSecsSinceEpoch();
+        const QByteArray message =
+            (m_activeDeviceId + ":" + QString::number(timestamp)).toUtf8();
+        const QByteArray hmac = QMessageAuthenticationCode::hash(
+            message,
+            QByteArray::fromHex(m_hmacKey.toUtf8()),
+            QCryptographicHash::Sha256);
+        request.setRawHeader("X-Request-Time", QString::number(timestamp).toUtf8());
+        request.setRawHeader("X-Request-HMAC", hmac.toHex());
     }
 
     return request;

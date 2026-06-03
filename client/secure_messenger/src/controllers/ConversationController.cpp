@@ -502,6 +502,8 @@ void ConversationController::fetchPeerDevices(
         Qt::SingleShotConnection);
 
     m_apiClient->fetchUserDevices(participant);
+}
+
 void ConversationController::updateMessageId(const QString& oldId, const QString& newId)
 {
     if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;

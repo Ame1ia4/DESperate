@@ -108,6 +108,7 @@ private:
     QNetworkAccessManager m_network;
     CryptoServiceClient*  m_crypto = nullptr;
     QString               m_authToken;
+    QString               m_hmacKey;
     QString               m_activeDeviceId;
     QSettings             m_settings;
 };
