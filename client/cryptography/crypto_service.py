@@ -199,7 +199,7 @@ def _load_master_salt() -> Optional[bytes]:
 # ── RPC handlers ──────────────────────────────────────────────────────────────
 
 def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global _srp_session, _store, _local_bundle, _pending_password, _pending_keystore_key, _cached_keystore_key
+    global _srp_session, _store, _local_bundle, _pending_password, _pending_keystore_key, _cached_keystore_key, _pending_new_keystore_key
 
     # ── Keystore ──────────────────────────────────────────────────────────────
 
@@ -360,16 +360,35 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── Password change ───────────────────────────────────────────────────────
 
     if method == "prepare_password_change":
-        username     = params["username"]
-        new_password = params["new_password"]
+        username         = params["username"]
+        current_password = params.get("current_password", "")
+        new_password     = params["new_password"]
+
+        if not current_password:
+            return {"success": False, "error": "Current password is required"}
+
+        srp_salt = _load_master_salt()
+        if srp_salt is None:
+            return {"success": False, "error": "No keystore found"}
+
+        # Verify the current password by deriving its key and attempting to
+        # decrypt the identity bundle — InvalidTag means wrong password.
+        # A fresh StateStore instance is used so _store is never clobbered.
+        _, current_key, _ = derive_master_components(current_password, srp_salt)
+        try:
+            temp_store = StateStore.load_with_key(_STORE_BASE_DIR, current_key)
+            temp_store.load_state(_BUNDLE_KEY)
+        except InvalidTag:
+            return {"success": False, "error": "Incorrect current password"}
+        except (FileNotFoundError, KeyError):
+            return {"success": False, "error": "No keystore found"}
+
         srp_pass, new_keystore_key, new_salt = derive_master_components(new_password)
         verifier_bytes = _create_srp_verifier(username, srp_pass.hex(), new_salt)
         _pending_new_keystore_key = new_keystore_key
         return {"new_salt": new_salt.hex(), "new_verifier": verifier_bytes.hex()}
 
     if method == "commit_password_change":
-        global _store, _local_bundle, _cached_keystore_key, _pending_keystore_key
-        global _pending_new_keystore_key, _srp_session, _pending_password
         _store                    = None
         _local_bundle             = None
         _cached_keystore_key      = None

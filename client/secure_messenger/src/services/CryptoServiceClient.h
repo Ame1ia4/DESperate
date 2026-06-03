@@ -71,6 +71,14 @@ public:
 
     bool resetSession(const QString& conversationId);
 
+    // Returns { new_salt, new_verifier } on success, or { error } on failure.
+    QJsonObject preparePasswordChange(
+        const QString& username,
+        const QString& currentPassword,
+        const QString& newPassword);
+
+    bool commitPasswordChange();
+
     QString lastError() const;
 
     void setRpcTimeoutMs(

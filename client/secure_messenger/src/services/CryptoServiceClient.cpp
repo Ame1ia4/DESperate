@@ -145,6 +145,30 @@ QString CryptoServiceClient::srpVerify(
     return response.value("session_key").toString();
 }
 
+QJsonObject CryptoServiceClient::preparePasswordChange(
+    const QString& username,
+    const QString& currentPassword,
+    const QString& newPassword)
+{
+    const int saved = m_rpcTimeoutMs;
+    setRpcTimeoutMs(30000); // two Argon2id KDF calls, intentionally slow
+    const QJsonObject resp = rpc(
+        "prepare_password_change",
+        {
+            {"username",         username},
+            {"current_password", currentPassword},
+            {"new_password",     newPassword},
+        });
+    setRpcTimeoutMs(saved);
+    return resp;
+}
+
+bool CryptoServiceClient::commitPasswordChange()
+{
+    const QJsonObject resp = rpc("commit_password_change", {});
+    return !resp.contains("error");
+}
+
 bool CryptoServiceClient::hasSession(const QString& conversationId)
 {
     const QJsonObject response =

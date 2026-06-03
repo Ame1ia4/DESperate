@@ -270,6 +270,70 @@ void AuthController::signUp(
     m_api->fetchRegistrationNonce();
 }
 
+void AuthController::changePassword(
+    const QString& currentPassword,
+    const QString& newPassword,
+    const QString& confirmPassword)
+{
+    if (currentPassword.isEmpty()) {
+        emit changePasswordFailed(QStringLiteral("Current password is required."));
+        return;
+    }
+
+    if (newPassword.isEmpty()) {
+        emit changePasswordFailed(QStringLiteral("New password is required."));
+        return;
+    }
+
+    if (newPassword != confirmPassword) {
+        emit changePasswordFailed(QStringLiteral("Passwords do not match."));
+        return;
+    }
+
+    const QJsonObject result =
+        m_crypto->preparePasswordChange(m_currentUserId, currentPassword, newPassword);
+
+    if (result.isEmpty() || result.contains(QStringLiteral("error"))) {
+        emit changePasswordFailed(
+            result.value(QStringLiteral("error"))
+                .toString(QStringLiteral("Failed to prepare password change.")));
+        return;
+    }
+
+    const QString newSalt     = result.value(QStringLiteral("new_salt")).toString();
+    const QString newVerifier = result.value(QStringLiteral("new_verifier")).toString();
+
+    auto successConn = std::make_shared<QMetaObject::Connection>();
+    auto failConn    = std::make_shared<QMetaObject::Connection>();
+
+    *successConn = connect(
+        m_api,
+        &ApiClient::changePasswordSucceeded,
+        this,
+        [this, failConn]() {
+            QObject::disconnect(*failConn);
+            m_crypto->commitPasswordChange();
+            logout();
+            emit changePasswordSucceeded();
+        },
+        Qt::SingleShotConnection);
+
+    *failConn = connect(
+        m_api,
+        &ApiClient::changePasswordFailed,
+        this,
+        [this, successConn](const QString& reason) {
+            QObject::disconnect(*successConn);
+            emit changePasswordFailed(
+                reason.isEmpty()
+                    ? QStringLiteral("Password change failed.")
+                    : reason);
+        },
+        Qt::SingleShotConnection);
+
+    m_api->changePassword(newSalt, newVerifier);
+}
+
 void AuthController::logout()
 {
     if (m_authenticated) {

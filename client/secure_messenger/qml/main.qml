@@ -35,6 +35,17 @@ ApplicationWindow {
             }
 
             Button {
+                text: "Change Password"
+                onClicked: {
+                    changePassCurrentField.text = ""
+                    changePassNewField.text = ""
+                    changePassConfirmField.text = ""
+                    changePassError.text = ""
+                    changePasswordDialog.open()
+                }
+            }
+
+            Button {
                 text: "Logout"
                 implicitWidth: 90
                 implicitHeight: 32
@@ -161,6 +172,76 @@ ApplicationWindow {
                 conversationController.loadConversations()
                 messageController.pullAndProcessMessages("")
                 root.authScreenIndex = 0
+            }
+        }
+    }
+
+    Dialog {
+        id: changePasswordDialog
+        title: "Change Password"
+        modal: true
+        anchors.centerIn: parent
+
+        Column {
+            spacing: 12
+            width: 300
+
+            TextField {
+                id: changePassCurrentField
+                width: parent.width
+                placeholderText: "Current password"
+                echoMode: TextInput.Password
+            }
+
+            TextField {
+                id: changePassNewField
+                width: parent.width
+                placeholderText: "New password"
+                echoMode: TextInput.Password
+            }
+
+            TextField {
+                id: changePassConfirmField
+                width: parent.width
+                placeholderText: "Confirm new password"
+                echoMode: TextInput.Password
+            }
+
+            Text {
+                id: changePassError
+                color: "#FF6B6B"
+                visible: text.length > 0
+                wrapMode: Text.Wrap
+                width: parent.width
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: "Change"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                onClicked: {
+                    changePassError.text = ""
+                    authController.changePassword(
+                        changePassCurrentField.text,
+                        changePassNewField.text,
+                        changePassConfirmField.text)
+                }
+            }
+            Button {
+                text: "Cancel"
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                onClicked: changePasswordDialog.close()
+            }
+        }
+
+        Connections {
+            target: authController
+            function onChangePasswordSucceeded() {
+                changePasswordDialog.close()
+            }
+            function onChangePasswordFailed(reason) {
+                changePassError.text = reason
             }
         }
     }

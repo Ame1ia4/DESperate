@@ -543,6 +543,37 @@ void ApiClient::createConversation(const QString& otherUsername)
     });
 }
 
+void ApiClient::changePassword(
+    const QString& newSalt,
+    const QString& newVerifier)
+{
+    auto request = makeRequest("/auth/password");
+
+    QJsonObject body;
+    body["new_salt"]      = newSalt;
+    body["new_verifier"]  = newVerifier;
+
+    auto* reply = m_network.sendCustomRequest(
+        request, "PATCH", QJsonDocument(body).toJson());
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = body.isEmpty()
+                ? QStringLiteral("Password change failed.")
+                : QString::fromUtf8(body);
+            emit changePasswordFailed(reason);
+            return;
+        }
+
+        emit changePasswordSucceeded();
+    });
+}
+
 // ── Private ───────────────────────────────────────────────────────────────────
 
 QNetworkRequest ApiClient::makeRequest(

@@ -57,6 +57,8 @@ public:
     // Fetch active devices for a user (GET /users/:username/devices).
     void fetchUserDevices(const QString& username);
 
+    void changePassword(const QString& newSalt, const QString& newVerifier);
+
     QString storedDeviceId(const QString& username) const;
     void    storeDeviceId(const QString& username, const QString& deviceId);
 
@@ -90,6 +92,8 @@ signals:
     void revokeMessageFailed(QString messageId);
     // Fired after POST /messages succeeds; carries both the client temp ID and server DB UUID
     void messageSentToServer(QString localId, QString serverId);
+    void changePasswordSucceeded();
+    void changePasswordFailed(QString reason);
 
 private:
     void doSrpInit(

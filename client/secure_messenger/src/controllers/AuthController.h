@@ -50,6 +50,11 @@ public slots:
 
     void logout();
 
+    void changePassword(
+        const QString& currentPassword,
+        const QString& newPassword,
+        const QString& confirmPassword);
+
 signals:
     void authenticatedChanged();
 
@@ -70,6 +75,10 @@ signals:
     void identityLoaded();
 
     void sessionInitialized();
+
+    void changePasswordSucceeded();
+
+    void changePasswordFailed(QString reason);
 
 private:
     void setAuthError(const QString& error);
