@@ -472,7 +472,9 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
   // so subsequent polls do not re-deliver the same notice.
   const { rows: noticeRows } = await query(
     `SELECT mh.msg_id,
-            CASE WHEN m.deleted_at IS NOT NULL THEN 'deleted' ELSE 'revoked' END AS type
+            CASE WHEN m.deleted_at IS NOT NULL THEN 'deleted' ELSE 'revoked' END AS type,
+            m.conversation_id,
+            m.created_at
      FROM   message_hidden mh
      JOIN   messages m ON m.id = mh.msg_id
      WHERE  mh.user_id     = (SELECT user_id FROM devices WHERE id = $1)
@@ -492,7 +494,12 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
       noticeRows.map(r => `${r.type}:${r.msg_id}`).join(', '))
   }
 
-  res.json({ envelopes, notices: noticeRows.map(r => ({ message_id: r.msg_id, type: r.type })) })
+  res.json({ envelopes, notices: noticeRows.map(r => ({
+    message_id:      r.msg_id,
+    type:            r.type,
+    conversation_id: r.conversation_id,
+    created_at:      r.created_at,
+  })) })
 })
 
 // Acknowledge delivery — marks the queue entry as delivered.
@@ -648,13 +655,13 @@ app.delete('/messages/:id', requireAuth, async (req, res) => {
     // Hide the message from every other participant's history so they
     // cannot see it even if they already received it.
     await client.query(
-      `INSERT INTO message_hidden (msg_id, user_id)
-       SELECT $1, cm.user_id
+      `INSERT INTO message_hidden (msg_id, user_id, notice_sent)
+       SELECT $1, cm.user_id, FALSE
        FROM   conversation_members cm
        JOIN   messages m ON m.id = $1
        WHERE  cm.conversation_id = m.conversation_id
          AND  cm.user_id != (SELECT user_id FROM devices WHERE id = $2)
-       ON CONFLICT (msg_id, user_id) DO NOTHING`,
+       ON CONFLICT (msg_id, user_id) DO UPDATE SET notice_sent = FALSE`,
       [messageId, req.deviceId]
     )
     return result
