@@ -26,6 +26,8 @@ struct PendingMessage
     QString recipientDeviceId;
 
     QByteArray plaintext;
+
+    bool forwarded = false;
 };
 
 class MessageController : public QObject
@@ -46,7 +48,8 @@ public:
 public slots:
     Q_INVOKABLE void sendText(
         const QString& conversationId,
-        const QString& text);
+        const QString& text,
+        bool forwarded = false);
 
     Q_INVOKABLE void deleteMessage(const QString& messageId);
     Q_INVOKABLE void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
@@ -58,7 +61,8 @@ public slots:
     void sendMessage(
         QString conversationId,
         QString recipientDeviceId,
-        QByteArray plaintext);
+        QByteArray plaintext,
+        bool forwarded = false);
 
     void receiveEnvelope(
         QJsonObject envelope);
@@ -86,6 +90,7 @@ signals:
     void messageRevokeFailed();
     void ciphertextCopied();
     void ciphertextCopyFailed();
+    void forwardInitiated(QString toUsername);
 
 private slots:
     void handleEncryptCompleted(

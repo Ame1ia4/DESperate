@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
+#include <algorithm>
 
 #include "src/models/ConversationModel.h"
 #include "src/models/MessageModel.h"
@@ -183,35 +184,27 @@ void ConversationController::openConversation(
 
     m_messageModel->clear();
 
-    QSet<QString> cachedIds;
+    // Merge cache and store (store may have messages from a previous session).
+    QSet<QString> seenIds;
+    for (const auto& message : m_messagesByConversation.value(conversationId))
+        seenIds.insert(message.id);
 
-    const auto cachedMessages =
-        m_messagesByConversation.value(
-            conversationId);
-
-    for (const auto& message : cachedMessages) {
-        // Always register in cachedIds so the store loop cannot re-add a stale copy.
-        cachedIds.insert(message.id);
-        // Add all messages — deleted/revoked ones render as placeholders in QML.
-        m_messageModel->addMessage(message);
-    }
-
-    const auto storedMessages =
-        m_store->messagesForConversation(
-            conversationId);
-
-    for (const auto& message : storedMessages) {
-
-        if (cachedIds.contains(message.id)) {
-            continue;
+    for (const auto& message : m_store->messagesForConversation(conversationId)) {
+        if (!seenIds.contains(message.id)) {
+            seenIds.insert(message.id);
+            m_messagesByConversation[conversationId].push_back(message);
         }
-
-        m_messageModel->addMessage(message);
-
-        m_messagesByConversation
-            [conversationId]
-                .push_back(message);
     }
+
+    // Sort the merged list chronologically so the view always shows oldest→newest.
+    auto& convMessages = m_messagesByConversation[conversationId];
+    std::sort(convMessages.begin(), convMessages.end(),
+        [](const DecryptedMessage& a, const DecryptedMessage& b) {
+            return a.timestamp < b.timestamp;
+        });
+
+    for (const auto& message : convMessages)
+        m_messageModel->addMessage(message);
 
     // Kick off PQXDH session setup only if no session exists yet.
     const QString participant =

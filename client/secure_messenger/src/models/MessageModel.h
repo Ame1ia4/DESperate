@@ -23,7 +23,8 @@ public:
         VerifiedRole,
         MessageIdRole,
         RevokedRole,
-        IsDeletedRole
+        IsDeletedRole,
+        ForwardedRole
     };
 
     int rowCount(

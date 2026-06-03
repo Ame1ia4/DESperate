@@ -33,6 +33,7 @@ struct DecryptedMessage {
     VerificationState verificationState = VerificationState::Pending;
     bool isDeleted = false;
     bool revoked = false;
+    bool forwarded = false;
 };
 
 struct Conversation {

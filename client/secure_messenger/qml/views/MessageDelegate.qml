@@ -12,9 +12,10 @@ Item {
     required property var     timestamp
     required property bool    revoked
     required property bool    isDeleted
+    required property bool    forwarded
 
     width:  ListView.view ? ListView.view.width : 0
-    height: bubble.height + 16
+    height: bubble.height + 16 + (forwardBar.visible ? forwardBar.height + 4 : 0)
 
     
 

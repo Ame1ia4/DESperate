@@ -58,6 +58,9 @@ QVariant MessageModel::data(
     case IsDeletedRole:
         return msg.isDeleted;
 
+    case ForwardedRole:
+        return msg.forwarded;
+
     default:
         return {};
     }
@@ -75,7 +78,8 @@ MessageModel::roleNames() const
         {VerifiedRole,     "verified"},
         {MessageIdRole,    "messageId"},
         {RevokedRole,      "revoked"},
-        {IsDeletedRole,    "isDeleted"}
+        {IsDeletedRole,    "isDeleted"},
+        {ForwardedRole,    "forwarded"}
     };
 }
 

@@ -19,6 +19,10 @@
 #include "src/storage/TrustStore.h"
 #include "src/types/Types.h"
 
+// STX-fwd-STX prefix embedded in ciphertext payload to mark forwarded messages.
+// Control chars (0x02) won't appear in normal user text.
+static const QString FORWARD_PREFIX = QStringLiteral("\x02""fwd\x02");
+
 MessageController::MessageController(
     ApiClient* api,
     CryptoServiceClient* crypto,
@@ -99,7 +103,7 @@ MessageController::MessageController(
         const QString convId = m_conversations->currentConversationId();
         if (!m_pendingForwards.contains(convId)) return;
         const QString text = m_pendingForwards.take(convId);
-        sendText(convId, text);
+        sendText(convId, text, /*forwarded=*/true);
     });
 }
 
@@ -122,6 +126,8 @@ void MessageController::forwardMessage(const QString& toUsername, const QString&
 {
     const QString trimmed = toUsername.trimmed();
     if (trimmed.isEmpty() || plaintext.isEmpty()) return;
+
+    emit forwardInitiated(trimmed);
 
     // Store plaintext keyed by the conversation ID we're about to create/open.
     // The ID is captured from createConversationSucceeded before createChat fires it.
@@ -184,7 +190,8 @@ void MessageController::copyCiphertext(const QString& messageId)
 
 void MessageController::sendText(
     const QString& conversationId,
-    const QString& text)
+    const QString& text,
+    bool forwarded)
 {
     const QString trimmed = text.trimmed();
 
@@ -196,16 +203,21 @@ void MessageController::sendText(
         m_conversations->deviceIdForConversation(
             conversationId);
 
+    // Embed the forward marker in the payload so the recipient can detect it.
+    const QString payload = forwarded ? (FORWARD_PREFIX + trimmed) : trimmed;
+
     sendMessage(
         conversationId,
         deviceId,
-        trimmed.toUtf8());
+        payload.toUtf8(),
+        forwarded);
 }
 
 void MessageController::sendMessage(
     QString conversationId,
     QString recipientDeviceId,
-    QByteArray plaintext)
+    QByteArray plaintext,
+    bool forwarded)
 {
     if (conversationId.isEmpty()) {
 
@@ -247,6 +259,9 @@ void MessageController::sendMessage(
 
     pending.plaintext =
         plaintext;
+
+    pending.forwarded =
+        forwarded;
 
     m_pendingMessages.insert(
         requestId,
@@ -303,9 +318,15 @@ void MessageController::handleEncryptCompleted(
     message.timestamp =
         QDateTime::currentDateTimeUtc();
 
-    message.plaintext =
-        QString::fromUtf8(
-            pending.plaintext);
+    {
+        QString pt = QString::fromUtf8(pending.plaintext);
+        if (pending.forwarded && pt.startsWith(FORWARD_PREFIX))
+            pt = pt.mid(FORWARD_PREFIX.length());
+        message.plaintext = pt;
+    }
+
+    message.forwarded =
+        pending.forwarded;
 
     // C1 fix: outgoing messages are only Verified if TrustStore confirms
     // the recipient's identity key is pinned and matches. Previously this
@@ -400,8 +421,12 @@ void MessageController::handleDecryptCompleted(
             : QDateTime
             ::currentDateTimeUtc();
 
-    message.plaintext =
-        plaintext;
+    if (plaintext.startsWith(FORWARD_PREFIX)) {
+        message.plaintext = plaintext.mid(FORWARD_PREFIX.length());
+        message.forwarded = true;
+    } else {
+        message.plaintext = plaintext;
+    }
 
     // C1 fix: incoming messages are only Verified if TrustStore confirms
     // the sender's identity is pinned and matches. Previously hardcoded

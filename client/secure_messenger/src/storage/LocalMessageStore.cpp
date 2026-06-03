@@ -31,6 +31,7 @@
                     m.verificationState = static_cast<VerificationState>(obj.value("verificationState").toInt(0));
                     m.isDeleted = obj.value("isDeleted").toBool(false);
                     m.revoked  = obj.value("revoked").toBool(false);
+                    m.forwarded = obj.value("forwarded").toBool(false);
                     const int index = m_decryptedMessages.size();
                     m_messageIndex.insert(m.id, index);
                     m_decryptedMessages.push_back(m);
@@ -74,6 +75,7 @@
         obj["verificationState"] = static_cast<int>(m.verificationState);
         obj["isDeleted"] = m.isDeleted;
         obj["revoked"] = m.revoked;
+        obj["forwarded"] = m.forwarded;
         return obj;
     }
 

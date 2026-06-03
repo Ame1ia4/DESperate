@@ -69,6 +69,12 @@ Rectangle {
             downloadToast.visible = true
             toastTimer.restart()
         }
+        function onForwardInitiated(toUsername) {
+            downloadToastText.isError = false
+            downloadToastText.text = "Forwarding to " + toUsername + "…"
+            downloadToast.visible = true
+            toastTimer.restart()
+        }
     }
 
     Connections {
@@ -109,10 +115,8 @@ Rectangle {
             delegate: MessageDelegate {}
 
             onCountChanged: {
-                if (count > 0) {
-                    // keep view scrolled to the most recent message (bottom)
-                    positionViewAtIndex(count - 1, ListView.End)
-                }
+                if (count > 0)
+                    Qt.callLater(positionViewAtEnd)
             }
         }
 
