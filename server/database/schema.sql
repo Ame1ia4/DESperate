@@ -410,7 +410,12 @@ CREATE TABLE messages (
 
     -- ChaCha20-Poly1305: 12-byte nonce
     -- AES-256-GCM:       12-byte nonce (96-bit, recommended)
-    CHECK (octet_length(nonce) = 12)
+    CHECK (octet_length(nonce) = 12),
+
+    -- Sender-set flag transported as envelope metadata (not inside ciphertext).
+    -- Allows recipient UI to show a "forwarded" badge without embedding magic
+    -- bytes inside the encrypted payload.
+    forwarded BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_messages_conversation

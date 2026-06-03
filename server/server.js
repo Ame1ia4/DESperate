@@ -321,7 +321,7 @@ app.post('/conversations', requireAuth, async (req, res) => {
 
 // Send an encrypted message — stores it and fans out to recipient devices.
 app.post('/messages', requireAuth, async (req, res) => {
-  const { conversation_id, ciphertext, nonce, initiation_bundle, sender_ik_sig_pub } = req.body
+  const { conversation_id, ciphertext, nonce, initiation_bundle, sender_ik_sig_pub, forwarded } = req.body
 
   if (!conversation_id || !ciphertext || !nonce)
     return res.status(400).json({ error: 'conversation_id, ciphertext, and nonce required' })
@@ -358,10 +358,11 @@ app.post('/messages', requireAuth, async (req, res) => {
   const messageId = await withTransaction(async (client) => {
     const { rows: [msg] } = await client.query(
       `INSERT INTO messages
-         (conversation_id, sender_device_id, ciphertext, nonce, associated_data, sender_ik_sig_pub)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (conversation_id, sender_device_id, ciphertext, nonce, associated_data, sender_ik_sig_pub, forwarded)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, created_at`,
-      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null]
+      [conversation_id, req.deviceId, ciphertextBuf, nonceBuf, associatedData, sender_ik_sig_pub || null,
+       forwarded === true]
     )
 
     // M2 fix applied: pass context fields so the leaf is bound to this
@@ -431,6 +432,7 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
        m.sender_ik_sig_pub,
        mq.id                                   AS queue_id,
        mq.associated_data,
+       m.forwarded,
        m.created_at
      FROM message_queue mq
      JOIN messages m ON m.id = mq.msg_id
@@ -464,32 +466,28 @@ app.get('/messages/pending', requireAuth, async (req, res) => {
       nonce:             r.nonce,
       sender_ik_sig_pub: r.sender_ik_sig_pub,
       initiation_bundle: initiationBundle,
+      forwarded:         r.forwarded,
       created_at:        r.created_at,
     }
   })
 
-  // Fetch unsent deletion/revocation notices for this user, then mark them sent
-  // so subsequent polls do not re-deliver the same notice.
+  // Atomically mark notices as sent and return them in a single statement so a
+  // server crash between read and update cannot cause duplicate re-delivery.
   const { rows: noticeRows } = await query(
-    `SELECT mh.msg_id,
-            CASE WHEN m.deleted_at IS NOT NULL THEN 'deleted' ELSE 'revoked' END AS type,
-            m.conversation_id,
-            m.created_at
-     FROM   message_hidden mh
-     JOIN   messages m ON m.id = mh.msg_id
-     WHERE  mh.user_id     = (SELECT user_id FROM devices WHERE id = $1)
-       AND  mh.notice_sent = FALSE`,
+    `UPDATE message_hidden mh
+     SET    notice_sent = TRUE
+     FROM   messages m
+     WHERE  mh.msg_id      = m.id
+       AND  mh.user_id     = (SELECT user_id FROM devices WHERE id = $1)
+       AND  mh.notice_sent = FALSE
+     RETURNING mh.msg_id,
+               CASE WHEN m.deleted_at IS NOT NULL THEN 'deleted' ELSE 'revoked' END AS type,
+               m.conversation_id,
+               m.created_at`,
     [req.deviceId]
   )
 
   if (noticeRows.length > 0) {
-    await query(
-      `UPDATE message_hidden
-       SET    notice_sent = TRUE
-       WHERE  user_id = (SELECT user_id FROM devices WHERE id = $1)
-         AND  msg_id   = ANY($2::uuid[])`,
-      [req.deviceId, noticeRows.map(r => r.msg_id)]
-    )
     console.log(`[NOTICES] delivered ${noticeRows.length} notice(s) to device ${req.deviceId}:`,
       noticeRows.map(r => `${r.type}:${r.msg_id}`).join(', '))
   }
@@ -547,6 +545,7 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
          m.sender_device_id,
          encode(m.ciphertext, 'hex') AS ciphertext,
          encode(m.nonce,      'hex') AS nonce,
+         m.forwarded,
          m.created_at,
          (m.sender_device_id = $3)   AS is_mine
        FROM messages m
@@ -572,6 +571,7 @@ app.get('/conversations/:id/messages', requireAuth, async (req, res) => {
          m.sender_device_id,
          encode(m.ciphertext, 'hex') AS ciphertext,
          encode(m.nonce,      'hex') AS nonce,
+         m.forwarded,
          m.created_at,
          (m.sender_device_id = $2)   AS is_mine
        FROM messages m
@@ -724,11 +724,12 @@ app.post('/messages/:id/revoke', requireAuth, async (req, res) => {
       [messageId, recipient_device_id]
     )
     // Post-delivery: hide from all future queries for this recipient.
-    // notice_sent = FALSE ensures their next poll delivers a 'revoked' notice.
+    // DO UPDATE resets notice_sent so a 'revoked' notice is re-delivered even
+    // if a prior delete already created the row with notice_sent = TRUE.
     await client.query(
       `INSERT INTO message_hidden (msg_id, user_id, notice_sent)
        VALUES ($1, $2, FALSE)
-       ON CONFLICT (msg_id, user_id) DO NOTHING`,
+       ON CONFLICT (msg_id, user_id) DO UPDATE SET notice_sent = FALSE`,
       [messageId, recipientUserId]
     )
   })

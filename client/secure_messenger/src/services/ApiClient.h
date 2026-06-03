@@ -60,6 +60,8 @@ public:
     QString storedDeviceId(const QString& username) const;
     void    storeDeviceId(const QString& username, const QString& deviceId);
 
+    void clearCredentials();
+
 signals:
     void registerUserSucceeded(QString deviceId);
     void registerUserFailed(QString reason);

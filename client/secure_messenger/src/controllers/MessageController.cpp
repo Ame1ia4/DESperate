@@ -98,13 +98,30 @@ MessageController::MessageController(
         emit messageRevokeFailed();
     });
 
+    // sessionReadyChanged fires when the current conversation's session state changes,
+    // but m_pendingForwards is keyed by conversation ID that may no longer be current
+    // if the user navigated away during the async createChat chain. Iterate all pending
+    // forwards and check the crypto layer directly to avoid using currentConversationId().
     connect(m_conversations, &ConversationController::sessionReadyChanged, this, [this]() {
-        if (!m_conversations->sessionReady()) return;
-        const QString convId = m_conversations->currentConversationId();
-        if (!m_pendingForwards.contains(convId)) return;
-        const QString text = m_pendingForwards.take(convId);
-        sendText(convId, text, /*forwarded=*/true);
+        if (m_pendingForwards.isEmpty()) return;
+        const auto keys = m_pendingForwards.keys();
+        for (const QString& convId : keys) {
+            if (m_crypto->hasSession(convId)) {
+                const QString text = m_pendingForwards.take(convId);
+                sendText(convId, text, /*forwarded=*/true);
+            }
+        }
     });
+
+    // If conversation creation fails the entry never gets a conversation ID, so
+    // we cannot match it. Drain the map to prevent stale plaintext leaking in memory.
+    connect(m_conversations, &ConversationController::createChatFailed, this,
+        [this](const QString&) {
+            if (!m_pendingForwards.isEmpty()) {
+                m_pendingForwards.clear();
+                emit messageSendFailed(QStringLiteral("Forward failed: could not create conversation."));
+            }
+        });
 }
 
 void MessageController::deleteMessage(const QString& messageId)
@@ -163,10 +180,15 @@ void MessageController::downloadMessage(const QString& messageId, const QString&
     }
 
     QTextStream out(&file);
+    out << "WARNING: This file contains decrypted plaintext. Keep it secure and delete when done.\n";
     out << "Message ID: " << messageId << "\n";
     out << "Downloaded: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n\n";
     out << plaintext << "\n";
     file.close();
+
+    // Restrict to owner-read-only after writing (mode 0400 on Linux/macOS; equivalent ACL on Windows).
+    // Must happen after close — setPermissions before write would prevent the write from succeeding.
+    QFile::setPermissions(path, QFileDevice::ReadOwner);
 
     emit messageDownloaded(path);
 }
@@ -203,13 +225,10 @@ void MessageController::sendText(
         m_conversations->deviceIdForConversation(
             conversationId);
 
-    // Embed the forward marker in the payload so the recipient can detect it.
-    const QString payload = forwarded ? (FORWARD_PREFIX + trimmed) : trimmed;
-
     sendMessage(
         conversationId,
         deviceId,
-        payload.toUtf8(),
+        trimmed.toUtf8(),
         forwarded);
 }
 
@@ -291,6 +310,7 @@ void MessageController::handleEncryptCompleted(
     // Inject fields the server requires that the crypto service doesn't produce.
     QJsonObject fullEnvelope = envelope;
     fullEnvelope["conversation_id"] = pending.conversationId;
+    fullEnvelope["forwarded"]        = pending.forwarded;
 
     qDebug() << "[SEND] encrypted OK, posting to server | conv:" << pending.conversationId
              << "| ciphertext len:" << envelope["ciphertext"].toString().length();
@@ -318,12 +338,7 @@ void MessageController::handleEncryptCompleted(
     message.timestamp =
         QDateTime::currentDateTimeUtc();
 
-    {
-        QString pt = QString::fromUtf8(pending.plaintext);
-        if (pending.forwarded && pt.startsWith(FORWARD_PREFIX))
-            pt = pt.mid(FORWARD_PREFIX.length());
-        message.plaintext = pt;
-    }
+    message.plaintext = QString::fromUtf8(pending.plaintext);
 
     message.forwarded =
         pending.forwarded;
@@ -421,7 +436,12 @@ void MessageController::handleDecryptCompleted(
             : QDateTime
             ::currentDateTimeUtc();
 
-    if (plaintext.startsWith(FORWARD_PREFIX)) {
+    // Prefer the envelope's forwarded field (set by the sender since this fix).
+    // Fall back to the legacy magic-byte prefix for messages encrypted before this change.
+    if (envelope.value("forwarded").toBool(false)) {
+        message.plaintext = plaintext;
+        message.forwarded = true;
+    } else if (plaintext.startsWith(FORWARD_PREFIX)) {
         message.plaintext = plaintext.mid(FORWARD_PREFIX.length());
         message.forwarded = true;
     } else {
@@ -443,8 +463,11 @@ void MessageController::handleDecryptCompleted(
                 : VerificationState::Failed;
     }
 
-    m_store->storeOutgoingMessage(envelope);
+    // Check dedup before storeOutgoingMessage so that if these two collections are
+    // ever unified, containsMessage still reflects pre-store state and appendLocalMessage
+    // is not silently skipped for all incoming messages.
     const bool stored = !m_store->containsMessage(message.id);
+    m_store->storeOutgoingMessage(envelope);
     m_store->storeDecryptedMessage(
         message);
 

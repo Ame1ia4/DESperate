@@ -289,6 +289,13 @@ void ApiClient::setAuthToken(const QString& token)
     m_authToken = token;
 }
 
+void ApiClient::clearCredentials()
+{
+    m_authToken.clear();
+    m_hmacKey.clear();
+    m_activeDeviceId.clear();
+}
+
 void ApiClient::sendMessage(
     const QJsonObject& encryptedEnvelope,
     const QString& localId)
