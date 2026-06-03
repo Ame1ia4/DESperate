@@ -231,4 +231,40 @@ Rectangle {
             verifyDialog.open()
         }
     }
+
+    // ── Merkle root status banner ─────────────────────────────────────────────
+    Rectangle {
+        id: merkleStatusBanner
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        height: 36
+        color: "#173D28"
+        radius: 0
+        visible: false
+        z: 10
+
+        Text {
+            id: merkleStatusText
+            anchors.centerIn: parent
+            color: "#F5EDD6"
+            font.pixelSize: 12
+        }
+
+        Timer {
+            id: merkleStatusTimer
+            interval: 2500
+            onTriggered: merkleStatusBanner.visible = false
+        }
+
+        function show(msg) {
+            merkleStatusText.text = msg
+            merkleStatusBanner.visible = true
+            merkleStatusTimer.restart()
+        }
+    }
+
+    Connections {
+        target: messageController
+        function onMerkleRootCopied(root)  { merkleStatusBanner.show("Merkle root copied") }
+        function onMerkleRootPending(id)   { merkleStatusBanner.show("No Merkle root yet — message not batched") }
+    }
 }

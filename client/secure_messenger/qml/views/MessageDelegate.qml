@@ -167,6 +167,12 @@ Item {
         }
 
         MenuItem {
+            text: "Copy Merkle Root"
+            enabled: !isDeleted
+            onTriggered: messageController.copyMerkleRoot(messageId)
+        }
+
+        MenuItem {
             text: "Forward"
             enabled: !revoked && !isDeleted
             onTriggered: forwardBar.visible = !forwardBar.visible
