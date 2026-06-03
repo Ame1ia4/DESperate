@@ -190,11 +190,10 @@ void ConversationController::openConversation(
             conversationId);
 
     for (const auto& message : cachedMessages) {
-
-        if (!message.isDeleted) {
-            m_messageModel->addMessage(message);
-            cachedIds.insert(message.id);
-        }
+        // Always register in cachedIds so the store loop cannot re-add a stale copy.
+        cachedIds.insert(message.id);
+        // Add all messages — deleted/revoked ones render as placeholders in QML.
+        m_messageModel->addMessage(message);
     }
 
     const auto storedMessages =
@@ -331,12 +330,9 @@ void ConversationController::setupSessionAsync(
 void ConversationController::appendLocalMessage(
     const DecryptedMessage& message)
 {
-    if (!validateMessage(
-            message.plaintext)) {
-
-        emit errorOccurred(
-            "Invalid message.");
-
+    // Placeholders for deleted/revoked messages have empty plaintext — allow them through.
+    if (!message.isDeleted && !message.revoked && !validateMessage(message.plaintext)) {
+        emit errorOccurred("Invalid message.");
         return;
     }
 

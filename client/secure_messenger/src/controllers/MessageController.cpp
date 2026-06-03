@@ -76,7 +76,9 @@ MessageController::MessageController(
         });
 
     connect(m_api, &ApiClient::deleteMessageSucceeded, this, [this](const QString& messageId) {
-        m_model->removeMessage(messageId);
+        Q_UNUSED(messageId)
+        // markDeleted (called synchronously in deleteMessage) already applied the
+        // placeholder. Do not remove it — let "Message deleted" stay visible.
     });
 
     // Revoke: mark the sender's own bubble with a small indicator, persist the state,
@@ -518,17 +520,43 @@ void MessageController::pullAndProcessMessages(
         this,
         [this](const QJsonArray& notices) {
             for (const auto& v : notices) {
-                const auto notice    = v.toObject();
-                const QString msgId  = notice.value("message_id").toString();
-                const QString type   = notice.value("type").toString();
+                const auto notice   = v.toObject();
+                const QString msgId = notice.value("message_id").toString();
+                const QString type  = notice.value("type").toString();
                 if (msgId.isEmpty()) continue;
 
-                if (type == QStringLiteral("deleted")) {
+                const bool isDelete = (type == QStringLiteral("deleted"));
+                const bool isRevoke = (type == QStringLiteral("revoked"));
+                if (!isDelete && !isRevoke) continue;
+
+                if (!m_store->containsMessage(msgId)) {
+                    // Message was deleted/revoked before we ever received it.
+                    // Create a placeholder so the conversation shows a tombstone.
+                    const QString convId    = notice.value("conversation_id").toString();
+                    const QString createdAt = notice.value("created_at").toString();
+                    if (convId.isEmpty()) continue;
+
+                    DecryptedMessage placeholder;
+                    placeholder.id               = msgId;
+                    placeholder.conversationId   = convId;
+                    placeholder.senderDeviceId   = QString{};
+                    placeholder.plaintext        = QString{};
+                    placeholder.timestamp        = QDateTime::fromString(createdAt, Qt::ISODateWithMs);
+                    if (!placeholder.timestamp.isValid())
+                        placeholder.timestamp    = QDateTime::currentDateTimeUtc();
+                    placeholder.verificationState = VerificationState::Failed;
+                    placeholder.isDeleted        = isDelete;
+                    placeholder.revoked          = isRevoke;
+
+                    qDebug() << "[NOTICE] tombstone for unseen msg:" << msgId << type;
+                    m_store->storeDecryptedMessage(placeholder);
+                    m_conversations->appendLocalMessage(placeholder);
+                } else if (isDelete) {
                     qDebug() << "[NOTICE] deletion:" << msgId;
                     m_model->markDeleted(msgId);
                     m_store->markMessageDeleted(msgId);
                     m_conversations->markLocalDeleted(msgId);
-                } else if (type == QStringLiteral("revoked")) {
+                } else {
                     qDebug() << "[NOTICE] revoke:" << msgId;
                     m_model->markRevoked(msgId);
                     m_store->markMessageRevoked(msgId);
