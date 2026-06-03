@@ -70,8 +70,8 @@ class TestArgon2idParameters:
     def test_hash_length_is_32_bytes(self):
         assert ARGON2_HASH_LEN == 32
 
-    def test_salt_length_is_16_bytes(self):
-        assert ARGON2_SALT_LEN == 16
+    def test_salt_length_is_32_bytes(self):
+        assert ARGON2_SALT_LEN == 32
 
 
 # ── Domain separation ─────────────────────────────────────────────────────────
@@ -309,9 +309,9 @@ class TestArgon2idLocalKeyDerivation:
         key, _ = argon2id_derive_key("passphrase")
         assert len(key) == 32
 
-    def test_returns_16_byte_salt(self):
+    def test_returns_32_byte_salt(self):
         _, salt = argon2id_derive_key("passphrase")
-        assert len(salt) == 16
+        assert len(salt) == 32
 
     def test_is_deterministic_with_same_salt(self):
         _, salt = argon2id_derive_key("passphrase")
@@ -320,18 +320,18 @@ class TestArgon2idLocalKeyDerivation:
         assert k1 == k2
 
     def test_different_salts_give_different_keys(self):
-        k1, _ = argon2id_derive_key("passphrase", os.urandom(16))
-        k2, _ = argon2id_derive_key("passphrase", os.urandom(16))
+        k1, _ = argon2id_derive_key("passphrase", os.urandom(32))
+        k2, _ = argon2id_derive_key("passphrase", os.urandom(32))
         assert k1 != k2
 
     def test_different_passphrases_give_different_keys(self):
-        salt   = os.urandom(16)
+        salt   = os.urandom(32)
         k1, _  = argon2id_derive_key("passphrase_one", salt)
         k2, _  = argon2id_derive_key("passphrase_two", salt)
         assert k1 != k2
 
     def test_provided_salt_is_returned_unchanged(self):
-        salt      = os.urandom(16)
+        salt      = os.urandom(32)
         _, out_salt = argon2id_derive_key("passphrase", salt)
         assert out_salt == salt
 

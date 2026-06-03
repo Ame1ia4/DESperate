@@ -76,10 +76,10 @@ class TestCreate:
         StateStore.create(base_dir, passphrase)
         assert (base_dir / "salt").exists()
 
-    def test_salt_is_16_bytes(self, base_dir, passphrase):
+    def test_salt_is_32_bytes(self, base_dir, passphrase):
         StateStore.create(base_dir, passphrase)
         salt = (base_dir / "salt").read_bytes()
-        assert len(salt) == 16
+        assert len(salt) == 32
 
     def test_creates_sessions_directory(self, base_dir, passphrase):
         StateStore.create(base_dir, passphrase)
