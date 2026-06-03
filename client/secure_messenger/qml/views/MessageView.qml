@@ -57,6 +57,19 @@ Rectangle {
             downloadToast.visible = true
             toastTimer.restart()
         }
+        function onCiphertextCopied(ct) {
+            clipboardHelper.copyText(ct)
+            downloadToastText.isError = false
+            downloadToastText.text = "Ciphertext copied to clipboard"
+            downloadToast.visible = true
+            toastTimer.restart()
+        }
+        function onCiphertextCopyFailed() {
+            downloadToastText.isError = true
+            downloadToastText.text = "No ciphertext stored for this message"
+            downloadToast.visible = true
+            toastTimer.restart()
+        }
     }
 
     ColumnLayout {

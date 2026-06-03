@@ -52,6 +52,8 @@ public slots:
     Q_INVOKABLE void revokeMessage(const QString& messageId, const QString& recipientDeviceId);
     Q_INVOKABLE void forwardMessage(const QString& toUsername, const QString& plaintext);
     Q_INVOKABLE void downloadMessage(const QString& messageId, const QString& plaintext);
+    Q_INVOKABLE QString ciphertextForMessage(const QString& messageId) const;
+    Q_INVOKABLE void copyCiphertext(const QString& messageId);
 
     void sendMessage(
         QString conversationId,
@@ -82,6 +84,8 @@ signals:
     void messageDownloadFailed(QString reason);
     void messageRevokeSucceeded();
     void messageRevokeFailed();
+    void ciphertextCopied(QString ciphertext);
+    void ciphertextCopyFailed();
 
 private slots:
     void handleEncryptCompleted(

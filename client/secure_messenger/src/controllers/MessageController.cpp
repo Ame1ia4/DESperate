@@ -156,6 +156,22 @@ void MessageController::downloadMessage(const QString& messageId, const QString&
     emit messageDownloaded(path);
 }
 
+QString MessageController::ciphertextForMessage(const QString& messageId) const
+{
+    const QByteArray ct = m_store->ciphertextForMessage(messageId);
+    return ct.isEmpty() ? QString{} : QString::fromLatin1(ct.toHex());
+}
+
+void MessageController::copyCiphertext(const QString& messageId)
+{
+    const QByteArray ct = m_store->ciphertextForMessage(messageId);
+    if (ct.isEmpty()) {
+        emit ciphertextCopyFailed();
+        return;
+    }
+    emit ciphertextCopied(QString::fromLatin1(ct.toHex()));
+}
+
 void MessageController::sendText(
     const QString& conversationId,
     const QString& text)
@@ -259,6 +275,7 @@ void MessageController::handleEncryptCompleted(
     // POST /messages response arrives so delete/revoke can reference the correct ID.
     const QString localId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
+    fullEnvelope["id"] = localId;
     m_store->storeOutgoingMessage(fullEnvelope);
     m_api->sendMessage(fullEnvelope, localId);
 
@@ -368,6 +385,7 @@ void MessageController::handleDecryptCompleted(
     message.verificationState =
         VerificationState::Verified;
 
+    m_store->storeOutgoingMessage(envelope);
     m_store->storeDecryptedMessage(
         message);
 
