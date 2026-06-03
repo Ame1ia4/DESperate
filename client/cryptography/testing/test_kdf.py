@@ -309,9 +309,9 @@ class TestArgon2idLocalKeyDerivation:
         key, _ = argon2id_derive_key("passphrase")
         assert len(key) == 32
 
-    def test_returns_16_byte_salt(self):
+    def test_returns_32_byte_salt(self):
         _, salt = argon2id_derive_key("passphrase")
-        assert len(salt) == 16
+        assert len(salt) == 32
 
     def test_is_deterministic_with_same_salt(self):
         _, salt = argon2id_derive_key("passphrase")

@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['C:/Users/yasmi/Documents/ISE/Year 2/Block 2/EPIC/DESperate/client/cryptography/crypto_service.py'],
+    ['crypto_service.py'],
     pathex=[],
     binaries=[],
     datas=[],
