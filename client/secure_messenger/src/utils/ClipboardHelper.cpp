@@ -5,5 +5,8 @@
 
 void ClipboardHelper::copyText(const QString& text) {
     QClipboard *cb = QGuiApplication::clipboard();
-    if (cb) cb->setText(text);
+    if (cb) {
+        cb->setText(text);
+        emit textCopied();
+    }
 }

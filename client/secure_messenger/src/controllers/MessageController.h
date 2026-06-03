@@ -84,7 +84,7 @@ signals:
     void messageDownloadFailed(QString reason);
     void messageRevokeSucceeded();
     void messageRevokeFailed();
-    void ciphertextCopied(QString ciphertext);
+    void ciphertextCopied();
     void ciphertextCopyFailed();
 
 private slots:

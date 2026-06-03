@@ -4,7 +4,7 @@ project(secure_messenger VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Network QuickControls2)
+find_package(Qt6 REQUIRED COMPONENTS Gui Quick Network QuickControls2)
 
 set(OPENSSL_ROOT_DIR "C:/msys64/ucrt64")
 set(OPENSSL_INCLUDE_DIR "C:/msys64/ucrt64/include")
@@ -74,7 +74,7 @@ set_target_properties(appsecure_messenger PROPERTIES
 )
 
 target_link_libraries(appsecure_messenger
-    PRIVATE Qt6::Quick Qt6::Network Qt6::QuickControls2
+    PRIVATE Qt6::Gui Qt6::Quick Qt6::Network Qt6::QuickControls2
             OpenSSL::SSL OpenSSL::Crypto
             $<$<PLATFORM_ID:Windows>:ws2_32>
 )
