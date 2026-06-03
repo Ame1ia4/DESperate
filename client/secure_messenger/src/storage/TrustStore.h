@@ -1,8 +1,9 @@
 #pragma once
 
-#include <QHash>
 #include <QObject>
 #include <QString>
+#include <string>
+#include <unordered_map>
 
 class TrustStore : public QObject
 {
@@ -35,6 +36,7 @@ private:
     void saveToDisk() const;
 
     QString m_storagePath;
-    QHash<QString, QString> m_fingerprints;
-    QHash<QString, bool> m_verified;
+    // Maps userId (std::string) to pinned fingerprint (std::string) — TOFU model
+    std::unordered_map<std::string, std::string> m_fingerprints;
+    std::unordered_map<std::string, bool> m_verified;
 };

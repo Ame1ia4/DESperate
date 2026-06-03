@@ -1,10 +1,11 @@
 #pragma once
 
-#include <QHash>
 #include <QObject>
-#include <QSet>
 #include <QString>
-#include <QVector>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "src/models/ConversationModel.h"
 #include "src/models/MessageModel.h"
@@ -154,19 +155,18 @@ private:
 
     bool m_sessionReady = true;
 
-    QHash<
-        QString,
-        QVector<DecryptedMessage>>
+    // conversationId → cached decrypted messages for that conversation
+    std::unordered_map<std::string, std::vector<DecryptedMessage>>
         m_messagesByConversation;
 
     // conversationId → other participant's username
-    QHash<QString, QString> m_participants;
+    std::unordered_map<std::string, std::string> m_participants;
 
     // conversationId → other participant's device ID
-    QHash<QString, QString> m_deviceIds;
+    std::unordered_map<std::string, std::string> m_deviceIds;
 
     // conversationIds for which a session fetch is already in-flight
-    QSet<QString> m_sessionFetchInFlight;
+    std::set<std::string> m_sessionFetchInFlight;
 
     // C1 fix: true when a fingerprint mismatch is unresolved
     bool m_identityMismatch = false;
@@ -175,7 +175,6 @@ private:
     // peer in the current conversation (0 = not yet fetched)
     int m_peerDeviceCount = 0;
 
-    // conversationId → expected single device ID from conversation list
-    // Used to detect ghost devices when full device list is fetched.
-    QHash<QString, QStringList> m_peerDeviceFingerprints;
+    // conversationId → list of device fingerprints reported by the server
+    std::unordered_map<std::string, std::vector<std::string>> m_peerDeviceFingerprints;
 };

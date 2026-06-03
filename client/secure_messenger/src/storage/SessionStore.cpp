@@ -8,30 +8,31 @@ SessionStore::SessionStore(QObject* parent)
 bool SessionStore::hasSession(
     const QString& remoteDeviceId) const
 {
-    return m_sessions.contains(remoteDeviceId);
+    return m_sessions.count(remoteDeviceId.toStdString()) > 0;
 }
 
 SessionState SessionStore::session(
     const QString& remoteDeviceId) const
 {
-    return m_sessions.value(remoteDeviceId);
+    auto it = m_sessions.find(remoteDeviceId.toStdString());
+    if (it != m_sessions.end()) return it->second;
+    return {};
 }
 
 void SessionStore::storeSession(
     const SessionState& state)
 {
-    m_sessions[state.remoteDeviceId] = state;
+    m_sessions[state.remoteDeviceId.toStdString()] = state;
 }
 
 void SessionStore::incrementSendCounter(
     const QString& remoteDeviceId)
 {
-    if (!m_sessions.contains(remoteDeviceId)) {
+    auto it = m_sessions.find(remoteDeviceId.toStdString());
+    if (it == m_sessions.end()) {
         return;
     }
 
-    auto& state = m_sessions[remoteDeviceId];
-
-    state.sendNonceCounter++;
-    state.lastUsedAt = QDateTime::currentDateTimeUtc();
+    it->second.sendNonceCounter++;
+    it->second.lastUsedAt = QDateTime::currentDateTimeUtc();
 }

@@ -38,18 +38,12 @@ void TrustStore::loadFromDisk()
 
     const auto root = doc.object();
 
-    for (auto it = root.begin();
-         it != root.end(); ++it) {
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        const std::string userId = it.key().toStdString();
+        const QJsonObject entry  = it.value().toObject();
 
-        const QString userId = it.key();
-        const QJsonObject entry =
-            it.value().toObject();
-
-        m_fingerprints[userId] =
-            entry.value("fingerprint").toString();
-
-        m_verified[userId] =
-            entry.value("verified").toBool(false);
+        m_fingerprints[userId] = entry.value("fingerprint").toString().toStdString();
+        m_verified[userId]     = entry.value("verified").toBool(false);
     }
 }
 
@@ -57,15 +51,14 @@ void TrustStore::saveToDisk() const
 {
     QJsonObject root;
 
-    for (auto it = m_fingerprints.cbegin();
-         it != m_fingerprints.cend(); ++it) {
-
+    for (const auto& [userId, fingerprint] : m_fingerprints) {
         QJsonObject entry;
-        entry["fingerprint"] = it.value();
-        entry["verified"] =
-            m_verified.value(it.key(), false);
+        entry["fingerprint"] = QString::fromStdString(fingerprint);
 
-        root[it.key()] = entry;
+        auto vit = m_verified.find(userId);
+        entry["verified"] = (vit != m_verified.end()) ? vit->second : false;
+
+        root[QString::fromStdString(userId)] = entry;
     }
 
     QFile file(m_storagePath);
@@ -85,13 +78,15 @@ bool TrustStore::verifyIdentity(
     const QString& userId,
     const QString& fingerprint)
 {
-    const QString existing =
-        m_fingerprints.value(userId);
+    const std::string key = userId.toStdString();
+    const std::string fp  = fingerprint.toStdString();
+
+    auto it = m_fingerprints.find(key);
 
     // TOFU: first-seen fingerprint becomes the pin for this identity.
-    if (existing.isEmpty()) {
-        m_fingerprints[userId] = fingerprint;
-        m_verified[userId] = true;
+    if (it == m_fingerprints.end() || it->second.empty()) {
+        m_fingerprints[key] = fp;
+        m_verified[key]     = true;
 
         saveToDisk();
 
@@ -99,14 +94,14 @@ bool TrustStore::verifyIdentity(
         return true;
     }
 
-    if (existing != fingerprint) {
-        m_verified[userId] = false;
+    if (it->second != fp) {
+        m_verified[key] = false;
 
         saveToDisk();
 
         emit fingerprintMismatch(
             userId,
-            existing,
+            QString::fromStdString(it->second),
             fingerprint);
 
         return false;
@@ -118,11 +113,15 @@ bool TrustStore::verifyIdentity(
 QString TrustStore::pinnedFingerprint(
     const QString& userId) const
 {
-    return m_fingerprints.value(userId);
+    auto it = m_fingerprints.find(userId.toStdString());
+    if (it == m_fingerprints.end()) return {};
+    return QString::fromStdString(it->second);
 }
 
 bool TrustStore::isVerified(
     const QString& userId) const
 {
-    return m_verified.value(userId);
+    auto it = m_verified.find(userId.toStdString());
+    if (it == m_verified.end()) return false;
+    return it->second;
 }

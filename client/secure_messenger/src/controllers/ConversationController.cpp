@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QUuid>
 #include <algorithm>
+#include <unordered_set>
 
 #include "src/models/ConversationModel.h"
 #include "src/models/MessageModel.h"
@@ -82,8 +83,8 @@ void ConversationController::loadConversations()
         this,
         [this](const QJsonArray& data) {
 
-            QVector<ConversationItem> items;
-            items.reserve(data.size());
+            std::vector<ConversationItem> items;
+            items.reserve(static_cast<size_t>(data.size()));
 
             m_deviceIds.clear();
             m_participants.clear();
@@ -130,14 +131,12 @@ void ConversationController::loadConversations()
 
                 if (!item.conversationId.isEmpty()) {
                     if (!item.deviceId.isEmpty()) {
-                        m_deviceIds.insert(
-                            item.conversationId,
-                            item.deviceId);
+                        m_deviceIds[item.conversationId.toStdString()] =
+                            item.deviceId.toStdString();
                     }
                     if (!item.participant.isEmpty()) {
-                        m_participants.insert(
-                            item.conversationId,
-                            item.participant);
+                        m_participants[item.conversationId.toStdString()] =
+                            item.participant.toStdString();
                     }
                 }
 
@@ -184,20 +183,25 @@ void ConversationController::openConversation(
 
     m_messageModel->clear();
 
+    const std::string convIdStr = conversationId.toStdString();
+
     // Merge cache and store (store may have messages from a previous session).
-    QSet<QString> seenIds;
-    for (const auto& message : m_messagesByConversation.value(conversationId))
-        seenIds.insert(message.id);
+    std::unordered_set<std::string> seenIds;
+    auto cacheIt = m_messagesByConversation.find(convIdStr);
+    if (cacheIt != m_messagesByConversation.end()) {
+        for (const auto& message : cacheIt->second)
+            seenIds.insert(message.id.toStdString());
+    }
 
     for (const auto& message : m_store->messagesForConversation(conversationId)) {
-        if (!seenIds.contains(message.id)) {
-            seenIds.insert(message.id);
-            m_messagesByConversation[conversationId].push_back(message);
+        if (!seenIds.count(message.id.toStdString())) {
+            seenIds.insert(message.id.toStdString());
+            m_messagesByConversation[convIdStr].push_back(message);
         }
     }
 
     // Sort the merged list chronologically so the view always shows oldest→newest.
-    auto& convMessages = m_messagesByConversation[conversationId];
+    auto& convMessages = m_messagesByConversation[convIdStr];
     std::sort(convMessages.begin(), convMessages.end(),
         [](const DecryptedMessage& a, const DecryptedMessage& b) {
             return a.timestamp < b.timestamp;
@@ -207,11 +211,13 @@ void ConversationController::openConversation(
         m_messageModel->addMessage(message);
 
     // Kick off PQXDH session setup only if no session exists yet.
-    const QString participant =
-        m_participants.value(conversationId);
+    auto partIt = m_participants.find(convIdStr);
+    const QString participant = (partIt != m_participants.end())
+        ? QString::fromStdString(partIt->second)
+        : QString{};
 
     if (!participant.isEmpty() &&
-        !m_sessionFetchInFlight.contains(conversationId)) {
+        !m_sessionFetchInFlight.count(convIdStr)) {
 
         if (m_cryptoClient->hasSession(conversationId)) {
             // Session already on disk — no need to do PQXDH again.
@@ -225,9 +231,6 @@ void ConversationController::openConversation(
     }
     // NOTE: Not fetching history from /conversations/:id/messages because those messages
     // lack the initiation_bundle (PQXDH key material) needed for decryption.
-    // Only pullMessages from /messages/pending have the full envelope.
-    // Once conversation is opened, MessageController will pullMessages on a timer.
-    // For now, just emit to signal that local messages are ready.
     emit conversationOpened(conversationId);
 }
 
@@ -235,7 +238,7 @@ void ConversationController::setupSessionAsync(
     const QString& conversationId,
     const QString& participant)
 {
-    m_sessionFetchInFlight.insert(conversationId);
+    m_sessionFetchInFlight.insert(conversationId.toStdString());
 
     auto successConn = std::make_shared<QMetaObject::Connection>();
     auto failConn    = std::make_shared<QMetaObject::Connection>();
@@ -247,7 +250,7 @@ void ConversationController::setupSessionAsync(
         [this, conversationId, participant, failConn](const QJsonObject& bundle) {
 
             QObject::disconnect(*failConn);
-            m_sessionFetchInFlight.remove(conversationId);
+            m_sessionFetchInFlight.erase(conversationId.toStdString());
 
             const QByteArray bundleJson =
                 QJsonDocument(bundle).toJson(QJsonDocument::Compact);
@@ -275,10 +278,6 @@ void ConversationController::setupSessionAsync(
                     : false;
 
             if (conversationId == m_currentConversationId) {
-                // Session is only ready if crypto init succeeded AND the identity
-                // is trusted. A fingerprint mismatch leaves sessionReady=false,
-                // keeping the send/receive path blocked until the user resolves
-                // the mismatch in VerifyDialog.
                 m_sessionReady = ok && trusted;
                 emit sessionReadyChanged();
 
@@ -305,7 +304,7 @@ void ConversationController::setupSessionAsync(
         [this, conversationId, successConn](const QString& reason) {
 
             QObject::disconnect(*successConn);
-            m_sessionFetchInFlight.remove(conversationId);
+            m_sessionFetchInFlight.erase(conversationId.toStdString());
 
             qWarning() << "fetchKeyBundle failed for conversation"
                        << conversationId << ":" << reason;
@@ -329,9 +328,8 @@ void ConversationController::appendLocalMessage(
         return;
     }
 
-    m_messagesByConversation
-        [message.conversationId]
-            .push_back(message);
+    m_messagesByConversation[message.conversationId.toStdString()]
+        .push_back(message);
 
     if (message.conversationId ==
         m_currentConversationId) {
@@ -406,15 +404,17 @@ bool ConversationController::validateMessage(
 QString ConversationController::deviceIdForConversation(
     const QString& conversationId) const
 {
-    return m_deviceIds.value(
-        conversationId, QString());
+    auto it = m_deviceIds.find(conversationId.toStdString());
+    if (it == m_deviceIds.end()) return {};
+    return QString::fromStdString(it->second);
 }
 
 QString ConversationController::participantForConversation(
     const QString& conversationId) const
 {
-    return m_participants.value(
-        conversationId, QString());
+    auto it = m_participants.find(conversationId.toStdString());
+    if (it == m_participants.end()) return {};
+    return QString::fromStdString(it->second);
 }
 
 void ConversationController::reinitiateSession(const QString& conversationId)
@@ -422,9 +422,9 @@ void ConversationController::reinitiateSession(const QString& conversationId)
     if (conversationId.isEmpty())
         return;
     m_cryptoClient->resetSession(conversationId);
-    const QString participant = m_participants.value(conversationId);
-    if (!participant.isEmpty())
-        setupSessionAsync(conversationId, participant);
+    auto it = m_participants.find(conversationId.toStdString());
+    if (it != m_participants.end())
+        setupSessionAsync(conversationId, QString::fromStdString(it->second));
 }
 
 void ConversationController::fetchPeerDevices(
@@ -440,10 +440,9 @@ void ConversationController::fetchPeerDevices(
     // Note: a fully compromised server can suppress ghost devices from this
     // response too. This is a best-effort detection mechanism, not a
     // cryptographic guarantee — it is documented as a known limitation.
-    const QString participant =
-        m_participants.value(conversationId);
-    if (participant.isEmpty())
-        return;
+    auto partIt = m_participants.find(conversationId.toStdString());
+    if (partIt == m_participants.end()) return;
+    const QString participant = QString::fromStdString(partIt->second);
 
     connect(
         m_apiClient,
@@ -451,28 +450,27 @@ void ConversationController::fetchPeerDevices(
         this,
         [this, conversationId](const QJsonArray& devices) {
 
-            QStringList fingerprints;
+            std::vector<std::string> fingerprints;
+            fingerprints.reserve(static_cast<size_t>(devices.size()));
+
             for (const auto& v : devices) {
                 const QString fp =
                     v.toObject()
                      .value(QStringLiteral("fingerprint"))
                      .toString();
                 if (!fp.isEmpty())
-                    fingerprints.append(fp);
+                    fingerprints.push_back(fp.toStdString());
             }
 
-            m_peerDeviceFingerprints[conversationId] = fingerprints;
+            m_peerDeviceFingerprints[conversationId.toStdString()] = fingerprints;
 
-            const int count = fingerprints.size();
+            const int count = static_cast<int>(fingerprints.size());
             if (count != m_peerDeviceCount) {
                 m_peerDeviceCount = count;
                 emit peerDeviceCountChanged();
             }
 
             // Warn if the server is reporting more than one active device.
-            // A legitimately multi-device user would have one pinned device
-            // per conversation; >1 here means either the peer registered a
-            // new device or a ghost device was injected.
             if (count > 1) {
                 qWarning() << "H4: peer for conversation" << conversationId
                            << "has" << count << "active devices — possible ghost device.";
@@ -496,7 +494,7 @@ void ConversationController::fetchPeerDevices(
 void ConversationController::updateMessageId(const QString& oldId, const QString& newId)
 {
     if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
-    for (auto& msgList : m_messagesByConversation) {
+    for (auto& [key, msgList] : m_messagesByConversation) {
         for (auto& msg : msgList) {
             if (msg.id == oldId) {
                 msg.id = newId;
@@ -508,20 +506,19 @@ void ConversationController::updateMessageId(const QString& oldId, const QString
 
 void ConversationController::removeLocalMessage(const QString& messageId)
 {
-    for (auto it = m_messagesByConversation.begin(); it != m_messagesByConversation.end(); ++it) {
-        auto& msgList = it.value();
-        for (auto msgIt = msgList.begin(); msgIt != msgList.end(); ++msgIt) {
-            if (msgIt->id == messageId) {
-                msgList.erase(msgIt);
-                return;
-            }
+    for (auto& [key, msgList] : m_messagesByConversation) {
+        auto msgIt = std::find_if(msgList.begin(), msgList.end(),
+            [&messageId](const DecryptedMessage& m) { return m.id == messageId; });
+        if (msgIt != msgList.end()) {
+            msgList.erase(msgIt);
+            return;
         }
     }
 }
 
 void ConversationController::markLocalRevoked(const QString& messageId)
 {
-    for (auto& msgList : m_messagesByConversation) {
+    for (auto& [key, msgList] : m_messagesByConversation) {
         for (auto& msg : msgList) {
             if (msg.id == messageId) {
                 msg.revoked = true;
@@ -533,7 +530,7 @@ void ConversationController::markLocalRevoked(const QString& messageId)
 
 void ConversationController::markLocalDeleted(const QString& messageId)
 {
-    for (auto& msgList : m_messagesByConversation) {
+    for (auto& [key, msgList] : m_messagesByConversation) {
         for (auto& msg : msgList) {
             if (msg.id == messageId) {
                 msg.isDeleted = true;

@@ -3,8 +3,9 @@
 
 #include <QObject>
 #include <QString>
-#include <QHash>
 #include <QJsonObject>
+#include <string>
+#include <unordered_map>
 
 class ApiClient;
 class CryptoServiceClient;
@@ -19,13 +20,13 @@ struct DecryptedMessage;
 
 struct PendingMessage
 {
-    QString requestId;
+    std::string requestId;
 
-    QString conversationId;
+    std::string conversationId;
 
-    QString recipientDeviceId;
+    std::string recipientDeviceId;
 
-    QByteArray plaintext;
+    QByteArray plaintext;   // kept as QByteArray — passed directly to Qt crypto API
 
     bool forwarded = false;
 };
@@ -125,12 +126,15 @@ private:
 
     SessionStore* m_sessions = nullptr;
 
-    QHash<QString, PendingMessage>
+    // requestId → pending outgoing message awaiting crypto completion
+    std::unordered_map<std::string, PendingMessage>
         m_pendingMessages;
 
-    QHash<QString, QJsonObject>
+    // requestId → incoming envelope awaiting decryption
+    std::unordered_map<std::string, QJsonObject>
         m_pendingDecryptions;
 
-    QHash<QString, QString>
+    // conversationId → forwarded plaintext awaiting session readiness
+    std::unordered_map<std::string, std::string>
         m_pendingForwards;
 };
