@@ -6,6 +6,7 @@ A secure, end-to-end encrypted messaging platform built for the EPIC project. Pr
 
 ## Table of Contents
 
+- [Running Client](#running-client)
 - [Architecture Overview](#architecture-overview)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
@@ -18,6 +19,31 @@ A secure, end-to-end encrypted messaging platform built for the EPIC project. Pr
 - [Git Hooks](#git-hooks)
 - [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
+
+---
+
+## Running Client
+Build Steps 
+
+    Clone and navigate to the client  
+
+    cd client/secure_messenger  
+
+    Configure (OpenSSL path set in CMakeLists.txt; override if needed)  
+
+    cmake -B build -DCMAKE_BUILD_TYPE=Release  
+
+    Build — CMake will auto-rebuild the crypto_service PyInstaller bundle if Python + PyInstaller are found; otherwise start the crypto service manually:  
+
+    # cd client/cryptography && python crypto_service.py  
+
+    cmake --build build --config Release  
+
+    Run  
+
+    ./build/appsecure_messenger # Linux/macOS  
+
+    build\Release\appsecure_messenger.exe # Windows
 
 ---
 
