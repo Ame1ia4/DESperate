@@ -419,11 +419,13 @@ void MessageController::handleDecryptCompleted(
     }
 
     m_store->storeOutgoingMessage(envelope);
+    const bool stored = !m_store->containsMessage(message.id);
     m_store->storeDecryptedMessage(
         message);
 
-    m_conversations
-        ->appendLocalMessage(message);
+    if (stored)
+        m_conversations
+            ->appendLocalMessage(message);
 
     m_api->acknowledgeMessage(
         message.id,
