@@ -42,6 +42,7 @@ from core.keys import (
     IdentityBundle,
 )
 from core.srp_session import SrpSession
+from core.kdf import derive_master_components, ARGON2_SALT_LEN
 from core.pqxdh import (
     initiate  as _pqxdh_initiate,
     respond   as _pqxdh_respond,
@@ -81,9 +82,12 @@ def _run(coro: Any) -> Any:
 
 # ── Module-level state ────────────────────────────────────────────────────────
 
-_srp_session:    Optional[SrpSession]   = None
-_store:          Optional[StateStore]   = None
-_local_bundle:   Optional[IdentityBundle] = None
+_srp_session:         Optional[SrpSession]    = None
+_store:               Optional[StateStore]    = None
+_local_bundle:        Optional[IdentityBundle] = None
+_pending_password:    Optional[str]           = None  # raw password cached between srp_start and srp_challenge
+_pending_keystore_key: Optional[bytes]        = None  # derived in srp_challenge; promoted to _cached only after srp_verify succeeds
+_cached_keystore_key:  Optional[bytes]        = None  # set only after confirmed mutual auth (or post-register); used by unlock_keystore
 _pending_sessions: dict = {}   # conversation_id → pending PQXDH state (pre-first-message)
 
 
@@ -99,27 +103,21 @@ _sessions: dict[str, _SessionEntry] = {}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _create_srp_verifier(username: str, password: str) -> tuple[bytes, bytes]:
+def _create_srp_verifier(username: str, srp_pass_hex: str, salt: bytes) -> bytes:
     """
-    Derive SRP salt + verifier using the same formula as SrpSession.process_challenge.
+    Compute SRP verifier v = g^x mod N for the given salt.
 
-    pysrp.create_salted_verification_key uses salt_len=4 (4 bytes) by default and
-    stores the salt as a variable-length BigInteger. Sending that zero-padded to 64
-    hex chars and then decoding it back produces a 32-byte salt that differs from the
-    4-byte salt pysrp used to compute x — causing x (and thus M1) to never match.
-
-    We generate the salt ourselves (always exactly 32 bytes) and compute v directly,
-    so registration and login use identical byte sequences.
+    The salt must be the same value passed to derive_master_components — it is both
+    the Argon2id salt and the SRP x-computation salt, so registration and login
+    always produce matching x values.
     """
     from core.srp_session import _sha256, _N, _g, _N_BYTES
-    salt = os.urandom(32)
     x = int.from_bytes(
-        _sha256(salt, _sha256((username + ":" + password).encode())),
+        _sha256(salt, _sha256((username + ":" + srp_pass_hex).encode())),
         "big",
     )
     v = pow(_g, x, _N)
-    verifier = v.to_bytes(_N_BYTES, "big")
-    return salt, verifier
+    return v.to_bytes(_N_BYTES, "big")
 
 
 def _require_store() -> StateStore:
@@ -188,18 +186,16 @@ def _consume_opk(
     store.save_state(_BUNDLE_KEY, bundle.to_private_bundle())
 
 
-def _open_or_create_store(password: str) -> StateStore:
-    """Load an existing StateStore or create a fresh one."""
+def _load_master_salt() -> Optional[bytes]:
+    """Return the persisted Argon2id/SRP salt, or None if no keystore exists yet."""
     salt_path = _STORE_BASE_DIR / "salt"
-    if salt_path.exists():
-        return StateStore.load(_STORE_BASE_DIR, password)
-    return StateStore.create(_STORE_BASE_DIR, password)
+    return salt_path.read_bytes() if salt_path.exists() else None
 
 
 # ── RPC handlers ──────────────────────────────────────────────────────────────
 
 def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global _srp_session, _store, _local_bundle
+    global _srp_session, _store, _local_bundle, _pending_password, _pending_keystore_key, _cached_keystore_key
 
     # ── Keystore ──────────────────────────────────────────────────────────────
 
@@ -207,19 +203,27 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         password = params.get("password", "")
         if not password:
             return {"success": False, "error": "Password required"}
-        # M1 fix: unlock must ONLY open an existing keystore, never create one.
-        # Previously _open_or_create_store would silently create a fresh keystore
-        # with an attacker-supplied password if the directory did not exist,
-        # allowing a local process to replace the real keystore before the
-        # legitimate user unlocked it. Use StateStore.load() directly instead.
-        salt_path = _STORE_BASE_DIR / "salt"
-        if not salt_path.exists():
-            return {
-                "success": False,
-                "error": "No keystore found. Register first.",
-            }
-        _store = StateStore.load(_STORE_BASE_DIR, password)
-        # Load identity bundle if one has been persisted from a previous registration.
+
+        if _cached_keystore_key is not None:
+            # Fast path: srp_challenge already derived the key from the server's salt.
+            try:
+                _store = StateStore.load_with_key(_STORE_BASE_DIR, _cached_keystore_key)
+            except FileNotFoundError:
+                _cached_keystore_key = None
+                return {"success": False, "error": "No keystore found — re-register"}
+            _cached_keystore_key = None
+        else:
+            # Fallback: re-derive from the salt file (e.g. service restart before srp_challenge).
+            srp_salt = _load_master_salt()
+            if srp_salt is None:
+                return {"success": False, "error": "No keystore found — re-register"}
+            _, keystore_key, _ = derive_master_components(password, srp_salt)
+            try:
+                _store = StateStore.load_with_key(_STORE_BASE_DIR, keystore_key)
+            except FileNotFoundError:
+                return {"success": False, "error": "No keystore found — re-register"}
+
+
         if _store.state_exists(_BUNDLE_KEY):
             try:
                 raw = _store.load_state(_BUNDLE_KEY)
@@ -234,9 +238,6 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
                     ),
                 }
         else:
-            # Keystore exists (password is correct) but the identity bundle was never
-            # saved — this happens when the keystore directory was deleted after
-            # registration and then a new (empty) keystore was created by a later run.
             _store = None
             return {
                 "success": False,
@@ -254,42 +255,37 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         password  = params["password"]
         nonce_hex = params["nonce"]
 
+        # Single Argon2id call derives both the SRP synthetic password and the
+        # keystore encryption key. The generated salt is sent to the server as
+        # srp_salt and returned on every /auth/init — no client-side salt file needed.
+        srp_salt = os.urandom(ARGON2_SALT_LEN)
+        srp_pass, keystore_key, _ = derive_master_components(password, srp_salt)
+
         bundle = _gen_bundle(user_id=username)
 
-        # The bundle's ik_sig is a hybrid Ed25519 + ML-DSA-87 keypair.
-        # Its public_key is already the 2624-byte composite (ed25519_pub || ml_dsa_pub)
-        # that the server expects as identity_signing_pub.
         identity_signing_pub = bundle.ik_sig.public_key          # 2624 bytes
 
         nonce_bytes = bytes.fromhex(nonce_hex)
         nonce_sig   = bundle.ik_sig.sign(nonce_bytes)             # 4691 bytes
         spk_sig     = bundle.ik_sig.sign(bundle.spk.keypair.public_key_bytes)  # 4691 bytes
 
-        salt_bytes, verifier_bytes = _create_srp_verifier(username, password)
+        verifier_bytes = _create_srp_verifier(username, srp_pass.hex(), srp_salt)
 
-        # Persist the private bundle so unlock_keystore can restore it on restart.
-        # If the keystore wasn't opened first, bootstrap it with this password.
-        if _store is None:
-            _store = _open_or_create_store(password)
-            # If an existing keystore was loaded, verify the password by attempting
-            # a test decrypt.  If it fails, the user registered previously with a
-            # different password and we must not silently overwrite with the wrong key.
-            if _store is not None:
-                try:
-                    _store.load_state(_BUNDLE_KEY)
-                except FileNotFoundError:
-                    pass  # first-time registration — no bundle persisted yet, fine
-                except InvalidTag:
-                    _store = None
-                    raise ValueError(
-                        "Keystore exists but password is wrong — delete "
-                        f"{_STORE_BASE_DIR} to start fresh, or use the original password."
-                    )
+        try:
+            _store = StateStore.create_with_key(_STORE_BASE_DIR, keystore_key, srp_salt)
+        except FileExistsError:
+            return {
+                "success": False,
+                "error": (
+                    f"A keystore already exists at {_STORE_BASE_DIR}. "
+                    "Delete that directory to re-register."
+                )
+            }
         _store.save_state(_BUNDLE_KEY, bundle.to_private_bundle())
         _local_bundle = bundle
 
         return {
-            "srp_salt":                salt_bytes.hex(),
+            "srp_salt":                srp_salt.hex(),
             "srp_verifier":            verifier_bytes.hex(),
             "idk_classical_pub":       bundle.ik_classical.public_key_bytes.hex(),
             "idk_pq_pub":              bundle.ik_kem.public_key.hex(),
@@ -303,12 +299,36 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── SRP authentication ─────────────────────────────────────────────────────
 
     if method == "srp_start":
-        _srp_session = SrpSession(params["username"], params["password"])
+        # Drop any password left over from an interrupted previous flow before
+        # storing the new one — ensures the old reference is released immediately.
+        _pending_password     = None
+        _srp_session          = None
+        _pending_keystore_key = None
+        _cached_keystore_key  = None
+        # Cache the raw password — srp_salt arrives from /auth/init and is only
+        # available in srp_challenge, where we run Argon2id and inject srp_pass.
+        _pending_password = params["password"]
+        _srp_session = SrpSession(params["username"], "")  # password injected in srp_challenge
         return {"A": _srp_session.A_hex}
 
     if method == "srp_challenge":
         if _srp_session is None:
             raise ValueError("No SRP session active — call srp_start first")
+        if _pending_password is None:
+            raise ValueError("No pending password — call srp_start first")
+        # Now we have the server's srp_salt — use it as the Argon2id salt to derive
+        # srp_pass and keystore_key from one Argon2id call.
+        srp_salt_bytes = bytes.fromhex(params["salt"])
+        try:
+            srp_pass, keystore_key, _ = derive_master_components(_pending_password, srp_salt_bytes)
+        finally:
+            # Clear plaintext password from memory regardless of success or failure.
+            _pending_password = None
+        # Key is staged here; promoted to _cached_keystore_key only after srp_verify
+        # confirms mutual authentication — preventing the keystore from being opened
+        # before the server is verified.
+        _pending_keystore_key = keystore_key
+        _srp_session.set_password(srp_pass.hex())
         M1 = _srp_session.process_challenge(params["salt"], params["B"])
         return {"M1": M1}
 
@@ -316,11 +336,21 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
         if _srp_session is None:
             raise ValueError("No SRP session active — call srp_start first")
         authenticated = _srp_session.verify_server(params["M2"])
-        # K is returned so the C++ client can verify mutual auth succeeded,
-        # but it is NOT used as the Bearer token — the server-issued HKDF
-        # session_token (from /auth/login) is used instead.
         session_key = _srp_session.session_key_hex if authenticated else None
-        _srp_session = None
+        _srp_session      = None
+        _pending_password = None  # defensive — should already be None after srp_challenge
+        if authenticated:
+            # Promote the staged key — unlock_keystore may now use it.
+            _cached_keystore_key  = _pending_keystore_key
+            _pending_keystore_key = None
+        else:
+            # Auth failed: discard staged key and evict any keystore state that may
+            # have been loaded before this verification (e.g. unlock_keystore called
+            # out of order).
+            _pending_keystore_key = None
+            _cached_keystore_key  = None
+            _store                = None
+            _local_bundle         = None
         return {"authenticated": authenticated, "session_key": session_key}
 
     # ── Session existence check ───────────────────────────────────────────────
