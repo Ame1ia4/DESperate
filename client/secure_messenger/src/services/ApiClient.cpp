@@ -543,6 +543,27 @@ void ApiClient::createConversation(const QString& otherUsername)
     });
 }
 
+void ApiClient::fetchMessageBlockchainVerify(const QString& messageId)
+{
+    auto request = makeRequest(
+        "/messages/" + QString::fromUtf8(QUrl::toPercentEncoding(messageId)) + "/blockchain-verify");
+    auto* reply  = m_network.get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, messageId]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            emit blockchainVerifyFailed(messageId, reply->errorString());
+            return;
+        }
+
+        emit blockchainVerifySucceeded(messageId, QJsonDocument::fromJson(body).object());
+    });
+}
+
 // ── Private ───────────────────────────────────────────────────────────────────
 
 QNetworkRequest ApiClient::makeRequest(

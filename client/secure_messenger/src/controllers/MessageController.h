@@ -57,6 +57,7 @@ public slots:
     Q_INVOKABLE void downloadMessage(const QString& messageId, const QString& plaintext);
     Q_INVOKABLE QString ciphertextForMessage(const QString& messageId) const;
     Q_INVOKABLE void copyCiphertext(const QString& messageId);
+    Q_INVOKABLE void copyMerkleRoot(const QString& messageId);
 
     void sendMessage(
         QString conversationId,
@@ -91,6 +92,8 @@ signals:
     void ciphertextCopied();
     void ciphertextCopyFailed();
     void forwardInitiated(QString toUsername);
+    void merkleRootCopied(QString merkleRoot);
+    void merkleRootPending(QString messageId);
 
 private slots:
     void handleEncryptCompleted(

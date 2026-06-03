@@ -134,6 +134,31 @@ void MessageController::deleteMessage(const QString& messageId)
     m_api->deleteMessage(messageId);
 }
 
+void MessageController::copyMerkleRoot(const QString& messageId)
+{
+    connect(m_api, &ApiClient::blockchainVerifySucceeded,
+            this, [this, messageId](const QString& id, const QJsonObject& data) {
+        if (id != messageId) return;
+        disconnect(m_api, &ApiClient::blockchainVerifySucceeded, this, nullptr);
+        disconnect(m_api, &ApiClient::blockchainVerifyFailed,    this, nullptr);
+        if (data.value(QStringLiteral("status")).toString() == QStringLiteral("stored-on-blockchain")) {
+            const QString root = data.value(QStringLiteral("merkle_root")).toString();
+            QGuiApplication::clipboard()->setText(root);
+            emit merkleRootCopied(root);
+        } else {
+            emit merkleRootPending(messageId);
+        }
+    });
+    connect(m_api, &ApiClient::blockchainVerifyFailed,
+            this, [this, messageId](const QString& id, const QString&) {
+        if (id != messageId) return;
+        disconnect(m_api, &ApiClient::blockchainVerifySucceeded, this, nullptr);
+        disconnect(m_api, &ApiClient::blockchainVerifyFailed,    this, nullptr);
+        emit merkleRootPending(messageId);
+    });
+    m_api->fetchMessageBlockchainVerify(messageId);
+}
+
 void MessageController::revokeMessage(const QString& messageId, const QString& recipientDeviceId)
 {
     m_api->revokeMessage(messageId, recipientDeviceId);

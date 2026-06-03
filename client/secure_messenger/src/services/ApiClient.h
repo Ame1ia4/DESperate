@@ -57,6 +57,9 @@ public:
     // Fetch active devices for a user (GET /users/:username/devices).
     void fetchUserDevices(const QString& username);
 
+    // Fetch blockchain verification data for a single message.
+    virtual void fetchMessageBlockchainVerify(const QString& messageId);
+
     QString storedDeviceId(const QString& username) const;
     void    storeDeviceId(const QString& username, const QString& deviceId);
 
@@ -90,6 +93,8 @@ signals:
     void revokeMessageFailed(QString messageId);
     // Fired after POST /messages succeeds; carries both the client temp ID and server DB UUID
     void messageSentToServer(QString localId, QString serverId);
+    void blockchainVerifySucceeded(QString messageId, QJsonObject data);
+    void blockchainVerifyFailed(QString messageId, QString reason);
 
 private:
     void doSrpInit(
