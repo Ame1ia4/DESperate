@@ -4,7 +4,7 @@
 #include <QDateTime>
 #include <QObject>
 #include <QString>
-#include <QVector>
+#include <vector>
 
 struct ConversationItem
 {
@@ -42,7 +42,7 @@ public:
 
     QHash<int, QByteArray> roleNames() const override;
 
-    void setConversations(const QVector<ConversationItem>& items);
+    void setConversations(const std::vector<ConversationItem>& items);
 
     Q_INVOKABLE QString fingerprintForConversation(const QString& id) const;
     Q_INVOKABLE bool setFingerprintForConversation(const QString& id,
@@ -50,5 +50,5 @@ public:
                                                    bool verified);
 
 private:
-    QVector<ConversationItem> m_conversations;
+    std::vector<ConversationItem> m_conversations;
 };

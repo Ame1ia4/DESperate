@@ -17,7 +17,7 @@ int ConversationModel::rowCount(const QModelIndex& parent) const
 QVariant ConversationModel::data(const QModelIndex& index,
                                  int role) const
 {
-    if (!index.isValid() || index.row() >= m_conversations.size()) {
+    if (!index.isValid() || index.row() >= static_cast<int>(m_conversations.size())) {
         return {};
     }
 
@@ -64,7 +64,7 @@ QHash<int, QByteArray> ConversationModel::roleNames() const
 }
 
 void ConversationModel::setConversations(
-    const QVector<ConversationItem>& items)
+    const std::vector<ConversationItem>& items)
 {
     beginResetModel();
     m_conversations = items;
@@ -88,7 +88,7 @@ bool ConversationModel::setFingerprintForConversation(
     const QString& fingerprint,
     bool verified)
 {
-    for (qsizetype row = 0; row < m_conversations.size(); ++row) {
+    for (int row = 0; row < static_cast<int>(m_conversations.size()); ++row) {
         auto& item = m_conversations[row];
         if (item.conversationId == id) {
             item.fingerprint = fingerprint;

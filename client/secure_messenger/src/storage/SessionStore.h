@@ -3,8 +3,9 @@
 #include <QObject>
 #include <QString>
 #include <QByteArray>
-#include <QHash>
 #include <QDateTime>
+#include <string>
+#include <unordered_map>
 
 struct SessionState
 {
@@ -43,5 +44,5 @@ public:
         const QString& remoteDeviceId);
 
 private:
-    QHash<QString, SessionState> m_sessions;
+    std::unordered_map<std::string, SessionState> m_sessions;
 };

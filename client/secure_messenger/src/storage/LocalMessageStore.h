@@ -2,14 +2,15 @@
 #pragma once
 
 #include <QObject>
-#include <QHash>
 #include <QJsonObject>
 #include <QString>
-#include <QVector>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "src/types/Types.h"
 
-    class LocalMessageStore : public QObject
+class LocalMessageStore : public QObject
 {
     Q_OBJECT
 
@@ -24,10 +25,10 @@ public:
     void storeOutgoingEnvelope(
         const MessageEnvelope& envelope);
 
-    QVector<MessageEnvelope> envelopes()
+    std::vector<MessageEnvelope> envelopes()
         const;
 
-    QVector<MessageEnvelope>
+    std::vector<MessageEnvelope>
     envelopesForConversation(
         const QString& conversationId)
         const;
@@ -36,10 +37,10 @@ public:
     void storeDecryptedMessage(
         const DecryptedMessage& message);
 
-    QVector<DecryptedMessage>
+    std::vector<DecryptedMessage>
     decryptedMessages() const;
 
-    QVector<DecryptedMessage>
+    std::vector<DecryptedMessage>
     messagesForConversation(
         const QString& conversationId)
         const;
@@ -66,13 +67,14 @@ public:
     void clearAll();
 
 private:
-    QVector<MessageEnvelope>
+    std::vector<MessageEnvelope>
         m_envelopes;
 
-    QVector<DecryptedMessage>
+    std::vector<DecryptedMessage>
         m_decryptedMessages;
 
-    QHash<QString, int>
+    // O(1) message ID lookup: maps message ID (std::string) to index in m_decryptedMessages
+    std::unordered_map<std::string, int>
         m_messageIndex;
 
     void saveState() const;
