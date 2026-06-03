@@ -277,16 +277,36 @@ bool LocalMessageStore::containsMessage(
         messageId);
 }
 
+QByteArray LocalMessageStore::ciphertextForMessage(
+    const QString& messageId)
+    const
+{
+    for (const auto& e : m_envelopes) {
+        if (e.id == messageId)
+            return e.ciphertext;
+    }
+    return {};
+}
+
 void LocalMessageStore::updateMessageId(
     const QString& oldId,
     const QString& newId)
 {
     if (oldId.isEmpty() || newId.isEmpty() || oldId == newId) return;
-    if (!m_messageIndex.contains(oldId)) return;
 
-    const int idx = m_messageIndex.take(oldId);
-    m_messageIndex.insert(newId, idx);
-    m_decryptedMessages[idx].id = newId;
+    if (m_messageIndex.contains(oldId)) {
+        const int idx = m_messageIndex.take(oldId);
+        m_messageIndex.insert(newId, idx);
+        m_decryptedMessages[idx].id = newId;
+    }
+
+    for (auto& e : m_envelopes) {
+        if (e.id == oldId) {
+            e.id = newId;
+            break;
+        }
+    }
+
     saveState();
 }
 

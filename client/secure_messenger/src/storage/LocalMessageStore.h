@@ -48,6 +48,10 @@ public:
         const QString& messageId)
         const;
 
+    QByteArray ciphertextForMessage(
+        const QString& messageId)
+        const;
+
     void updateMessageId(
         const QString& oldId,
         const QString& newId);
