@@ -320,18 +320,18 @@ class TestArgon2idLocalKeyDerivation:
         assert k1 == k2
 
     def test_different_salts_give_different_keys(self):
-        k1, _ = argon2id_derive_key("passphrase", os.urandom(16))
-        k2, _ = argon2id_derive_key("passphrase", os.urandom(16))
+        k1, _ = argon2id_derive_key("passphrase", os.urandom(32))
+        k2, _ = argon2id_derive_key("passphrase", os.urandom(32))
         assert k1 != k2
 
     def test_different_passphrases_give_different_keys(self):
-        salt   = os.urandom(16)
+        salt   = os.urandom(32)
         k1, _  = argon2id_derive_key("passphrase_one", salt)
         k2, _  = argon2id_derive_key("passphrase_two", salt)
         assert k1 != k2
 
     def test_provided_salt_is_returned_unchanged(self):
-        salt      = os.urandom(16)
+        salt      = os.urandom(32)
         _, out_salt = argon2id_derive_key("passphrase", salt)
         assert out_salt == salt
 
