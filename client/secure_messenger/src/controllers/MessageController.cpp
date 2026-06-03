@@ -1,8 +1,10 @@
 #include "MessageController.h"
 
+#include <QClipboard>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -184,7 +186,8 @@ void MessageController::copyCiphertext(const QString& messageId)
         emit ciphertextCopyFailed();
         return;
     }
-    emit ciphertextCopied(QString::fromLatin1(ct.toHex()));
+    QGuiApplication::clipboard()->setText(QString::fromLatin1(ct.toHex()));
+    emit ciphertextCopied();
 }
 
 void MessageController::sendText(
@@ -450,6 +453,10 @@ void MessageController::handleDecryptFailed(
     // Acknowledge undecryptable messages so they clear from the server queue.
     // Without this they re-appear on every poll, looping forever.
     if (!envelope.isEmpty()) {
+        // Persist the envelope so "Copy ciphertext" works even for messages
+        // we cannot decrypt (e.g. our own outgoing messages in history).
+        m_store->storeOutgoingMessage(envelope);
+
         const QString messageId =
             envelope.value("id").toString();
         const QString recipientDeviceId =
