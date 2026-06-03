@@ -167,6 +167,12 @@ Item {
         }
 
         MenuItem {
+            text: "Copy ciphertext"
+            enabled: !isDeleted
+            onTriggered: messageController.copyCiphertext(messageId)
+        }
+
+        MenuItem {
             text: "Forward"
             enabled: !revoked && !isDeleted
             onTriggered: forwardBar.visible = !forwardBar.visible
