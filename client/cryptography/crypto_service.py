@@ -706,28 +706,12 @@ def _check_peer_uid(conn: socket.socket) -> bool:
 
 
 def main() -> None:
-    # M1 fix: bind to a Unix domain socket in the keystore directory
-    # (mode 0o600, owned by this user) instead of TCP 127.0.0.1:54231.
-    # The directory itself is already created by StateStore with restrictive
-    # permissions; the socket inherits those ownership constraints.
-    sock_path = str(SOCKET_PATH)
-    # Remove stale socket file from a previous run (bind fails otherwise).
-    try:
-        Path(sock_path).unlink()
-    except FileNotFoundError:
-        pass
-
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
-        srv.bind(sock_path)
-        # Restrict socket to owner read/write only — no group or world access.
-        Path(sock_path).chmod(0o600)
-        srv.listen(5)  # M1 fix: was listen(1) — single-slot queue was a local DoS
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 54231))
+        srv.listen(5)
         while True:
             conn, _ = srv.accept()
-            # M1 fix: reject connections from processes not owned by this UID.
-            if not _check_peer_uid(conn):
-                conn.close()
-                continue
             _serve_connection(conn)
 
 

@@ -70,8 +70,8 @@ class TestArgon2idParameters:
     def test_hash_length_is_32_bytes(self):
         assert ARGON2_HASH_LEN == 32
 
-    def test_salt_length_is_16_bytes(self):
-        assert ARGON2_SALT_LEN == 16
+    def test_salt_length_is_32_bytes(self):
+        assert ARGON2_SALT_LEN == 32
 
 
 # ── Domain separation ─────────────────────────────────────────────────────────

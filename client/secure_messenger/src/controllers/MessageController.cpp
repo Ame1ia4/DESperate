@@ -10,6 +10,7 @@
 #include "src/services/ApiClient.h"
 #include "src/services/CryptoServiceClient.h"
 #include "src/storage/LocalMessageStore.h"
+#include "src/storage/TrustStore.h"
 #include "src/types/Types.h"
 
 MessageController::MessageController(
@@ -202,7 +203,7 @@ void MessageController::handleEncryptCompleted(
         message.verificationState =
             (!participant.isEmpty() && m_trust->isVerified(participant))
                 ? VerificationState::Verified
-                : VerificationState::Unverified;
+                : VerificationState::Failed;
     }
 
     m_conversations
@@ -299,7 +300,7 @@ void MessageController::handleDecryptCompleted(
         message.verificationState =
             (!participant.isEmpty() && m_trust->isVerified(participant))
                 ? VerificationState::Verified
-                : VerificationState::Unverified;
+                : VerificationState::Failed;
     }
 
     m_store->storeDecryptedMessage(

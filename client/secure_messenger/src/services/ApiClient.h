@@ -53,6 +53,9 @@ public:
     // Create a new conversation with another user (POST /conversations).
     void createConversation(const QString& otherUsername);
 
+    // Fetch active devices for a user (GET /users/:username/devices).
+    void fetchUserDevices(const QString& username);
+
     QString storedDeviceId(const QString& username) const;
     void    storeDeviceId(const QString& username, const QString& deviceId);
 
@@ -75,6 +78,8 @@ signals:
     void fetchKeyBundleFailed(QString reason);
     void createConversationSucceeded(QString conversationId);
     void createConversationFailed(QString reason);
+    void fetchUserDevicesSucceeded(QJsonArray devices);
+    void fetchUserDevicesFailed(QString reason);
 
 private:
     void doSrpInit(

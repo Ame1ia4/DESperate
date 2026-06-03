@@ -446,6 +446,32 @@ void ApiClient::fetchKeyBundle(const QString& username)
     });
 }
 
+void ApiClient::fetchUserDevices(const QString& username)
+{
+    auto request = makeRequest(
+        "/users/" + QString::fromUtf8(QUrl::toPercentEncoding(username)) + "/devices");
+    auto* reply  = m_network.get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto error  = reply->error();
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto body   = reply->readAll();
+        reply->deleteLater();
+
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            const QString reason = body.isEmpty()
+                ? QStringLiteral("Failed to fetch user devices.")
+                : QString::fromUtf8(body);
+            emit fetchUserDevicesFailed(reason);
+            return;
+        }
+
+        const auto devices = QJsonDocument::fromJson(body).object()
+                                 .value(QStringLiteral("devices")).toArray();
+        emit fetchUserDevicesSucceeded(devices);
+    });
+}
+
 void ApiClient::createConversation(const QString& otherUsername)
 {
     auto request = makeRequest("/conversations");
