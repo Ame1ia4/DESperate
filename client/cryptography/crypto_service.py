@@ -275,6 +275,7 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             _store = StateStore.create_with_key(_STORE_BASE_DIR, keystore_key, srp_salt)
         except FileExistsError:
             return {
+                "success": False,
                 "error": (
                     f"A keystore already exists at {_STORE_BASE_DIR}. "
                     "Delete that directory to re-register."
@@ -298,12 +299,15 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
     # ── SRP authentication ─────────────────────────────────────────────────────
 
     if method == "srp_start":
-        # Cache the raw password — srp_salt arrives from /auth/init and is only
-        # available in srp_challenge, where we run Argon2id and inject srp_pass.
+        # Drop any password left over from an interrupted previous flow before
+        # storing the new one — ensures the old reference is released immediately.
+        _pending_password     = None
         _srp_session          = None
-        _pending_password     = params["password"]
         _pending_keystore_key = None
         _cached_keystore_key  = None
+        # Cache the raw password — srp_salt arrives from /auth/init and is only
+        # available in srp_challenge, where we run Argon2id and inject srp_pass.
+        _pending_password = params["password"]
         _srp_session = SrpSession(params["username"], "")  # password injected in srp_challenge
         return {"A": _srp_session.A_hex}
 
@@ -333,7 +337,8 @@ def _handle(method: str, params: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("No SRP session active — call srp_start first")
         authenticated = _srp_session.verify_server(params["M2"])
         session_key = _srp_session.session_key_hex if authenticated else None
-        _srp_session = None
+        _srp_session      = None
+        _pending_password = None  # defensive — should already be None after srp_challenge
         if authenticated:
             # Promote the staged key — unlock_keystore may now use it.
             _cached_keystore_key  = _pending_keystore_key
